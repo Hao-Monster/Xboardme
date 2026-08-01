@@ -207,3 +207,9 @@ jobs:
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker logout ghcr.io >/dev/null 2>&1 || true"
 
+  smoke-distributor:
+    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
+    needs: deploy-distributor
+    uses: ./.github/workflows/distributor-smoke.yml
+    secrets: inherit
+

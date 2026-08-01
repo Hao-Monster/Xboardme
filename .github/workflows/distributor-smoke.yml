@@ -1,6 +1,7 @@
 name: Distributor Production Smoke Test
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 permissions:
