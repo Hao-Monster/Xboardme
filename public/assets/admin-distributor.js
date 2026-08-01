@@ -79,6 +79,51 @@
     return payload;
   }
 
+  async function downloadFile(path) {
+    const token = authToken();
+    if (!token) throw new Error('管理员登录已失效');
+    const response = await fetch(`/api/v2/${securePath()}${path}`, {
+      method: 'GET',
+      headers: {
+        Authorization: token,
+        'Content-Language': localStorage.getItem('i18nextLng') || 'zh-CN',
+      },
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+    const contentType = response.headers?.get('Content-Type') || '';
+    if (!response.ok || contentType.includes('application/json')) {
+      const payload = await response.json().catch(() => null);
+      throw new Error(payload?.message || `导出失败 (${response.status})`);
+    }
+
+    const disposition = response.headers?.get('Content-Disposition') || '';
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    const filename = encodedName ? decodeURIComponent(encodedName) : plainName || '分销订单.xlsx';
+    const objectUrl = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
+
+  async function exportOrders(button) {
+    if (button) button.disabled = true;
+    const params = new URLSearchParams();
+    if (state.selectedDistributor) params.set('distributor_user_id', state.selectedDistributor);
+    if (state.settlementStatus !== '') params.set('settlement_status', state.settlementStatus);
+    try {
+      await downloadFile(`/order/export${params.size ? `?${params}` : ''}`);
+      toast('Excel 导出成功');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
   function dataOf(payload) {
     return payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
   }
@@ -355,7 +400,7 @@
     renderPanel(`<div class="admin-dist-toolbar">
       <label>分销商<select id="admin-dist-distributor">${distributorOptions(true)}</select></label>
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
-      <button data-admin-dist="refresh">刷新</button></div>${summary}
+      <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付</th><th>结算状态</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个订单</span><div><button data-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button data-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`);
   }
@@ -478,6 +523,7 @@
     const action = event.target.closest('[data-admin-dist]')?.dataset.adminDist;
     try {
       if (action === 'refresh') await loadOrders();
+      else if (action === 'export') await exportOrders(event.target.closest('[data-admin-dist]'));
       else if (action === 'settle') await settle();
       else if (action === 'search-user') await searchUser();
       else if (action === 'create-user') await createUser();
@@ -525,7 +571,7 @@
     if (!host) return;
     const rows = orderRows('data-native-order-detail');
     host.removeAttribute('aria-busy');
-    host.innerHTML = `<header class="xboard-native-dist-heading"><div><h2>分销订单与结算</h2><p>按购买该订单的分销商邮箱筛选，并对全部已完成、未结算订单执行线下结算。</p></div><button type="button" data-native-dist="refresh">刷新</button></header>
+    host.innerHTML = `<header class="xboard-native-dist-heading"><div><h2>分销订单与结算</h2><p>按购买该订单的分销商邮箱筛选，并对全部已完成、未结算订单执行线下结算。</p></div><div class="xboard-native-dist-actions"><button type="button" data-native-dist="refresh">刷新</button><button type="button" data-native-dist="export">导出 Excel</button></div></header>
       <div class="admin-dist-toolbar xboard-native-dist-toolbar">
         <label>分销商<select id="native-dist-distributor">${distributorOptions(true)}</select></label>
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
@@ -553,6 +599,7 @@
     try {
       const action = event.target.closest('[data-native-dist]')?.dataset.nativeDist;
       if (action === 'refresh') await loadNativeOrders();
+      else if (action === 'export') await exportOrders(event.target.closest('[data-native-dist]'));
       else if (action === 'settle') await settle(loadNativeOrders);
 
       const detail = event.target.closest('[data-native-order-detail]');
