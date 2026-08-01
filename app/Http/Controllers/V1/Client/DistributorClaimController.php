@@ -45,7 +45,6 @@ class DistributorClaimController extends Controller
             $now = time();
             $delivery->delivery_status = DistributorOrder::DELIVERY_CLAIMED;
             $delivery->claimed_at = $now;
-            $delivery->config_issued_at = $now;
             $delivery->claim_ip = mb_substr((string) $request->ip(), 0, 45);
             $delivery->claim_ua = mb_substr((string) $request->userAgent(), 0, 255);
             $delivery->claim_token = null;

@@ -72,10 +72,17 @@ class DistributorOrderTest extends TestCase
 
         $delivery->refresh();
         $this->assertSame(DistributorOrder::DELIVERY_CLAIMED, $delivery->delivery_status);
-        $this->assertNotNull($delivery->config_issued_at);
+        $this->assertNull($delivery->config_issued_at);
         $this->assertNull($delivery->claim_token);
 
         $this->get($claimPath)->assertStatus(410);
+
+        $subscribeUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
+        $subscribePath = parse_url($subscribeUrl, PHP_URL_PATH);
+        $subscribeQuery = parse_url($subscribeUrl, PHP_URL_QUERY);
+        $this->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))->assertOk();
+
+        $this->assertNotNull($delivery->refresh()->config_issued_at);
     }
 
     public function test_distributor_cannot_access_normal_subscription_api_and_order_resource_never_exposes_real_token(): void
@@ -96,6 +103,29 @@ class DistributorOrderTest extends TestCase
         $this->assertStringNotContainsString($subscriber->uuid, $encoded);
         $this->assertArrayNotHasKey('subscribe_url', $resource);
         $this->assertTrue($resource['is_distributor_order']);
+    }
+
+    public function test_claimed_delivery_is_recovered_until_the_real_subscription_response_is_issued(): void
+    {
+        $distributor = $this->makeUser('dealer@example.com', true);
+        $order = app(DistributorOrderService::class)->create($distributor, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $delivery = $order->distributorOrder()->firstOrFail();
+        $delivery->update([
+            'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
+            'claimed_at' => time(),
+            'claim_token' => null,
+            'config_issued_at' => null,
+        ]);
+        Sanctum::actingAs($distributor);
+
+        $this->getJson('/api/v1/user/distributor/delivery')
+            ->assertOk()
+            ->assertJsonPath('data.trade_no', $order->trade_no)
+            ->assertJsonPath('data.config_issued_at', null);
+
+        $delivery->update(['config_issued_at' => time()]);
+
+        $this->getJson('/api/v1/user/distributor/delivery')->assertNotFound();
     }
 
     public function test_admin_settlement_is_idempotent_and_reveals_subscription_only_in_detail(): void

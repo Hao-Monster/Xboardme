@@ -23,7 +23,13 @@ class DistributorController extends Controller
         if ($request->filled('trade_no')) {
             $query->whereHas('order', fn($q) => $q->where('trade_no', $request->input('trade_no')));
         } else {
-            $query->where('delivery_status', DistributorOrder::DELIVERY_PENDING)
+            $query->where(function ($query) {
+                $query->where('delivery_status', DistributorOrder::DELIVERY_PENDING)
+                    ->orWhere(function ($query) {
+                        $query->where('delivery_status', DistributorOrder::DELIVERY_CLAIMED)
+                            ->whereNull('config_issued_at');
+                    });
+            })
                 ->latest('id');
         }
 

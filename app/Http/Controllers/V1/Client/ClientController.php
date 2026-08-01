@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\V1\Client;
 
 use App\Http\Controllers\Controller;
+use App\Models\DistributorOrder;
 use App\Models\Server;
 use App\Protocols\General;
 use App\Services\Plugin\HookManager;
@@ -48,7 +49,15 @@ class ClientController extends Controller
             return response('', 403, ['Content-Type' => 'text/plain']);
         }
 
-        return $this->doSubscribe($request, $user);
+        $response = $this->doSubscribe($request, $user);
+
+        DistributorOrder::query()
+            ->where('subscriber_user_id', $user->id)
+            ->where('delivery_status', DistributorOrder::DELIVERY_CLAIMED)
+            ->whereNull('config_issued_at')
+            ->update(['config_issued_at' => time()]);
+
+        return $response;
     }
 
     public function doSubscribe(Request $request, $user, $servers = null)

@@ -22,6 +22,7 @@
       buyNow: '立即下单', original: '原价', free: '分销免支付', confirm: '确认下单', cancel: '取消',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
       pending: '待领取', claimed: '已领取', closed: '已关闭', showQr: '显示二维码',
+      checkDelivery: '检查交付', issuing: '二维码已领取，正在等待订阅配置成功下发。',
       qrTitle: '客户订阅二维码', qrHint: '请让终端客户使用订阅客户端扫描。二维码只能成功领取一次。',
       done: '已添加成功', closeAgain: '再次点击确认关闭', closeWarning: '请确保节点已经可用，关闭之后无法再次获取。',
       claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
@@ -37,6 +38,7 @@
       buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', confirm: 'Confirm', cancel: 'Cancel',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
       pending: 'Pending claim', claimed: 'Claimed', closed: 'Closed', showQr: 'Show QR',
+      checkDelivery: 'Check delivery', issuing: 'The QR was claimed. Waiting for the subscription configuration response.',
       qrTitle: 'Customer subscription QR', qrHint: 'Scan with the customer subscription client. This QR can only be claimed once.',
       done: 'Added successfully', closeAgain: 'Click again to close', closeWarning: 'Make sure the nodes work. The QR cannot be recovered after closing.',
       claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
@@ -253,7 +255,7 @@
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
         <td><span class="dist-badge delivery-${order.delivery_status}">${delivery}</span></td>
         <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
-        <td>${order.delivery_status === 0 ? `<button class="dist-link-btn" data-delivery="${escapeHtml(order.trade_no)}">${t('showQr')}</button>` : '-'}</td>
+        <td>${order.delivery_status === 0 || (order.delivery_status === 1 && !order.config_issued_at) ? `<button class="dist-link-btn" data-delivery="${escapeHtml(order.trade_no)}">${order.delivery_status === 0 ? t('showQr') : t('checkDelivery')}</button>` : '-'}</td>
       </tr>`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
@@ -324,12 +326,13 @@
     const delivery = state.modal.delivery;
     const claimed = delivery.delivery_status === 1;
     const pending = delivery.delivery_status === 0;
+    const issued = Boolean(delivery.config_issued_at);
     root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-qr-modal"><button class="dist-modal-x" data-modal-action="done">×</button><h2>${t('qrTitle')}</h2>
-      <p>${pending ? t('qrHint') : claimed ? t('claimedOk') : t('closed')}</p>
-      ${pending && delivery.qr_code ? `<div class="dist-qr"><img src="${escapeHtml(delivery.qr_code)}" alt="Subscription QR"></div>` : `<div class="dist-delivery-result">${claimed ? '✓' : '×'}<strong>${claimed ? t('claimed') : t('closed')}</strong></div>`}
+      <p>${pending ? t('qrHint') : claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p>
+      ${pending && delivery.qr_code ? `<div class="dist-qr"><img src="${escapeHtml(delivery.qr_code)}" alt="Subscription QR"></div>` : `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong></div>`}
       <div class="dist-order-ref">${t('orderNo')}：${escapeHtml(delivery.trade_no)}</div>
-      ${state.closeArmed && pending ? `<div class="dist-warning">${t('closeWarning')}</div>` : ''}
-      <div class="dist-modal-actions"><button class="primary" data-modal-action="done">${state.closeArmed && pending ? t('closeAgain') : t('done')}</button></div>
+      ${state.closeArmed && !issued && delivery.delivery_status !== 2 ? `<div class="dist-warning">${t('closeWarning')}</div>` : ''}
+      <div class="dist-modal-actions"><button class="primary" data-modal-action="done">${state.closeArmed && !issued && delivery.delivery_status !== 2 ? t('closeAgain') : t('done')}</button></div>
       </section></div>`;
   }
 
@@ -342,10 +345,15 @@
   async function handleDone() {
     if (!state.modal || state.modal.type !== 'delivery') { closeModal(); return; }
     const delivery = state.modal.delivery;
-    if (delivery.delivery_status !== 0) { closeModal(); return; }
+    if (delivery.delivery_status === 2 || delivery.config_issued_at) { closeModal(); return; }
     if (!state.closeArmed) {
       state.closeArmed = true;
       renderModal();
+      return;
+    }
+    if (delivery.delivery_status === 1) {
+      closeModal();
+      await renderPage();
       return;
     }
     try {
@@ -361,10 +369,10 @@
   function startPolling() {
     stopPolling();
     state.poller = setInterval(async () => {
-      if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.delivery_status !== 0) return;
+      if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.delivery_status === 2 || state.modal.delivery.config_issued_at) return;
       try {
         const updated = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(state.modal.delivery.trade_no)}`));
-        if (updated.delivery_status !== state.modal.delivery.delivery_status) {
+        if (updated.delivery_status !== state.modal.delivery.delivery_status || updated.config_issued_at !== state.modal.delivery.config_issued_at) {
           state.modal.delivery = updated;
           state.closeArmed = false;
           renderModal();
