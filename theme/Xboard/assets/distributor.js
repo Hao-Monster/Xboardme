@@ -27,6 +27,8 @@
       done: '已添加成功', closeAgain: '再次点击确认关闭', closeWarning: '请确保节点已经可用，关闭之后无法再次获取。',
       claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
       delivery: '交付状态', settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
+      entitlement: '订阅权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
+      expiresAt: '到期时间', speedLimit: '限速', deviceLimit: '设备限制', permanent: '长期有效', unlimited: '不限',
       inviteUsers: '已邀请用户', validCommission: '有效佣金', pendingCommission: '确认中佣金',
       rate: '佣金比例', availableCommission: '可用佣金', generateCode: '生成邀请码', transfer: '佣金划转余额',
       inviteCode: '邀请码', copy: '复制邀请链接', commissionHistory: '佣金记录', noCode: '暂无邀请码',
@@ -43,6 +45,8 @@
       done: 'Added successfully', closeAgain: 'Click again to close', closeWarning: 'Make sure the nodes work. The QR cannot be recovered after closing.',
       claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
       delivery: 'Delivery', settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
+      entitlement: 'Subscription entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
+      expiresAt: 'Expires at', speedLimit: 'Speed limit', deviceLimit: 'Device limit', permanent: 'Never expires', unlimited: 'Unlimited',
       inviteUsers: 'Invited users', validCommission: 'Valid commission', pendingCommission: 'Pending commission',
       rate: 'Commission rate', availableCommission: 'Available commission', generateCode: 'Generate code',
       transfer: 'Transfer commission', inviteCode: 'Invite code', copy: 'Copy invite link',
@@ -73,6 +77,15 @@
   };
   const money = (cents) => `¥${((Number(cents) || 0) / 100).toFixed(2)}`;
   const formatTime = (seconds) => seconds ? new Date(Number(seconds) * 1000).toLocaleString() : '-';
+  const GIB = 1024 * 1024 * 1024;
+  const formatTraffic = (bytes) => {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value >= GIB) return `${(value / GIB).toFixed(value % GIB === 0 ? 0 : 2)} GB`;
+    if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB`;
+    if (value >= 1024) return `${(value / 1024).toFixed(2)} KB`;
+    return `${value} B`;
+  };
+  const formatLimit = (value, unit) => value === null || Number(value) === 0 ? t('unlimited') : `${value} ${unit}`;
   const dataOf = (payload) => payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
 
   function authToken() {
@@ -249,6 +262,16 @@
     const rows = orders.map((order) => {
       const delivery = order.delivery_status === 0 ? t('pending') : order.delivery_status === 1 ? t('claimed') : t('closed');
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
+      const entitlement = order.subscription_entitlement;
+      const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="7"><div><strong>${t('entitlement')}</strong><dl>
+        <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
+        <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
+        <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
+        <span><dt>${t('remainingTraffic')}</dt><dd>${formatTraffic(entitlement.remaining_traffic)}</dd></span>
+        <span><dt>${t('expiresAt')}</dt><dd>${entitlement.expired_at ? formatTime(entitlement.expired_at) : t('permanent')}</dd></span>
+        <span><dt>${t('speedLimit')}</dt><dd>${formatLimit(entitlement.speed_limit, 'Mbps')}</dd></span>
+        <span><dt>${t('deviceLimit')}</dt><dd>${formatLimit(entitlement.device_limit, state.locale === 'zh-CN' ? '台' : 'devices')}</dd></span>
+      </dl></div></td></tr>` : '';
       return `<tr>
         <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
         <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
@@ -256,7 +279,7 @@
         <td><span class="dist-badge delivery-${order.delivery_status}">${delivery}</span></td>
         <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
         <td>${order.delivery_status === 0 || (order.delivery_status === 1 && !order.config_issued_at) ? `<button class="dist-link-btn" data-delivery="${escapeHtml(order.trade_no)}">${order.delivery_status === 0 ? t('showQr') : t('checkDelivery')}</button>` : '-'}</td>
-      </tr>`;
+      </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
       <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('delivery')}</th><th>${t('settlement')}</th><th></th></tr></thead>

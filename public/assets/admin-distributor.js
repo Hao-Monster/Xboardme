@@ -25,6 +25,23 @@
     .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
   const money = (cents) => `¥${((Number(cents) || 0) / 100).toFixed(2)}`;
   const formatTime = (seconds) => seconds ? new Date(Number(seconds) * 1000).toLocaleString() : '-';
+  const GIB = 1024 * 1024 * 1024;
+  const formatTraffic = (bytes) => {
+    const value = Math.max(0, Number(bytes) || 0);
+    if (value >= GIB) return `${(value / GIB).toFixed(value % GIB === 0 ? 0 : 2)} GB`;
+    if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)} MB`;
+    if (value >= 1024) return `${(value / 1024).toFixed(2)} KB`;
+    return `${value} B`;
+  };
+  const trafficGigabytes = (bytes) => Number((Math.max(0, Number(bytes) || 0) / GIB).toFixed(3));
+  const nullableLimit = (value, unit, unlimited) => value === null || Number(value) === 0 ? unlimited : `${value} ${unit}`;
+
+  function datetimeLocalValue(seconds) {
+    if (!seconds) return '';
+    const date = new Date(Number(seconds) * 1000);
+    const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+    return local.toISOString().slice(0, 19);
+  }
 
   function authToken() {
     try {
@@ -231,7 +248,10 @@
       const value = detail.subscribe_url
         ? `<code>${escapeHtml(detail.subscribe_url)}</code><button type="button" data-native-copy-subscription="${escapeHtml(detail.subscribe_url)}">复制</button>`
         : '<span>订单未完成，暂无订阅链接</span>';
-      field.innerHTML = `<strong>订阅链接</strong><div>${value}</div>`;
+      const manage = detail.is_distributor_order
+        ? `<button type="button" data-native-manage-entitlement="${detail.id}">管理订阅权益</button>`
+        : '';
+      field.innerHTML = `<strong>订阅链接</strong><div>${value}${manage}</div>`;
 
       const scrollArea = dialog.querySelector('[data-radix-scroll-area-viewport], .overflow-y-auto, .n-scrollbar-content') || dialog;
       const footer = [...scrollArea.children].find((node) => /关闭|取消|确认|Close|Cancel|Confirm/i.test(node.textContent || ''));
@@ -390,18 +410,63 @@
 
   async function showOrderDetail(id) {
     const order = dataOf(await api('/order/detail', { method: 'POST', data: { id: Number(id) } }));
+    const entitlement = order.subscription_entitlement;
     let modal = document.getElementById('admin-dist-detail');
     if (!modal) { modal = document.createElement('div'); modal.id = 'admin-dist-detail'; document.body.appendChild(modal); }
     modal.innerHTML = `<div class="admin-dist-detail-backdrop"><section><button data-detail-close>×</button><h2>分销订单详情</h2><dl>
       <div><dt>订单号</dt><dd>${escapeHtml(order.trade_no)}</dd></div><div><dt>分销商</dt><dd>${escapeHtml(order.distributor_email || '-')}</dd></div>
       <div><dt>套餐</dt><dd>${escapeHtml(order.plan?.name || '-')}</dd></div><div><dt>原价</dt><dd>${money(order.total_amount)}</dd></div>
       <div><dt>结算状态</dt><dd>${order.settlement_status === 1 ? '已结算' : '未结算'}</dd></div><div><dt>订阅链接</dt><dd class="url">${order.subscribe_url ? `<code>${escapeHtml(order.subscribe_url)}</code><button data-copy-subscription="${escapeHtml(order.subscribe_url)}">复制</button>` : '订单未完成，暂无订阅链接'}</dd></div>
-      </dl></section></div>`;
+      </dl>${entitlement ? `<div class="admin-dist-entitlement"><h3>订阅权益</h3>
+        <div class="admin-dist-entitlement-readonly"><span><b>套餐</b>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</span><span><b>已用流量</b>${formatTraffic(entitlement.used_traffic)}</span><span><b>剩余流量</b>${formatTraffic(entitlement.remaining_traffic)}</span></div>
+        <div class="admin-dist-entitlement-form">
+          <label>总流量<div><input id="admin-dist-entitlement-traffic" type="number" min="0" step="0.001" value="${trafficGigabytes(entitlement.transfer_enable)}"><span>GB</span></div></label>
+          <label>到期时间<div><input id="admin-dist-entitlement-expired" type="datetime-local" step="1" value="${datetimeLocalValue(entitlement.expired_at)}"><button type="button" data-entitlement-permanent>永久有效</button></div></label>
+          <label>限速<div><input id="admin-dist-entitlement-speed" type="number" min="0" step="1" value="${entitlement.speed_limit ?? ''}" placeholder="留空则不限速"><span>Mbps</span></div></label>
+          <label>设备限制<div><input id="admin-dist-entitlement-device" type="number" min="0" step="1" value="${entitlement.device_limit ?? ''}" placeholder="留空则不限制"><span>台</span></div></label>
+        </div><p class="admin-dist-entitlement-current">当前：${formatTraffic(entitlement.transfer_enable)} · ${entitlement.expired_at ? formatTime(entitlement.expired_at) : '长期有效'} · ${nullableLimit(entitlement.speed_limit, 'Mbps', '不限速')} · ${nullableLimit(entitlement.device_limit, '台', '不限制设备')}</p>
+        <footer><button type="button" data-save-entitlement="${order.id}">保存订阅权益</button></footer>
+      </div>` : '<p class="admin-dist-entitlement-error">该分销订单没有可用的订阅权益。</p>'}</section></div>`;
     modal.classList.add('open');
     modal.onclick = async (event) => {
       if (event.target.closest('[data-detail-close]')) { modal.classList.remove('open'); modal.innerHTML = ''; }
       const copy = event.target.closest('[data-copy-subscription]');
       if (copy) { await navigator.clipboard.writeText(copy.dataset.copySubscription); toast('订阅链接已复制'); }
+      if (event.target.closest('[data-entitlement-permanent]')) {
+        const input = modal.querySelector('#admin-dist-entitlement-expired');
+        if (input) input.value = '';
+      }
+      const save = event.target.closest('[data-save-entitlement]');
+      if (save) {
+        const trafficValue = modal.querySelector('#admin-dist-entitlement-traffic')?.value.trim() || '';
+        const traffic = Number(trafficValue);
+        const expiredValue = modal.querySelector('#admin-dist-entitlement-expired')?.value || '';
+        const speedValue = modal.querySelector('#admin-dist-entitlement-speed')?.value.trim() || '';
+        const deviceValue = modal.querySelector('#admin-dist-entitlement-device')?.value.trim() || '';
+        const speed = speedValue === '' ? null : Number(speedValue);
+        const device = deviceValue === '' ? null : Number(deviceValue);
+        if (trafficValue === '' || !Number.isFinite(traffic) || traffic < 0) { toast('请输入有效的总流量', 'error'); return; }
+        if ((speed !== null && (!Number.isInteger(speed) || speed < 0)) || (device !== null && (!Number.isInteger(device) || device < 0))) {
+          toast('限速和设备限制必须是非负整数或留空', 'error'); return;
+        }
+        const expired = expiredValue ? Math.floor(new Date(expiredValue).getTime() / 1000) : null;
+        if (expiredValue && !Number.isFinite(expired)) { toast('请输入有效的到期时间', 'error'); return; }
+        save.disabled = true;
+        try {
+          await api('/order/entitlement/update', { method: 'POST', data: {
+            order_id: Number(save.dataset.saveEntitlement),
+            transfer_enable: Math.round(traffic * GIB),
+            expired_at: expired,
+            speed_limit: speed,
+            device_limit: device,
+          } });
+          toast('订阅权益已更新');
+          await showOrderDetail(save.dataset.saveEntitlement);
+        } catch (error) {
+          save.disabled = false;
+          toast(error.message, 'error');
+        }
+      }
     };
   }
 
@@ -535,6 +600,12 @@
 
   installRequestBridge();
   document.addEventListener('click', async (event) => {
+    const manage = event.target.closest('[data-native-manage-entitlement]');
+    if (manage) {
+      try { await showOrderDetail(manage.dataset.nativeManageEntitlement); }
+      catch (error) { toast(error.message, 'error'); }
+      return;
+    }
     const copy = event.target.closest('[data-native-copy-subscription]');
     if (!copy) return;
     try {
