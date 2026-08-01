@@ -243,11 +243,14 @@ class UserController extends Controller
                 return $this->fail([400201, '邮箱已被使用']);
             }
         }
-        $targetIsDistributor = (bool) ($params['is_distributor'] ?? $user->is_distributor);
-        $targetIsAdmin = (bool) ($params['is_admin'] ?? $user->is_admin);
-        $targetIsStaff = (bool) ($params['is_staff'] ?? $user->is_staff);
-        if ($targetIsDistributor && ($targetIsAdmin || $targetIsStaff)) {
-            return $this->fail([422, '管理员、员工和分销商身份不能同时启用']);
+        $operator = $request->user();
+        if (
+            $operator
+            && (int) $operator->id === (int) $user->id
+            && array_key_exists('is_admin', $params)
+            && !(bool) $params['is_admin']
+        ) {
+            return $this->fail([422, '不能撤销当前登录账号的管理员权限，请使用另一个管理员账号操作']);
         }
         // 处理密码
         if (isset($params['password'])) {

@@ -21,7 +21,7 @@ class DistributorOrderService
 {
     public function create(User $distributor, Plan $plan, string $period): Order
     {
-        if (!$distributor->is_distributor || $distributor->is_admin || $distributor->is_staff) {
+        if (!$distributor->is_distributor) {
             throw new ApiException('当前账号不是可用的分销商账号', 403);
         }
 

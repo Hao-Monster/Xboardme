@@ -351,7 +351,7 @@
   }
 
   async function toggleUser(id, current) {
-    await api('/user/update', { method: 'POST', data: { id: Number(id), is_distributor: current ? 0 : 1, is_admin: 0, is_staff: 0 } });
+    await api('/user/update', { method: 'POST', data: { id: Number(id), is_distributor: current ? 0 : 1 } });
     toast('用户身份已更新');
     await loadDistributors();
     renderUsers();

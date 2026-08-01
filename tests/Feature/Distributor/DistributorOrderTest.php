@@ -4,6 +4,7 @@ namespace Tests\Feature\Distributor;
 
 use App\Http\Resources\OrderResource;
 use App\Http\Controllers\V2\Admin\OrderController as AdminOrderController;
+use App\Http\Controllers\V2\Admin\UserController as AdminUserController;
 use App\Models\DistributorOrder;
 use App\Models\Order;
 use App\Models\Plan;
@@ -134,6 +135,43 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.subscribe_url', Helper::getSubscribeUrl($subscriber->token));
     }
 
+    public function test_distributor_role_can_be_added_without_revoking_admin_or_staff_roles(): void
+    {
+        $operator = $this->makeUser('operator@example.com', false, ['is_admin' => true]);
+        $target = $this->makeUser('hybrid@example.com', false, [
+            'is_admin' => true,
+            'is_staff' => true,
+        ]);
+        Sanctum::actingAs($operator);
+
+        $this->postJson('/' . $this->adminUserRouteUri('update'), [
+            'id' => $target->id,
+            'is_distributor' => true,
+        ])->assertOk();
+
+        $target->refresh();
+        $this->assertTrue($target->is_admin);
+        $this->assertTrue($target->is_staff);
+        $this->assertTrue($target->is_distributor);
+
+        $order = app(DistributorOrderService::class)->create($target, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $this->assertSame($target->id, $order->user_id);
+    }
+
+    public function test_admin_cannot_revoke_their_own_admin_role(): void
+    {
+        $admin = $this->makeUser('admin@example.com', false, ['is_admin' => true]);
+        Sanctum::actingAs($admin);
+
+        $this->postJson('/' . $this->adminUserRouteUri('update'), [
+            'id' => $admin->id,
+            'is_admin' => false,
+        ])->assertStatus(422)
+            ->assertJsonPath('status', 'fail');
+
+        $this->assertTrue($admin->refresh()->is_admin);
+    }
+
     private function adminRouteUri(string $method): string
     {
         $route = collect(Route::getRoutes()->getRoutes())->first(function ($route) use ($method) {
@@ -141,6 +179,16 @@ class DistributorOrderTest extends TestCase
         });
 
         $this->assertNotNull($route, 'Admin order route not found: ' . $method);
+        return $route->uri();
+    }
+
+    private function adminUserRouteUri(string $method): string
+    {
+        $route = collect(Route::getRoutes()->getRoutes())->first(function ($route) use ($method) {
+            return $route->getActionName() === AdminUserController::class . '@' . $method;
+        });
+
+        $this->assertNotNull($route, 'Admin user route not found: ' . $method);
         return $route->uri();
     }
 
