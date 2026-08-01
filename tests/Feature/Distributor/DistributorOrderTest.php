@@ -15,6 +15,8 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Laravel\Sanctum\Sanctum;
+use OpenSpout\Reader\XLSX\Reader;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Tests\TestCase;
 
 class DistributorOrderTest extends TestCase
@@ -144,6 +146,118 @@ class DistributorOrderTest extends TestCase
         $this->assertStringNotContainsString($subscriber->uuid, $encoded);
         $this->assertStringNotContainsString($subscriber->email, $encoded);
         $this->assertStringNotContainsString($otherOrder->trade_no, $encoded);
+    }
+
+    public function test_admin_xlsx_export_contains_only_distributor_orders_with_exact_columns_and_numeric_amounts(): void
+    {
+        $firstDistributor = $this->makeUser('first-dealer@example.com', true);
+        $secondDistributor = $this->makeUser('second-dealer@example.com', true);
+        $plan = $this->makePlan();
+        $older = app(DistributorOrderService::class)->create($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
+        $newer = app(DistributorOrderService::class)->create($secondDistributor, $plan, Plan::PERIOD_QUARTERLY);
+        $older->update(['created_at' => 100]);
+        $newer->update(['created_at' => 200]);
+
+        Order::create([
+            'user_id' => $this->makeUser('consumer@example.com')->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'trade_no' => 'NORMAL-ORDER-MUST-NOT-EXPORT',
+            'total_amount' => 3000,
+            'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED,
+        ]);
+
+        Sanctum::actingAs($this->makeUser('admin-export@example.com', false, ['is_admin' => true]));
+        $response = $this->get('/' . $this->adminRouteUri('export'));
+        $response->assertOk();
+
+        $rows = $this->readXlsx($response);
+        $this->assertSame(['订单号', '分销商', '套餐', '原价', '交付状态', '结算状态'], $rows[0]);
+        $this->assertSame($newer->trade_no, $rows[1][0]);
+        $this->assertSame('second-dealer@example.com', $rows[1][1]);
+        $this->assertSame('Distributor Test Plan', $rows[1][2]);
+        $this->assertTrue(is_int($rows[1][3]) || is_float($rows[1][3]));
+        $this->assertEquals(30.0, $rows[1][3]);
+        $this->assertSame('待领取', $rows[1][4]);
+        $this->assertSame('未结算', $rows[1][5]);
+        $this->assertSame($older->trade_no, $rows[2][0]);
+        $this->assertCount(3, $rows);
+        $this->assertStringNotContainsString('NORMAL-ORDER-MUST-NOT-EXPORT', json_encode($rows));
+    }
+
+    public function test_admin_xlsx_export_applies_distributor_and_settlement_filters_and_rejects_empty_results(): void
+    {
+        $firstDistributor = $this->makeUser('filter-dealer@example.com', true);
+        $secondDistributor = $this->makeUser('other-filter-dealer@example.com', true);
+        $plan = $this->makePlan();
+        $unsettled = app(DistributorOrderService::class)->create($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
+        $settled = app(DistributorOrderService::class)->create($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
+        $settled->distributorOrder()->update(['settlement_status' => DistributorOrder::SETTLEMENT_SETTLED]);
+        app(DistributorOrderService::class)->create($secondDistributor, $plan, Plan::PERIOD_MONTHLY);
+
+        Sanctum::actingAs($this->makeUser('admin-filter@example.com', false, ['is_admin' => true]));
+        $uri = '/' . $this->adminRouteUri('export');
+        $response = $this->get($uri . '?' . http_build_query([
+            'distributor_user_id' => $firstDistributor->id,
+            'settlement_status' => DistributorOrder::SETTLEMENT_UNSETTLED,
+        ]));
+
+        $rows = $this->readXlsx($response->assertOk());
+        $this->assertCount(2, $rows);
+        $this->assertSame($unsettled->trade_no, $rows[1][0]);
+
+        $this->getJson($uri . '?' . http_build_query([
+            'distributor_user_id' => 999999,
+            'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
+        ]))->assertStatus(422)
+            ->assertJsonPath('status', 'fail')
+            ->assertJsonPath('message', '当前筛选条件下没有可导出的订单');
+    }
+
+    public function test_distributor_settlement_filter_and_xlsx_export_are_limited_to_the_authenticated_distributor(): void
+    {
+        $distributor = $this->makeUser('own-orders@example.com', true);
+        $otherDistributor = $this->makeUser('other-orders@example.com', true);
+        $plan = $this->makePlan();
+        $unsettled = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_MONTHLY);
+        $settled = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_QUARTERLY);
+        $settled->distributorOrder()->update([
+            'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
+            'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
+        ]);
+        $otherOrder = app(DistributorOrderService::class)->create($otherDistributor, $plan, Plan::PERIOD_QUARTERLY);
+
+        Sanctum::actingAs($distributor);
+        $this->getJson('/api/v1/user/order/fetch?settlement_status=1')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.trade_no', $settled->trade_no);
+
+        $rows = $this->readXlsx($this->get('/api/v1/user/order/export?settlement_status=1')->assertOk());
+        $this->assertSame(['订单号', '订阅计划', '周期', '订单金额', '交付状态', '结算状态'], $rows[0]);
+        $this->assertCount(2, $rows);
+        $this->assertSame($settled->trade_no, $rows[1][0]);
+        $this->assertSame('Distributor Test Plan', $rows[1][1]);
+        $this->assertSame('季付', $rows[1][2]);
+        $this->assertTrue(is_int($rows[1][3]) || is_float($rows[1][3]));
+        $this->assertEquals(30.0, $rows[1][3]);
+        $this->assertSame('已领取', $rows[1][4]);
+        $this->assertSame('已结算', $rows[1][5]);
+        $this->assertStringNotContainsString($unsettled->trade_no, json_encode($rows));
+        $this->assertStringNotContainsString($otherOrder->trade_no, json_encode($rows));
+
+        $subscriber = $settled->distributorOrder()->with('subscriber')->firstOrFail()->subscriber;
+        $encoded = json_encode($rows);
+        $this->assertStringNotContainsString($subscriber->token, $encoded);
+        $this->assertStringNotContainsString($subscriber->uuid, $encoded);
+    }
+
+    public function test_normal_user_cannot_export_distributor_orders(): void
+    {
+        Sanctum::actingAs($this->makeUser('normal-export@example.com'));
+
+        $this->get('/api/v1/user/order/export')->assertForbidden();
     }
 
     public function test_admin_can_update_only_live_entitlement_for_any_distributor_order_state(): void
@@ -376,6 +490,49 @@ class DistributorOrderTest extends TestCase
         return $route->uri();
     }
 
+    /**
+     * @return array<int, array<int, mixed>>
+     */
+    private function readXlsx($response): array
+    {
+        $this->assertInstanceOf(BinaryFileResponse::class, $response->baseResponse);
+        $this->assertStringContainsString(
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            (string) $response->headers->get('Content-Type')
+        );
+        $this->assertStringContainsString('.xlsx', (string) $response->headers->get('Content-Disposition'));
+
+        $path = $response->baseResponse->getFile()->getPathname();
+        $archive = new \ZipArchive();
+        $this->assertTrue($archive->open($path) === true);
+        $styles = (string) $archive->getFromName('xl/styles.xml');
+        $sheetXml = (string) $archive->getFromName('xl/worksheets/sheet1.xml');
+        $archive->close();
+        $this->assertStringContainsString('numFmtId="2"', $styles);
+        $this->assertStringContainsString('<autoFilter ref="A1:F', $sheetXml);
+        $this->assertStringContainsString('state="frozen"', $sheetXml);
+
+        $reader = new Reader();
+        $rows = [];
+        try {
+            $reader->open($path);
+            foreach ($reader->getSheetIterator() as $sheet) {
+                foreach ($sheet->getRowIterator() as $row) {
+                    $rows[] = array_map(
+                        static fn ($cell) => $cell->getValue(),
+                        $row->getCells()
+                    );
+                }
+                break;
+            }
+        } finally {
+            $reader->close();
+            @unlink($path);
+        }
+
+        return $rows;
+    }
+
     private function adminUserRouteUri(string $method): string
     {
         $route = collect(Route::getRoutes()->getRoutes())->first(function ($route) use ($method) {
@@ -398,7 +555,10 @@ class DistributorOrderTest extends TestCase
             'sell' => true,
             'renew' => true,
             'sort' => 1,
-            'prices' => [Plan::PERIOD_MONTHLY => 30],
+            'prices' => [
+                Plan::PERIOD_MONTHLY => 30,
+                Plan::PERIOD_QUARTERLY => 30,
+            ],
             'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
         ]);
     }

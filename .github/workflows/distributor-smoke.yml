@@ -74,6 +74,22 @@ jobs:
             'http://127.0.0.1:17001/api/v1/user/order/fetch')
           test "$orders_status" = '200'
 
+          order_count=$(jq '.data | length' orders.json)
+          export_status=$(curl --silent --show-error \
+            --dump-header export.headers \
+            --output distributor-orders.xlsx --write-out '%{http_code}' \
+            --header "Authorization: $auth_data" \
+            'http://127.0.0.1:17001/api/v1/user/order/export')
+          if [ "$order_count" -gt 0 ]; then
+            test "$export_status" = '200'
+            grep -qi 'content-type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' export.headers
+            grep -qi 'content-disposition: attachment' export.headers
+            unzip -t distributor-orders.xlsx >/dev/null
+          else
+            test "$export_status" = '422'
+            jq -e '(.status == "fail") and (.message == "当前筛选条件下没有可导出的订单")' distributor-orders.xlsx >/dev/null
+          fi
+
           restricted_status=$(curl --silent --show-error \
             --output restricted.json --write-out '%{http_code}' \
             --header "Authorization: $auth_data" \

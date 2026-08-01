@@ -62,6 +62,10 @@ class ElementMock {
     this.parentElement = null;
   }
 
+  click() {
+    this.clicked = true;
+  }
+
   closest(selector) {
     if (selector === 'main') {
       let current = this;
@@ -138,6 +142,22 @@ function response(payload) {
   };
 }
 
+function binaryResponse() {
+  return {
+    ok: true,
+    headers: {
+      get(name) {
+        if (name.toLowerCase() === 'content-type') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        if (name.toLowerCase() === 'content-disposition') return "attachment; filename*=UTF-8''%E5%88%86%E9%94%80%E8%AE%A2%E5%8D%95.xlsx";
+        return null;
+      },
+    },
+    blob: async () => new Blob(['xlsx']),
+    json: async () => null,
+    clone() { return this; },
+  };
+}
+
 async function flush() {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
@@ -160,6 +180,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
       settled = true;
       return response({ status: 'success', data: { count: 2, total_amount: 6000 } });
     }
+    if (url.includes('/order/export')) return binaryResponse();
     if (url.includes('/order/fetch')) {
       return response({
         total: 1,
@@ -206,6 +227,8 @@ test('admin order page exposes distributor filters, summary and settlement actio
     FormData,
     URLSearchParams,
     navigator: { clipboard: { writeText: async () => {} } },
+    URL: { createObjectURL: () => 'blob:test', revokeObjectURL: () => {} },
+    Blob,
     setInterval: () => 1,
     setTimeout: (callback) => { callback(); return 1; },
     clearInterval: () => {},
@@ -224,6 +247,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(host.innerHTML, /DIST-ORDER-1/);
 
   const change = host.listeners.get('change')[0];
+  const click = host.listeners.get('click')[0];
   change({ target: { id: 'native-dist-distributor', value: '7' } });
   await flush();
 
@@ -232,7 +256,24 @@ test('admin order page exposes distributor filters, summary and settlement actio
   const filteredRequest = requests.filter(({ url }) => url.includes('/order/fetch')).at(-1);
   assert.equal(JSON.parse(filteredRequest.init.body).distributor_user_id, '7');
 
-  const click = host.listeners.get('click')[0];
+  change({ target: { id: 'native-dist-settlement', value: '0' } });
+  await flush();
+
+  const exportTarget = {
+    disabled: false,
+    closest(selector) {
+      if (selector === '[data-native-dist]') return this;
+      return null;
+    },
+    dataset: { nativeDist: 'export' },
+  };
+  await click({ target: exportTarget });
+  const exportRequest = requests.find(({ url }) => url.includes('/order/export'));
+  assert.ok(exportRequest, 'xlsx export endpoint should be called');
+  assert.match(exportRequest.url, /distributor_user_id=7/);
+  assert.match(exportRequest.url, /settlement_status=0/);
+  assert.doesNotMatch(exportRequest.url, /current|pageSize/);
+
   const settleTarget = {
     closest(selector) {
       if (selector === '[data-native-dist]') return { dataset: { nativeDist: 'settle' } };
