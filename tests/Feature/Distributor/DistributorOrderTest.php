@@ -88,12 +88,13 @@ class DistributorOrderTest extends TestCase
     public function test_distributor_cannot_access_normal_subscription_api_and_order_resource_never_exposes_real_token(): void
     {
         $distributor = $this->makeUser('dealer@example.com', true);
+        $plan = $this->makePlan();
         Sanctum::actingAs($distributor);
 
         $this->getJson('/api/v1/user/getSubscribe')->assertForbidden();
         $this->getJson('/api/v1/user/plan/fetch')->assertOk();
 
-        $order = app(DistributorOrderService::class)->create($distributor, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $order = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_MONTHLY);
         $order->load(['plan', 'distributorOrder']);
         $resource = (new OrderResource($order))->toArray(Request::create('/'));
         $subscriber = $order->distributorOrder->subscriber()->firstOrFail();
@@ -103,6 +104,169 @@ class DistributorOrderTest extends TestCase
         $this->assertStringNotContainsString($subscriber->uuid, $encoded);
         $this->assertArrayNotHasKey('subscribe_url', $resource);
         $this->assertTrue($resource['is_distributor_order']);
+        $this->assertSame($plan->id, $resource['subscription_entitlement']['plan_id']);
+        $this->assertSame(30 * 1073741824, $resource['subscription_entitlement']['transfer_enable']);
+        $this->assertArrayNotHasKey('subscriber_user_id', $resource['subscription_entitlement']);
+        $this->assertArrayNotHasKey('token', $resource['subscription_entitlement']);
+        $this->assertArrayNotHasKey('uuid', $resource['subscription_entitlement']);
+    }
+
+    public function test_distributor_order_fetch_exposes_read_only_entitlement_without_credentials(): void
+    {
+        $distributor = $this->makeUser('dealer@example.com', true);
+        $order = app(DistributorOrderService::class)->create(
+            $distributor,
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY
+        );
+        $subscriber = $order->distributorOrder()->with('subscriber')->firstOrFail()->subscriber;
+        $subscriber->update([
+            'u' => 2 * 1073741824,
+            'd' => 3 * 1073741824,
+        ]);
+        $otherOrder = app(DistributorOrderService::class)->create(
+            $this->makeUser('other-dealer@example.com', true),
+            Plan::findOrFail($order->plan_id),
+            Plan::PERIOD_MONTHLY
+        );
+        Sanctum::actingAs($distributor);
+
+        $response = $this->getJson('/api/v1/user/order/fetch');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.trade_no', $order->trade_no)
+            ->assertJsonPath('data.0.subscription_entitlement.plan_name', 'Distributor Test Plan')
+            ->assertJsonPath('data.0.subscription_entitlement.used_traffic', 5 * 1073741824)
+            ->assertJsonPath('data.0.subscription_entitlement.remaining_traffic', 25 * 1073741824);
+
+        $encoded = $response->getContent();
+        $this->assertStringNotContainsString($subscriber->token, $encoded);
+        $this->assertStringNotContainsString($subscriber->uuid, $encoded);
+        $this->assertStringNotContainsString($subscriber->email, $encoded);
+        $this->assertStringNotContainsString($otherOrder->trade_no, $encoded);
+    }
+
+    public function test_admin_can_update_only_live_entitlement_for_any_distributor_order_state(): void
+    {
+        $distributor = $this->makeUser('dealer@example.com', true);
+        $plan = $this->makePlan();
+        $otherPlan = Plan::create([
+            'group_id' => 2,
+            'transfer_enable' => 100,
+            'name' => 'Forbidden Replacement Plan',
+            'show' => true,
+            'sell' => true,
+            'renew' => true,
+            'sort' => 2,
+            'prices' => [Plan::PERIOD_MONTHLY => 50],
+            'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
+        ]);
+        $order = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_MONTHLY);
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $subscriber = $delivery->subscriber;
+        $originalToken = $subscriber->token;
+        $originalUuid = $subscriber->uuid;
+        $originalAmount = $order->total_amount;
+        $originalPeriod = $order->period;
+        $subscriber->update([
+            'u' => 4 * 1073741824,
+            'd' => 3 * 1073741824,
+        ]);
+        $delivery->update([
+            'delivery_status' => DistributorOrder::DELIVERY_CLOSED,
+            'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
+            'settled_at' => time(),
+        ]);
+        $order->update(['status' => Order::STATUS_CANCELLED]);
+
+        $admin = $this->makeUser('admin@example.com', false, ['is_admin' => true]);
+        Sanctum::actingAs($admin);
+        $expiredAt = time() + 86400;
+
+        $response = $this->postJson('/' . $this->adminRouteUri('updateEntitlement'), [
+            'order_id' => $order->id,
+            'transfer_enable' => 5 * 1073741824,
+            'expired_at' => $expiredAt,
+            'speed_limit' => 20,
+            'device_limit' => 2,
+            'plan_id' => $otherPlan->id,
+            'u' => 0,
+            'd' => 0,
+            'settlement_status' => DistributorOrder::SETTLEMENT_UNSETTLED,
+            'total_amount' => 1,
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('data.plan_id', $plan->id)
+            ->assertJsonPath('data.transfer_enable', 5 * 1073741824)
+            ->assertJsonPath('data.used_traffic', 7 * 1073741824)
+            ->assertJsonPath('data.remaining_traffic', 0)
+            ->assertJsonPath('data.expired_at', $expiredAt)
+            ->assertJsonPath('data.speed_limit', 20)
+            ->assertJsonPath('data.device_limit', 2);
+
+        $subscriber->refresh();
+        $this->assertSame($plan->id, $subscriber->plan_id);
+        $this->assertSame(4 * 1073741824, $subscriber->u);
+        $this->assertSame(3 * 1073741824, $subscriber->d);
+        $this->assertSame($originalToken, $subscriber->token);
+        $this->assertSame($originalUuid, $subscriber->uuid);
+
+        $order->refresh();
+        $delivery->refresh();
+        $this->assertSame($plan->id, $order->plan_id);
+        $this->assertSame($originalAmount, $order->total_amount);
+        $this->assertSame($originalPeriod, $order->period);
+        $this->assertSame(Order::STATUS_CANCELLED, $order->status);
+        $this->assertSame(DistributorOrder::SETTLEMENT_SETTLED, $delivery->settlement_status);
+    }
+
+    public function test_entitlement_update_rejects_normal_orders_and_invalid_values(): void
+    {
+        $user = $this->makeUser('user@example.com');
+        $plan = $this->makePlan();
+        $order = Order::create([
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'trade_no' => Helper::generateOrderNo(),
+            'total_amount' => 3000,
+            'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED,
+        ]);
+        Sanctum::actingAs($this->makeUser('admin@example.com', false, ['is_admin' => true]));
+        $uri = '/' . $this->adminRouteUri('updateEntitlement');
+
+        $this->postJson($uri, [
+            'order_id' => $order->id,
+            'transfer_enable' => 1073741824,
+            'expired_at' => null,
+            'speed_limit' => null,
+            'device_limit' => null,
+        ])->assertStatus(422);
+
+        $distributorOrder = app(DistributorOrderService::class)->create(
+            $this->makeUser('dealer@example.com', true),
+            $plan,
+            Plan::PERIOD_MONTHLY
+        );
+        $this->postJson($uri, [
+            'order_id' => $distributorOrder->id,
+            'transfer_enable' => -1,
+            'expired_at' => null,
+            'speed_limit' => -1,
+            'device_limit' => -1,
+        ])->assertStatus(422);
+
+        $delivery = $distributorOrder->distributorOrder()->firstOrFail();
+        User::whereKey($delivery->subscriber_user_id)->delete();
+        $this->postJson($uri, [
+            'order_id' => $distributorOrder->id,
+            'transfer_enable' => 1073741824,
+            'expired_at' => null,
+            'speed_limit' => null,
+            'device_limit' => null,
+        ])->assertStatus(422);
     }
 
     public function test_claimed_delivery_is_recovered_until_the_real_subscription_response_is_issued(): void
