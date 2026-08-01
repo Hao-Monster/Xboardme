@@ -4,6 +4,7 @@ namespace App\Http\Resources;
 
 use App\Models\Order;
 use App\Services\PlanService;
+use App\Services\DistributorOrderEntitlementService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -25,6 +26,12 @@ class OrderResource extends JsonResource
         $distributorOrder = $this->relationLoaded('distributorOrder')
             ? $this->distributorOrder
             : null;
+        $subscriptionEntitlement = null;
+        if ($distributorOrder) {
+            $distributorOrder->setRelation('order', $this->resource);
+            $subscriptionEntitlement = app(DistributorOrderEntitlementService::class)
+                ->data($distributorOrder);
+        }
 
         return [
             ...$data,
@@ -36,6 +43,7 @@ class OrderResource extends JsonResource
             'config_issued_at' => $distributorOrder?->config_issued_at,
             'claimed_at' => $distributorOrder?->claimed_at,
             'closed_at' => $distributorOrder?->closed_at,
+            ...($distributorOrder ? ['subscription_entitlement' => $subscriptionEntitlement] : []),
             'plan' => $this->whenLoaded('plan', fn() => PlanResource::make($this->plan)),
             'payment' => $this->whenLoaded('payment', fn() => $this->payment ? [
                 'id' => $this->payment->id,

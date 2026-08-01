@@ -5,11 +5,13 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\OrderAssign;
 use App\Http\Requests\Admin\OrderUpdate;
+use App\Http\Requests\Admin\DistributorOrderEntitlementUpdate;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
 use App\Models\DistributorOrder;
 use App\Services\OrderService;
+use App\Services\DistributorOrderEntitlementService;
 use App\Services\PlanService;
 use App\Services\UserService;
 use App\Utils\Helper;
@@ -21,7 +23,7 @@ use Illuminate\Support\Facades\Log;
 class OrderController extends Controller
 {
 
-    public function detail(Request $request)
+    public function detail(Request $request, DistributorOrderEntitlementService $entitlementService)
     {
         $order = Order::with([
             'user',
@@ -53,8 +55,26 @@ class OrderController extends Controller
         $data['settlement_status'] = $distributorOrder?->settlement_status;
         $data['settled_at'] = $distributorOrder?->settled_at;
         $data['subscribe_url'] = $subscribeUrl;
+        $data['subscription_entitlement'] = $distributorOrder
+            ? $entitlementService->data($distributorOrder)
+            : null;
 
         return $this->success($data);
+    }
+
+    public function updateEntitlement(
+        DistributorOrderEntitlementUpdate $request,
+        DistributorOrderEntitlementService $entitlementService
+    ) {
+        return $this->success($entitlementService->updateForOrder(
+            (int) $request->input('order_id'),
+            $request->safe()->only([
+                'transfer_enable',
+                'expired_at',
+                'speed_limit',
+                'device_limit',
+            ])
+        ));
     }
 
     public function fetch(Request $request)

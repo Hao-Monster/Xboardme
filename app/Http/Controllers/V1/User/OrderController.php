@@ -26,7 +26,11 @@ class OrderController extends Controller
         $request->validate([
             'status' => 'nullable|integer|in:0,1,2,3',
         ]);
-        $orders = Order::with(['plan', 'distributorOrder:id,order_id,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at'])
+        $orders = Order::with([
+            'plan',
+            'distributorOrder:id,order_id,subscriber_user_id,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
+            'distributorOrder.subscriber:id,plan_id,transfer_enable,u,d,expired_at,speed_limit,device_limit',
+        ])
             ->where('user_id', $request->user()->id)
             ->when($request->input('status') !== null, function ($query) use ($request) {
                 $query->where('status', $request->input('status'));
@@ -45,7 +49,8 @@ class OrderController extends Controller
         $order = Order::with([
             'payment',
             'plan',
-            'distributorOrder:id,order_id,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
+            'distributorOrder:id,order_id,subscriber_user_id,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
+            'distributorOrder.subscriber:id,plan_id,transfer_enable,u,d,expired_at,speed_limit,device_limit',
         ])
             ->where('user_id', $request->user()->id)
             ->where('trade_no', $request->input('trade_no'))
