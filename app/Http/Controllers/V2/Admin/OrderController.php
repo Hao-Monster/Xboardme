@@ -45,7 +45,7 @@ class OrderController extends Controller
             'commission_log',
             'invite_user',
             'distributorOrder.subscriber',
-            'distributorOrder.distributor:id,email',
+            'distributorOrder.distributor:id,email,distributor_name',
         ])->find($request->input('id'));
         if (!$order)
             return $this->fail([400202, '订单不存在']);
@@ -65,6 +65,8 @@ class OrderController extends Controller
         $data['period'] = PlanService::getLegacyPeriod((string) $order->period);
         $data['is_distributor_order'] = $distributorOrder !== null;
         $data['distributor_email'] = $distributorOrder?->distributor?->email;
+        $data['distributor_name'] = $distributorOrder?->distributor?->distributor_name
+            ?: $distributorOrder?->distributor?->email;
         $data['delivery_status'] = $distributorOrder?->delivery_status;
         $data['settlement_status'] = $distributorOrder?->settlement_status;
         $data['settled_at'] = $distributorOrder?->settled_at;
@@ -98,7 +100,7 @@ class OrderController extends Controller
         $orderModel = Order::with([
             'plan:id,name',
             'distributorOrder:id,order_id,distributor_user_id,delivery_status,settlement_status,settled_at',
-            'distributorOrder.distributor:id,email',
+            'distributorOrder.distributor:id,email,distributor_name',
         ]);
 
         $request->validate([
@@ -145,6 +147,8 @@ class OrderController extends Controller
             $orderArray['period'] = PlanService::getLegacyPeriod((string) $order->period);
             $orderArray['is_distributor_order'] = $distributorOrder !== null;
             $orderArray['distributor_email'] = $distributorOrder?->distributor?->email;
+            $orderArray['distributor_name'] = $distributorOrder?->distributor?->distributor_name
+                ?: $distributorOrder?->distributor?->email;
             $orderArray['delivery_status'] = $distributorOrder?->delivery_status;
             $orderArray['settlement_status'] = $distributorOrder?->settlement_status;
             $orderArray['settled_at'] = $distributorOrder?->settled_at;

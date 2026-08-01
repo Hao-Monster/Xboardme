@@ -150,8 +150,8 @@ class DistributorOrderTest extends TestCase
 
     public function test_admin_xlsx_export_contains_only_distributor_orders_with_exact_columns_and_numeric_amounts(): void
     {
-        $firstDistributor = $this->makeUser('first-dealer@example.com', true);
-        $secondDistributor = $this->makeUser('second-dealer@example.com', true);
+        $firstDistributor = $this->makeUser('first-dealer@example.com', true, ['distributor_name' => '第一分销商']);
+        $secondDistributor = $this->makeUser('second-dealer@example.com', true, ['distributor_name' => '第二分销商']);
         $plan = $this->makePlan();
         $older = app(DistributorOrderService::class)->create($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
         $newer = app(DistributorOrderService::class)->create($secondDistributor, $plan, Plan::PERIOD_QUARTERLY);
@@ -175,7 +175,7 @@ class DistributorOrderTest extends TestCase
         $rows = $this->readXlsx($response);
         $this->assertSame(['订单号', '分销商', '套餐', '原价', '交付状态', '结算状态'], $rows[0]);
         $this->assertSame($newer->trade_no, $rows[1][0]);
-        $this->assertSame('second-dealer@example.com', $rows[1][1]);
+        $this->assertSame('第二分销商', $rows[1][1]);
         $this->assertSame('Distributor Test Plan', $rows[1][2]);
         $this->assertTrue(is_int($rows[1][3]) || is_float($rows[1][3]));
         $this->assertEquals(30.0, $rows[1][3]);
@@ -455,15 +455,92 @@ class DistributorOrderTest extends TestCase
         $this->postJson('/' . $this->adminUserRouteUri('update'), [
             'id' => $target->id,
             'is_distributor' => true,
+            'distributor_name' => '混合权限分销商',
         ])->assertOk();
 
         $target->refresh();
         $this->assertTrue($target->is_admin);
         $this->assertTrue($target->is_staff);
         $this->assertTrue($target->is_distributor);
+        $this->assertSame('混合权限分销商', $target->distributor_name);
 
         $order = app(DistributorOrderService::class)->create($target, $this->makePlan(), Plan::PERIOD_MONTHLY);
         $this->assertSame($target->id, $order->user_id);
+    }
+
+    public function test_distributor_name_is_required_managed_and_exposed_by_admin_apis(): void
+    {
+        $admin = $this->makeUser('name-admin@example.com', false, ['is_admin' => true]);
+        $target = $this->makeUser('name-target@example.com');
+        Sanctum::actingAs($admin);
+
+        $updateUri = '/' . $this->adminUserRouteUri('update');
+        $this->postJson($updateUri, [
+            'id' => $target->id,
+            'is_distributor' => true,
+        ])->assertStatus(422)
+            ->assertJsonPath('status', 'fail');
+
+        $this->postJson($updateUri, [
+            'id' => $target->id,
+            'is_distributor' => true,
+            'distributor_name' => '  华东渠道  ',
+        ])->assertOk();
+
+        $target->refresh();
+        $this->assertTrue($target->is_distributor);
+        $this->assertSame('华东渠道', $target->distributor_name);
+
+        $options = $this->getJson('/' . $this->adminUserRouteUri('distributorOptions'))
+            ->assertOk()
+            ->json('data');
+        $option = collect($options)->firstWhere('id', $target->id);
+        $this->assertSame('华东渠道', $option['distributor_name']);
+        $this->assertSame($target->email, $option['email']);
+
+        $order = app(DistributorOrderService::class)->create($target, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $this->postJson('/' . $this->adminRouteUri('fetch'), [
+            'current' => 1,
+            'pageSize' => 10,
+            'distributor_only' => true,
+        ])->assertOk()
+            ->assertJsonPath('data.0.distributor_name', '华东渠道')
+            ->assertJsonPath('data.0.distributor_email', $target->email);
+        $this->postJson('/' . $this->adminRouteUri('detail'), ['id' => $order->id])
+            ->assertOk()
+            ->assertJsonPath('data.distributor_name', '华东渠道');
+
+        $this->postJson($updateUri, [
+            'id' => $target->id,
+            'is_distributor' => false,
+            'distributor_name' => '不应保留',
+        ])->assertOk();
+        $this->assertFalse($target->refresh()->is_distributor);
+        $this->assertNull($target->distributor_name);
+    }
+
+    public function test_admin_can_create_a_named_distributor_and_blank_name_is_rejected(): void
+    {
+        Sanctum::actingAs($this->makeUser('generate-admin@example.com', false, ['is_admin' => true]));
+        $uri = '/' . $this->adminUserRouteUri('generate');
+
+        $this->postJson($uri, [
+            'email_prefix' => 'blank-name-dealer',
+            'email_suffix' => 'example.com',
+            'is_distributor' => true,
+            'distributor_name' => '   ',
+        ])->assertUnprocessable();
+
+        $this->postJson($uri, [
+            'email_prefix' => 'named-dealer',
+            'email_suffix' => 'example.com',
+            'is_distributor' => true,
+            'distributor_name' => '北区合作伙伴',
+        ])->assertOk();
+
+        $created = User::byEmail('named-dealer@example.com')->firstOrFail();
+        $this->assertTrue($created->is_distributor);
+        $this->assertSame('北区合作伙伴', $created->distributor_name);
     }
 
     public function test_admin_cannot_revoke_their_own_admin_role(): void

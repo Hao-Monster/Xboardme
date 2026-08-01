@@ -43,7 +43,7 @@ class DistributorOrderExportService
             self::ADMIN_HEADERS,
             fn (object $order): array => [
                 (string) $order->trade_no,
-                (string) $order->distributor_email,
+                (string) ($order->distributor_name ?: $order->distributor_email),
                 (string) ($order->plan_name ?: '-'),
                 $this->yuan($order->total_amount),
                 $this->deliveryLabel((int) $order->delivery_status),
@@ -91,6 +91,7 @@ class DistributorOrderExportService
                 'v2_order.total_amount',
                 'v2_order.created_at',
                 'distributor.email as distributor_email',
+                'distributor.distributor_name as distributor_name',
                 'v2_plan.name as plan_name',
                 'v2_distributor_order.delivery_status',
                 'v2_distributor_order.settlement_status',

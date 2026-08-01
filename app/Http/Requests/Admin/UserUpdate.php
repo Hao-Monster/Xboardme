@@ -27,6 +27,7 @@ class UserUpdate extends FormRequest
             'is_admin' => 'boolean',
             'is_staff' => 'boolean',
             'is_distributor' => 'boolean',
+            'distributor_name' => 'nullable|string|max:100',
             'u' => 'integer',
             'd' => 'integer',
             'balance' => 'numeric',
@@ -53,6 +54,7 @@ class UserUpdate extends FormRequest
             'is_staff.required' => '是否员工不能为空',
             'is_staff.in' => '是否员工格式不正确',
             'is_distributor.boolean' => '是否分销商格式不正确',
+            'distributor_name.max' => '分销商名称不能超过100个字符',
             'plan_id.integer' => '订阅计划格式不正确',
             'commission_rate.integer' => '推荐返利比例格式不正确',
             'commission_rate.nullable' => '推荐返利比例格式不正确',
@@ -72,5 +74,14 @@ class UserUpdate extends FormRequest
         ];
 
         return HookManager::filter('admin.user.update.messages', $messages, $this);
+    }
+
+    protected function prepareForValidation(): void
+    {
+        if ($this->has('distributor_name')) {
+            $this->merge([
+                'distributor_name' => trim((string) $this->input('distributor_name')),
+            ]);
+        }
     }
 }

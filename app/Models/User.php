@@ -42,6 +42,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int|null $parent_id 父账户ID
  * @property int|null $is_admin 是否管理员
  * @property bool $is_distributor 是否分销商
+ * @property string|null $distributor_name 分销商名称
  * @property int|null $next_reset_at 下次流量重置时间
  * @property int|null $last_reset_at 上次流量重置时间
  * @property int|null $telegram_id Telegram ID

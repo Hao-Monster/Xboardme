@@ -100,6 +100,7 @@ class DocumentMock {
     this.documentElement = new ElementMock('html', this);
     this.body = new ElementMock('body', this);
     this.documentElement.appendChild(this.body);
+    this.injectedSwitches = [];
 
     this.main = new ElementMock('main', this);
     this.heading = new ElementMock('h1', this);
@@ -122,6 +123,7 @@ class DocumentMock {
 
   querySelectorAll(selector) {
     if (selector === 'h1,h2') return [this.heading];
+    if (selector === '.xboard-distributor-injected input[type="checkbox"]') return this.injectedSwitches;
     return [];
   }
 
@@ -171,7 +173,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
   const fetchMock = async (url, init = {}) => {
     requests.push({ url, init });
     if (url.includes('/user/distributor/options')) {
-      return response({ status: 'success', data: [{ id: 7, email: 'dealer@example.com', banned: false }] });
+      return response({ status: 'success', data: [{ id: 7, email: 'dealer@example.com', distributor_name: '华东渠道', banned: false }] });
     }
     if (url.includes('/order/settlement/preview')) {
       return response({ status: 'success', data: { count: settled ? 0 : 2, total_amount: settled ? 0 : 6000 } });
@@ -189,6 +191,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
           trade_no: 'DIST-ORDER-1',
           created_at: 1785580800,
           distributor_email: 'dealer@example.com',
+          distributor_name: '华东渠道',
           plan: { name: 'Test Plan' },
           total_amount: 3000,
           delivery_status: 0,
@@ -203,7 +206,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
     addEventListener() {}
   }
   XMLHttpRequestMock.prototype.open = function () {};
-  XMLHttpRequestMock.prototype.send = function () {};
+  XMLHttpRequestMock.prototype.send = function (body) { this.sentBody = body; };
 
   const storage = new Map([
     ['XBOARD_ACCESS_TOKEN', JSON.stringify({ value: 'Bearer test-token', expire: null })],
@@ -243,7 +246,8 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.ok(host, 'the distributor settlement section should mount in the existing order page');
   assert.match(host.innerHTML, /id="native-dist-distributor"/);
   assert.match(host.innerHTML, /id="native-dist-settlement"/);
-  assert.match(host.innerHTML, /dealer@example\.com/);
+  assert.match(host.innerHTML, /华东渠道/);
+  assert.doesNotMatch(host.innerHTML, /dealer@example\.com/);
   assert.match(host.innerHTML, /DIST-ORDER-1/);
 
   const change = host.listeners.get('change')[0];
@@ -287,4 +291,23 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.ok(settleRequest, 'settlement endpoint should be called');
   assert.equal(JSON.parse(settleRequest.init.body).distributor_user_id, 7);
   assert.match(host.innerHTML, /未结算：<b>0<\/b> 个订单/);
+
+  const injectedName = { value: ' 华东渠道 ' };
+  const injectedWrapper = { querySelector: () => injectedName };
+  const injectedSwitch = {
+    checked: true,
+    offsetParent: {},
+    closest: () => injectedWrapper,
+  };
+  document.injectedSwitches = [injectedSwitch];
+  const xhr = new XMLHttpRequestMock();
+  xhr.open('POST', '/api/v2/admin-api/user/update');
+  xhr.send(JSON.stringify({ id: 7 }));
+  assert.deepEqual(JSON.parse(xhr.sentBody), {
+    id: 7,
+    is_distributor: 1,
+    distributor_name: '华东渠道',
+  });
+  assert.match(source, /data-distributor-name/);
+  assert.match(source, /maxlength="100"/);
 });

@@ -195,18 +195,23 @@
     const checkbox = activeInjectedSwitch();
     if (!checkbox) return body;
     const value = checkbox.checked ? 1 : 0;
+    const nameInput = checkbox.closest('.xboard-distributor-injected')?.querySelector('[data-distributor-name]');
+    const distributorName = value ? String(nameInput?.value || '').trim() : '';
     if (body instanceof FormData || body instanceof URLSearchParams) {
       body.set('is_distributor', String(value));
+      body.set('distributor_name', distributorName);
       return body;
     }
     if (typeof body === 'string') {
       try {
         const parsed = JSON.parse(body);
         parsed.is_distributor = value;
+        parsed.distributor_name = distributorName;
         return JSON.stringify(parsed);
       } catch (_) {
         const params = new URLSearchParams(body);
         params.set('is_distributor', String(value));
+        params.set('distributor_name', distributorName);
         return params.toString();
       }
     }
@@ -242,8 +247,23 @@
       const emailInput = [...dialog.querySelectorAll('input')]
         .find((input) => String(input.value || '').includes('@'));
       const user = emailInput ? userCache.get(String(emailInput.value).toLowerCase()) : null;
-      if (user) checkbox.checked = Boolean(user.is_distributor);
+      if (user) {
+        checkbox.checked = Boolean(user.is_distributor);
+        const nameInput = dialog.querySelector('[data-distributor-name]');
+        if (nameInput) nameInput.value = user.distributor_name || '';
+      }
+      syncDistributorNameField(checkbox);
     });
+  }
+
+  function syncDistributorNameField(checkbox) {
+    const field = checkbox?.closest('.xboard-distributor-injected');
+    const row = field?.querySelector('[data-distributor-name-row]');
+    const input = field?.querySelector('[data-distributor-name]');
+    if (!row || !input) return;
+    row.hidden = !checkbox.checked;
+    input.disabled = !checkbox.checked;
+    input.required = checkbox.checked;
   }
 
   function injectDistributorFields() {
@@ -265,7 +285,7 @@
 
       const field = document.createElement('div');
       field.className = 'xboard-distributor-injected';
-      field.innerHTML = `<div><strong>是否分销商</strong><small>Distributor account</small></div><label class="admin-dist-switch"><input type="checkbox" ${checked ? 'checked' : ''}><span></span></label>`;
+      field.innerHTML = `<div class="xboard-distributor-injected-toggle"><div><strong>是否分销商</strong><small>Distributor account</small></div><label class="admin-dist-switch"><input type="checkbox" ${checked ? 'checked' : ''}><span></span></label></div><label class="xboard-distributor-name" data-distributor-name-row>分销商名称<input type="text" maxlength="100" data-distributor-name placeholder="请输入分销商名称"></label>`;
 
       const staffNode = [...dialog.querySelectorAll('label,div,span')]
         .find((node) => /^(是否员工|Is Staff|Staff)$/i.test((node.textContent || '').trim()));
@@ -277,6 +297,7 @@
         if (footer) form.insertBefore(field, footer);
         else form.appendChild(field);
       }
+      syncDistributorNameField(field.querySelector('input[type="checkbox"]'));
     });
   }
 
@@ -379,13 +400,13 @@
   }
 
   function distributorOptions(includeAll = true) {
-    return `${includeAll ? '<option value="">全部分销商</option>' : '<option value="">请选择分销商</option>'}${state.distributors.map((user) => `<option value="${user.id}" ${String(user.id) === String(state.selectedDistributor) ? 'selected' : ''}>${escapeHtml(user.email)}${user.banned ? '（已封禁）' : ''}</option>`).join('')}`;
+    return `${includeAll ? '<option value="">全部分销商</option>' : '<option value="">请选择分销商</option>'}${state.distributors.map((user) => `<option value="${user.id}" ${String(user.id) === String(state.selectedDistributor) ? 'selected' : ''}>${escapeHtml(user.distributor_name || user.email)}${user.banned ? '（已封禁）' : ''}</option>`).join('')}`;
   }
 
   function orderRows(detailAttribute = 'data-order-detail') {
     return state.orders.map((order) => `<tr>
       <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
-      <td>${escapeHtml(order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
+      <td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
       <td>${money(order.total_amount)}</td><td>${order.delivery_status === 0 ? '待领取' : order.delivery_status === 1 ? '已领取' : '已关闭'}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
       <td><button class="admin-dist-link" ${detailAttribute}="${order.id}">详情 / 订阅链接</button></td>
@@ -406,11 +427,11 @@
   }
 
   function renderUsers(searchResult = null) {
-    const result = searchResult ? `<div class="admin-dist-user-result"><div><strong>${escapeHtml(searchResult.email)}</strong><small>ID ${searchResult.id}${searchResult.banned ? ' · 已封禁' : ''}</small></div><button data-user-toggle="${searchResult.id}" data-current="${searchResult.is_distributor ? 1 : 0}">${searchResult.is_distributor ? '取消分销商' : '设为分销商'}</button></div>` : '';
+    const result = searchResult ? `<div class="admin-dist-user-result"><div><strong>${escapeHtml(searchResult.email)}</strong><small>ID ${searchResult.id}${searchResult.banned ? ' · 已封禁' : ''}</small><label>分销商名称<input id="admin-dist-user-name" type="text" maxlength="100" value="${escapeHtml(searchResult.distributor_name || '')}" placeholder="请输入分销商名称"></label></div><button data-user-toggle="${searchResult.id}" data-current="${searchResult.is_distributor ? 1 : 0}">${searchResult.is_distributor ? '取消分销商' : '设为分销商'}</button></div>` : '';
     renderPanel(`<div class="admin-dist-user-grid">
       <section><h2>设置已有用户</h2><p>输入完整邮箱，将普通用户设置为分销商，或取消已有分销身份。</p><div class="admin-dist-form-row"><input id="admin-dist-user-email" type="email" placeholder="user@example.com"><button data-admin-dist="search-user">查询</button></div>${result}</section>
-      <section><h2>创建分销商</h2><p>创建后账号不获得普通订阅，只能进入分销页面。</p><label>邮箱<input id="admin-dist-create-email" type="email" placeholder="dealer@example.com"></label><label>密码（留空则与邮箱相同）<input id="admin-dist-create-password" type="password" minlength="8"></label><button data-admin-dist="create-user">创建分销商</button></section>
-      <section class="wide"><h2>当前分销商</h2><div class="admin-dist-user-list">${state.distributors.map((user) => `<div><span>${escapeHtml(user.email)}${user.banned ? '（已封禁）' : ''}</span><button data-user-toggle="${user.id}" data-current="1">取消分销商</button></div>`).join('') || '<p>暂无分销商</p>'}</div></section>
+      <section><h2>创建分销商</h2><p>创建后账号不获得普通订阅，只能进入分销页面。</p><label>分销商名称<input id="admin-dist-create-name" type="text" maxlength="100" placeholder="请输入分销商名称"></label><label>邮箱<input id="admin-dist-create-email" type="email" placeholder="dealer@example.com"></label><label>密码（留空则与邮箱相同）<input id="admin-dist-create-password" type="password" minlength="8"></label><button data-admin-dist="create-user">创建分销商</button></section>
+      <section class="wide"><h2>当前分销商</h2><div class="admin-dist-user-list">${state.distributors.map((user) => `<div><span><strong>${escapeHtml(user.distributor_name || user.email)}${user.banned ? '（已封禁）' : ''}</strong><small>${escapeHtml(user.email)}</small></span><button data-user-toggle="${user.id}" data-current="1">取消分销商</button></div>`).join('') || '<p>暂无分销商</p>'}</div></section>
     </div>`);
   }
 
@@ -424,7 +445,9 @@
   }
 
   async function toggleUser(id, current) {
-    await api('/user/update', { method: 'POST', data: { id: Number(id), is_distributor: current ? 0 : 1 } });
+    const distributorName = document.getElementById('admin-dist-user-name')?.value.trim() || '';
+    if (!current && !distributorName) throw new Error('请输入分销商名称');
+    await api('/user/update', { method: 'POST', data: { id: Number(id), is_distributor: current ? 0 : 1, distributor_name: current ? '' : distributorName } });
     toast('用户身份已更新');
     await loadDistributors();
     renderUsers();
@@ -432,12 +455,14 @@
 
   async function createUser() {
     const email = document.getElementById('admin-dist-create-email')?.value.trim().toLowerCase();
+    const distributorName = document.getElementById('admin-dist-create-name')?.value.trim() || '';
     const password = document.getElementById('admin-dist-create-password')?.value || null;
     const at = email?.lastIndexOf('@') ?? -1;
     if (at <= 0 || at === email.length - 1) throw new Error('请输入有效邮箱');
+    if (!distributorName) throw new Error('请输入分销商名称');
     await api('/user/generate', {
       method: 'POST',
-      data: { email_prefix: email.slice(0, at), email_suffix: email.slice(at + 1), password, is_distributor: 1 },
+      data: { email_prefix: email.slice(0, at), email_suffix: email.slice(at + 1), password, is_distributor: 1, distributor_name: distributorName },
     });
     toast('分销商创建成功');
     await loadDistributors();
@@ -446,8 +471,9 @@
 
   async function settle(refresh = loadOrders) {
     if (!state.selectedDistributor || !state.summary?.count) return;
-    const email = state.distributors.find((user) => String(user.id) === String(state.selectedDistributor))?.email || '';
-    if (!window.confirm(`确认结算 ${email} 的 ${state.summary.count} 个订单，共 ${money(state.summary.total_amount)}？`)) return;
+    const distributor = state.distributors.find((user) => String(user.id) === String(state.selectedDistributor));
+    const distributorName = distributor?.distributor_name || distributor?.email || '';
+    if (!window.confirm(`确认结算 ${distributorName} 的 ${state.summary.count} 个订单，共 ${money(state.summary.total_amount)}？`)) return;
     const result = dataOf(await api('/order/settlement/settle', { method: 'POST', data: { distributor_user_id: Number(state.selectedDistributor) } }));
     toast(`已结算 ${result.count} 个订单，共 ${money(result.total_amount)}`);
     await refresh();
@@ -459,7 +485,7 @@
     let modal = document.getElementById('admin-dist-detail');
     if (!modal) { modal = document.createElement('div'); modal.id = 'admin-dist-detail'; document.body.appendChild(modal); }
     modal.innerHTML = `<div class="admin-dist-detail-backdrop"><section><button data-detail-close>×</button><h2>分销订单详情</h2><dl>
-      <div><dt>订单号</dt><dd>${escapeHtml(order.trade_no)}</dd></div><div><dt>分销商</dt><dd>${escapeHtml(order.distributor_email || '-')}</dd></div>
+      <div><dt>订单号</dt><dd>${escapeHtml(order.trade_no)}</dd></div><div><dt>分销商</dt><dd>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</dd></div>
       <div><dt>套餐</dt><dd>${escapeHtml(order.plan?.name || '-')}</dd></div><div><dt>原价</dt><dd>${money(order.total_amount)}</dd></div>
       <div><dt>结算状态</dt><dd>${order.settlement_status === 1 ? '已结算' : '未结算'}</dd></div><div><dt>订阅链接</dt><dd class="url">${order.subscribe_url ? `<code>${escapeHtml(order.subscribe_url)}</code><button data-copy-subscription="${escapeHtml(order.subscribe_url)}">复制</button>` : '订单未完成，暂无订阅链接'}</dd></div>
       </dl>${entitlement ? `<div class="admin-dist-entitlement"><h3>订阅权益</h3>
@@ -571,7 +597,7 @@
     if (!host) return;
     const rows = orderRows('data-native-order-detail');
     host.removeAttribute('aria-busy');
-    host.innerHTML = `<header class="xboard-native-dist-heading"><div><h2>分销订单与结算</h2><p>按购买该订单的分销商邮箱筛选，并对全部已完成、未结算订单执行线下结算。</p></div><div class="xboard-native-dist-actions"><button type="button" data-native-dist="refresh">刷新</button><button type="button" data-native-dist="export">导出 Excel</button></div></header>
+    host.innerHTML = `<header class="xboard-native-dist-heading"><div><h2>分销订单与结算</h2><p>按购买该订单的分销商名称筛选，并对全部已完成、未结算订单执行线下结算。</p></div><div class="xboard-native-dist-actions"><button type="button" data-native-dist="refresh">刷新</button><button type="button" data-native-dist="export">导出 Excel</button></div></header>
       <div class="admin-dist-toolbar xboard-native-dist-toolbar">
         <label>分销商<select id="native-dist-distributor">${distributorOptions(true)}</select></label>
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
@@ -660,6 +686,11 @@
       toast('订阅链接已复制');
     } catch (_) {
       toast('复制失败，请手动复制', 'error');
+    }
+  });
+  document.addEventListener('change', (event) => {
+    if (event.target.matches?.('.xboard-distributor-injected input[type="checkbox"]')) {
+      syncDistributorNameField(event.target);
     }
   });
   const observer = new MutationObserver(() => { mount(); mountNativeOrderManagement(); injectDistributorFields(); injectOrderSubscriptionLinks(); });

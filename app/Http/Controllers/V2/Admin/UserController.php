@@ -238,6 +238,18 @@ class UserController extends Controller
         if (!$user) {
             return $this->fail([400202, '用户不存在']);
         }
+        $isDistributor = array_key_exists('is_distributor', $params)
+            ? (bool) $params['is_distributor']
+            : (bool) $user->is_distributor;
+        if ($isDistributor) {
+            $distributorName = trim((string) ($params['distributor_name'] ?? $user->distributor_name));
+            if ($distributorName === '') {
+                return $this->fail([422, '启用分销商时必须填写分销商名称']);
+            }
+            $params['distributor_name'] = $distributorName;
+        } else {
+            $params['distributor_name'] = null;
+        }
         if (isset($params['email'])) {
             if (User::byEmail($params['email'])->first() && $user->email !== $params['email']) {
                 return $this->fail([400201, '邮箱已被使用']);
@@ -431,6 +443,9 @@ class UserController extends Controller
                 'plan_id' => $request->input('plan_id'),
                 'expired_at' => $request->input('expired_at'),
                 'is_distributor' => $request->boolean('is_distributor'),
+                'distributor_name' => $request->boolean('is_distributor')
+                    ? $request->input('distributor_name')
+                    : null,
             ]);
 
             if (!$user->save()) {
@@ -457,6 +472,9 @@ class UserController extends Controller
                 'plan_id' => $request->input('plan_id'),
                 'expired_at' => $request->input('expired_at'),
                 'is_distributor' => $request->boolean('is_distributor'),
+                'distributor_name' => $request->boolean('is_distributor')
+                    ? $request->input('distributor_name')
+                    : null,
             ];
         }
 
@@ -541,6 +559,9 @@ class UserController extends Controller
                 'plan_id' => $request->input('plan_id'),
                 'expired_at' => $request->input('expired_at'),
                 'is_distributor' => $request->boolean('is_distributor'),
+                'distributor_name' => $request->boolean('is_distributor')
+                    ? $request->input('distributor_name')
+                    : null,
             ];
         }
 
@@ -754,8 +775,9 @@ class UserController extends Controller
     {
         $users = User::notInternalSubscriber()
             ->where('is_distributor', true)
+            ->orderBy('distributor_name')
             ->orderBy('email')
-            ->get(['id', 'email', 'banned']);
+            ->get(['id', 'email', 'distributor_name', 'banned']);
 
         return $this->success($users);
     }

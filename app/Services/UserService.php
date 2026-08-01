@@ -205,7 +205,8 @@ class UserService
             'speed_limit',
             'expired_at',
             'transfer_enable',
-            'is_distributor'
+            'is_distributor',
+            'distributor_name'
         ];
 
         foreach ($optionalFields as $field) {
