@@ -41,6 +41,10 @@ class LoginService
             return [false, [400, __('Incorrect email or password')]];
         }
 
+        if ($user->subscriberEntitlement()->exists()) {
+            return [false, [400, __('Incorrect email or password')]];
+        }
+
         // 验证密码
         if (
             !Helper::multiPasswordVerify(
@@ -102,6 +106,10 @@ class LoginService
         // 查找用户
         $user = User::byEmail($email)->first();
         if (!$user) {
+            return [false, [400, __('This email is not registered in the system')]];
+        }
+
+        if ($user->subscriberEntitlement()->exists()) {
             return [false, [400, __('This email is not registered in the system')]];
         }
 

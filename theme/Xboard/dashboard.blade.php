@@ -5,6 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no" />
   <title>{{$title}}</title>
+  <link rel="stylesheet" href="/theme/{{$theme}}/assets/distributor.css?v={{$version}}" />
   <script type="module" crossorigin src="/theme/{{$theme}}/assets/umi.js"></script>
 </head>
 
@@ -34,6 +35,7 @@
     }
   </script>
   <div id="app"></div>
+  <script defer src="/theme/{{$theme}}/assets/distributor.js?v={{$version}}"></script>
   {!! $theme_config['custom_html'] !!}
 </body>
 

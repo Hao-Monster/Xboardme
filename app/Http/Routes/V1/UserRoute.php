@@ -14,6 +14,7 @@ use App\Http\Controllers\V1\User\StatController;
 use App\Http\Controllers\V1\User\TelegramController;
 use App\Http\Controllers\V1\User\TicketController;
 use App\Http\Controllers\V1\User\UserController;
+use App\Http\Controllers\V1\User\DistributorController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class UserRoute
@@ -22,7 +23,7 @@ class UserRoute
     {
         $router->group([
             'prefix' => 'user',
-            'middleware' => 'user'
+            'middleware' => ['user', 'distributor.access']
         ], function ($router) {
             // User
             $router->get('/resetSecurity', [UserController::class, 'resetSecurity']);
@@ -44,6 +45,9 @@ class UserRoute
             $router->get('/order/fetch', [OrderController::class, 'fetch']);
             $router->get('/order/getPaymentMethod', [OrderController::class, 'getPaymentMethod']);
             $router->post('/order/cancel', [OrderController::class, 'cancel']);
+            // Distributor delivery
+            $router->get('/distributor/delivery', [DistributorController::class, 'delivery']);
+            $router->post('/distributor/delivery/close', [DistributorController::class, 'close']);
             // Plan
             $router->get('/plan/fetch', [PlanController::class, 'fetch']);
             // Invite

@@ -29,7 +29,7 @@ class UserController extends Controller
 
     public function resetSecret(Request $request)
     {
-        $user = User::find($request->input('id'));
+        $user = User::notInternalSubscriber()->find($request->input('id'));
         if (!$user)
             return $this->fail([400202, '用户不存在']);
         $user->token = Helper::guid();
@@ -184,6 +184,7 @@ class UserController extends Controller
         $pageSize = $request->input('pageSize', 10);
 
         $userModel = User::query()
+            ->notInternalSubscriber()
             ->with(['plan:id,name', 'invite_user:id,email', 'group:id,name'])
             ->select((new User())->getTable() . '.*')
             ->selectRaw('(u + d) as total_used');
@@ -220,7 +221,11 @@ class UserController extends Controller
         ], [
             'id.required' => '用户ID不能为空'
         ]);
-        $user = User::find($request->input('id'))->load('invite_user');
+        $user = User::notInternalSubscriber()->find($request->input('id'));
+        if (!$user) {
+            return $this->fail([400202, '用户不存在']);
+        }
+        $user->load('invite_user');
         $user = HookManager::filter('admin.user.detail', $user, $request);
         return $this->success($user);
     }
@@ -229,7 +234,7 @@ class UserController extends Controller
     {
         $params = $request->validated();
 
-        $user = User::find($request->input('id'));
+        $user = User::notInternalSubscriber()->find($request->input('id'));
         if (!$user) {
             return $this->fail([400202, '用户不存在']);
         }
@@ -237,6 +242,12 @@ class UserController extends Controller
             if (User::byEmail($params['email'])->first() && $user->email !== $params['email']) {
                 return $this->fail([400201, '邮箱已被使用']);
             }
+        }
+        $targetIsDistributor = (bool) ($params['is_distributor'] ?? $user->is_distributor);
+        $targetIsAdmin = (bool) ($params['is_admin'] ?? $user->is_admin);
+        $targetIsStaff = (bool) ($params['is_staff'] ?? $user->is_staff);
+        if ($targetIsDistributor && ($targetIsAdmin || $targetIsStaff)) {
+            return $this->fail([422, '管理员、员工和分销商身份不能同时启用']);
         }
         // 处理密码
         if (isset($params['password'])) {
@@ -254,13 +265,18 @@ class UserController extends Controller
             $params['group_id'] = $plan->group_id;
         }
         // 处理邀请用户
-        if ($request->input('invite_user_email') && $inviteUser = User::byEmail($request->input('invite_user_email'))->first()) {
-            $params['invite_user_id'] = $inviteUser->id;
-        } else {
-            $params['invite_user_id'] = null;
+        if ($request->has('invite_user_email')) {
+            if ($request->input('invite_user_email') && $inviteUser = User::byEmail($request->input('invite_user_email'))->first()) {
+                $params['invite_user_id'] = $inviteUser->id;
+            } else {
+                $params['invite_user_id'] = null;
+            }
         }
 
-        if (isset($params['banned']) && (int) $params['banned'] === 1) {
+        if (
+            (isset($params['banned']) && (int) $params['banned'] === 1)
+            || (isset($params['is_distributor']) && (bool) $params['is_distributor'] !== (bool) $user->is_distributor)
+        ) {
             $authService = new AuthService($user);
             $authService->removeAllSessions();
         }
@@ -313,6 +329,7 @@ class UserController extends Controller
 
         // 优化查询：使用with预加载plan关系，避免N+1问题
         $query = User::query()
+            ->notInternalSubscriber()
             ->with('plan:id,name')
             ->orderBy('id', 'asc')
             ->select([
@@ -410,6 +427,7 @@ class UserController extends Controller
                 'password' => $request->input('password') ?? $email,
                 'plan_id' => $request->input('plan_id'),
                 'expired_at' => $request->input('expired_at'),
+                'is_distributor' => $request->boolean('is_distributor'),
             ]);
 
             if (!$user->save()) {
@@ -435,6 +453,7 @@ class UserController extends Controller
                 'password' => $request->input('password') ?? $email,
                 'plan_id' => $request->input('plan_id'),
                 'expired_at' => $request->input('expired_at'),
+                'is_distributor' => $request->boolean('is_distributor'),
             ];
         }
 
@@ -518,6 +537,7 @@ class UserController extends Controller
                 'password' => $request->input('password') ?? $email,
                 'plan_id' => $request->input('plan_id'),
                 'expired_at' => $request->input('expired_at'),
+                'is_distributor' => $request->boolean('is_distributor'),
             ];
         }
 
@@ -592,6 +612,7 @@ class UserController extends Controller
         $sort = $request->input('sort') ? $request->input('sort') : 'created_at';
 
         $builder = User::query()
+            ->notInternalSubscriber()
             ->with('plan:id,name')
             ->orderBy('id', 'desc');
 
@@ -661,7 +682,7 @@ class UserController extends Controller
         $sortType = in_array($request->input('sort_type'), ['ASC', 'DESC']) ? $request->input('sort_type') : 'DESC';
         $sort = $request->input('sort') ? $request->input('sort') : 'created_at';
 
-        $builder = User::query()->orderBy('id', 'desc');
+        $builder = User::query()->notInternalSubscriber()->orderBy('id', 'desc');
 
         if ($scope === 'filtered') {
             // filtered: keep current semantics
@@ -692,7 +713,13 @@ class UserController extends Controller
             'id.required' => '用户ID不能为空',
             'id.exists' => '用户不存在'
         ]);
-        $user = User::find($request->input('id'));
+        $user = User::notInternalSubscriber()->find($request->input('id'));
+        if (!$user) {
+            return $this->fail([400202, '用户不存在']);
+        }
+        if ($user->distributorOrders()->exists()) {
+            return $this->fail([422, '该分销商已有订单，不能删除；请改为封禁账号']);
+        }
         HookManager::call('admin.user.destroy.before', [
             'user' => $user,
             'request' => $request,
@@ -718,5 +745,15 @@ class UserController extends Controller
             Log::error($e);
             return $this->fail([500, '删除失败']);
         }
+    }
+
+    public function distributorOptions()
+    {
+        $users = User::notInternalSubscriber()
+            ->where('is_distributor', true)
+            ->orderBy('email')
+            ->get(['id', 'email', 'banned']);
+
+        return $this->success($users);
     }
 }

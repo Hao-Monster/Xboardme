@@ -14,6 +14,8 @@
       secure_path: "{{ $secure_path }}",
     };
   </script>
+  <link rel="stylesheet" href="/assets/admin-distributor.css?v={{ $version }}" />
+  <script defer src="/assets/admin-distributor.js?v={{ $version }}"></script>
   @php
     $manifestPath = public_path('assets/admin/manifest.json');
     $manifest = file_exists($manifestPath) ? json_decode(file_get_contents($manifestPath), true) : null;

@@ -56,6 +56,7 @@ class StatController extends Controller
                 'month_income' => Order::where('created_at', '>=', strtotime(date('Y-m-1')))
                     ->where('created_at', '<', time())
                     ->whereNotIn('status', [0, 2])
+                    ->revenueRecognized()
                     ->sum('total_amount'),
                 'month_register_total' => User::where('created_at', '>=', strtotime(date('Y-m-1')))
                     ->where('created_at', '<', time())
@@ -70,10 +71,12 @@ class StatController extends Controller
                 'day_income' => Order::where('created_at', '>=', strtotime(date('Y-m-d')))
                     ->where('created_at', '<', time())
                     ->whereNotIn('status', [0, 2])
+                    ->revenueRecognized()
                     ->sum('total_amount'),
                 'last_month_income' => Order::where('created_at', '>=', strtotime('-1 month', strtotime(date('Y-m-1'))))
                     ->where('created_at', '<', strtotime(date('Y-m-1')))
                     ->whereNotIn('status', [0, 2])
+                    ->revenueRecognized()
                     ->sum('total_amount'),
                 'commission_month_payout' => CommissionLog::where('created_at', '>=', strtotime(date('Y-m-1')))
                     ->where('created_at', '<', time())
@@ -296,24 +299,28 @@ class StatController extends Controller
         $todayIncome = Order::where('created_at', '>=', $todayStart)
             ->where('created_at', '<', time())
             ->whereNotIn('status', [0, 2])
+            ->revenueRecognized()
             ->sum('total_amount');
 
         // Yesterday's income for day growth calculation
         $yesterdayIncome = Order::where('created_at', '>=', $yesterdayStart)
             ->where('created_at', '<', $todayStart)
             ->whereNotIn('status', [0, 2])
+            ->revenueRecognized()
             ->sum('total_amount');
 
         // Current month income
         $currentMonthIncome = Order::where('created_at', '>=', $currentMonthStart)
             ->where('created_at', '<', time())
             ->whereNotIn('status', [0, 2])
+            ->revenueRecognized()
             ->sum('total_amount');
 
         // Last month income
         $lastMonthIncome = Order::where('created_at', '>=', $lastMonthStart)
             ->where('created_at', '<', $currentMonthStart)
             ->whereNotIn('status', [0, 2])
+            ->revenueRecognized()
             ->sum('total_amount');
 
         // Last month commission payout
@@ -344,6 +351,7 @@ class StatController extends Controller
         $twoMonthsAgoIncome = Order::where('created_at', '>=', $twoMonthsAgoStart)
             ->where('created_at', '<', $lastMonthStart)
             ->whereNotIn('status', [0, 2])
+            ->revenueRecognized()
             ->sum('total_amount');
 
         // Previous month commission for growth calculation

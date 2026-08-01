@@ -92,6 +92,27 @@ class PlanService
         $this->validatePlanAvailability($user);
     }
 
+    public function validateDistributorPurchase(string $period): void
+    {
+        $periodKey = self::getPeriodKey($period);
+        if ($periodKey === Plan::PERIOD_RESET_TRAFFIC) {
+            throw new ApiException('分销商只能为终端客户购买新订阅');
+        }
+
+        $price = $this->plan->prices[$periodKey] ?? null;
+        if ($price === null || $price <= 0) {
+            throw new ApiException(__('This payment period cannot be purchased, please choose another period'));
+        }
+
+        if (!$this->plan->show || !$this->plan->sell) {
+            throw new ApiException(__('Subscription plan does not exist'));
+        }
+
+        if (!$this->hasCapacity($this->plan)) {
+            throw new ApiException(__('Current product is sold out'));
+        }
+    }
+
     /**
      * 智能转换周期格式为新版格式
      * 如果是新版格式直接返回，如果是旧版格式则转换为新版格式
@@ -164,7 +185,8 @@ class PlanService
 
     public function hasCapacity(Plan $plan): bool
     {
-        if ($plan->capacity_limit === null) {
+        // The plan schema defines both NULL and 0 as unlimited capacity.
+        if ($plan->capacity_limit === null || $plan->capacity_limit <= 0) {
             return true;
         }
 

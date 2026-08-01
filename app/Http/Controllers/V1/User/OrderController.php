@@ -15,6 +15,7 @@ use App\Services\OrderService;
 use App\Services\PaymentService;
 use App\Services\PlanService;
 use App\Services\UserService;
+use App\Services\DistributorOrderService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -25,7 +26,7 @@ class OrderController extends Controller
         $request->validate([
             'status' => 'nullable|integer|in:0,1,2,3',
         ]);
-        $orders = Order::with('plan')
+        $orders = Order::with(['plan', 'distributorOrder:id,order_id,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at'])
             ->where('user_id', $request->user()->id)
             ->when($request->input('status') !== null, function ($query) use ($request) {
                 $query->where('status', $request->input('status'));
@@ -41,7 +42,11 @@ class OrderController extends Controller
         $request->validate([
             'trade_no' => 'required|string',
         ]);
-        $order = Order::with(['payment', 'plan'])
+        $order = Order::with([
+            'payment',
+            'plan',
+            'distributorOrder:id,order_id,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
+        ])
             ->where('user_id', $request->user()->id)
             ->where('trade_no', $request->input('trade_no'))
             ->first();
@@ -68,11 +73,25 @@ class OrderController extends Controller
         $user = User::findOrFail($request->user()->id);
         $userService = app(UserService::class);
 
+        $plan = Plan::findOrFail($request->input('plan_id'));
+        if ($user->is_distributor) {
+            if ($request->filled('coupon_code')) {
+                throw new ApiException('分销订单不支持优惠券或折扣');
+            }
+
+            $order = app(DistributorOrderService::class)->create(
+                $user,
+                $plan,
+                $request->input('period')
+            );
+
+            return $this->success($order->trade_no);
+        }
+
         if ($userService->isNotCompleteOrderByUserId($user->id)) {
             throw new ApiException(__('You have an unpaid or pending order, please try again later or cancel it'));
         }
 
-        $plan = Plan::findOrFail($request->input('plan_id'));
         $planService = new PlanService($plan);
 
         $planService->validatePurchase($user, $request->input('period'));
@@ -119,6 +138,19 @@ class OrderController extends Controller
     {
         $tradeNo = $request->input('trade_no');
         $method = $request->input('method');
+        $completedDistributorOrder = Order::query()
+            ->where('trade_no', $tradeNo)
+            ->where('user_id', $request->user()->id)
+            ->where('status', Order::STATUS_COMPLETED)
+            ->whereHas('distributorOrder')
+            ->first();
+        if ($completedDistributorOrder) {
+            return response([
+                'type' => -1,
+                'data' => true,
+            ]);
+        }
+
         $order = Order::where('trade_no', $tradeNo)
             ->where('user_id', $request->user()->id)
             ->where('status', 0)
@@ -172,8 +204,12 @@ class OrderController extends Controller
         return $this->success($order->status);
     }
 
-    public function getPaymentMethod()
+    public function getPaymentMethod(Request $request)
     {
+        if ($request->user()->is_distributor) {
+            return $this->success([]);
+        }
+
         $methods = Payment::select([
             'id',
             'name',

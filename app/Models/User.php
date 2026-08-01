@@ -9,6 +9,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * App\Models\User
@@ -40,9 +41,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $last_login_at 最后登录时间
  * @property int|null $parent_id 父账户ID
  * @property int|null $is_admin 是否管理员
+ * @property bool $is_distributor 是否分销商
  * @property int|null $next_reset_at 下次流量重置时间
  * @property int|null $last_reset_at 上次流量重置时间
  * @property int|null $telegram_id Telegram ID
+ * @property-read DistributorOrder|null $subscriberEntitlement
+ * @property-read \Illuminate\Database\Eloquent\Collection<int, DistributorOrder> $distributorOrders
  * @property int $reset_count 流量重置次数
  * @property int $created_at
  * @property int $updated_at
@@ -71,6 +75,7 @@ class User extends Authenticatable
         'banned' => 'boolean',
         'is_admin' => 'boolean',
         'is_staff' => 'boolean',
+        'is_distributor' => 'boolean',
         'remind_expire' => 'boolean',
         'remind_traffic' => 'boolean',
         'commission_auto_check' => 'boolean',
@@ -127,6 +132,21 @@ class User extends Authenticatable
     public function orders(): HasMany
     {
         return $this->hasMany(Order::class, 'user_id', 'id');
+    }
+
+    public function distributorOrders(): HasMany
+    {
+        return $this->hasMany(DistributorOrder::class, 'distributor_user_id', 'id');
+    }
+
+    public function subscriberEntitlement(): HasOne
+    {
+        return $this->hasOne(DistributorOrder::class, 'subscriber_user_id', 'id');
+    }
+
+    public function scopeNotInternalSubscriber(Builder $query): Builder
+    {
+        return $query->whereDoesntHave('subscriberEntitlement');
     }
 
     public function stat(): HasMany

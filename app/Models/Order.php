@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Builder;
 
 /**
  * App\Models\Order
@@ -39,6 +41,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property-read Plan $plan
  * @property-read Payment|null $payment
  * @property-read User $user
+ * @property-read DistributorOrder|null $distributorOrder
  * @property-read \Illuminate\Database\Eloquent\Collection<int, CommissionLog> $commission_log
  */
 class Order extends Model
@@ -116,5 +119,20 @@ class Order extends Model
     public function commission_log(): HasMany
     {
         return $this->hasMany(CommissionLog::class, 'trade_no', 'trade_no');
+    }
+
+    public function distributorOrder(): HasOne
+    {
+        return $this->hasOne(DistributorOrder::class, 'order_id', 'id');
+    }
+
+    public function scopeRevenueRecognized(Builder $query): Builder
+    {
+        return $query->where(function (Builder $query) {
+            $query->whereDoesntHave('distributorOrder')
+                ->orWhereHas('distributorOrder', function (Builder $query) {
+                    $query->where('settlement_status', DistributorOrder::SETTLEMENT_SETTLED);
+                });
+        });
     }
 }

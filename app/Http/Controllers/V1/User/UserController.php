@@ -52,6 +52,9 @@ class UserController extends Controller
         if ($request->user()?->is_admin) {
             $data['is_admin'] = true;
         }
+        if ($request->user()?->is_distributor) {
+            $data['is_distributor'] = true;
+        }
         return $this->success($data);
     }
 
@@ -103,7 +106,8 @@ class UserController extends Controller
                 'discount',
                 'commission_rate',
                 'telegram_id',
-                'uuid'
+                'uuid',
+                'is_distributor',
             ])
             ->first();
         if (!$user) {

@@ -20,6 +20,10 @@ return [
 
     'default' => env('CACHE_DRIVER', 'file'),
 
+    // Keep the production settings cache on Redis while allowing isolated
+    // environments (such as PHPUnit) to use another configured store.
+    'settings_store' => env('CACHE_SETTINGS_STORE', 'redis'),
+
     /*
     |--------------------------------------------------------------------------
     | Cache Stores

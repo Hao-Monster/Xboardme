@@ -120,6 +120,8 @@ class AdminRoute
                 $router->post('/paid', [OrderController::class, 'paid']);
                 $router->post('/cancel', [OrderController::class, 'cancel']);
                 $router->post('/detail', [OrderController::class, 'detail']);
+                $router->get('/settlement/preview', [OrderController::class, 'settlementPreview']);
+                $router->post('/settlement/settle', [OrderController::class, 'settle']);
             });
 
             // User
@@ -136,6 +138,7 @@ class AdminRoute
                 $router->post('/resetSecret', [UserController::class, 'resetSecret']);
                 $router->post('/setInviteUser', [UserController::class, 'setInviteUser']);
                 $router->post('/destroy', [UserController::class, 'destroy']);
+                $router->get('/distributor/options', [UserController::class, 'distributorOptions']);
             });
 
             // Stat

@@ -32,6 +32,7 @@ class AuthService
             'token' => $this->user->token,
             'auth_data' => $formattedToken,
             'is_admin' => $this->user->is_admin,
+            'is_distributor' => (bool) $this->user->is_distributor,
         ];
     }
 
@@ -81,7 +82,8 @@ class AuthService
             'id' => $user->id,
             'email' => $user->email,
             'is_admin' => (bool)$user->is_admin,
-            'is_staff' => (bool)$user->is_staff
+            'is_staff' => (bool) $user->is_staff,
+            'is_distributor' => (bool) $user->is_distributor,
         ];
     }
 }

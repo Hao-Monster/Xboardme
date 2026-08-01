@@ -8,6 +8,7 @@ use App\Http\Requests\Admin\OrderUpdate;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
+use App\Models\DistributorOrder;
 use App\Services\OrderService;
 use App\Services\PlanService;
 use App\Services\UserService;
@@ -22,21 +23,70 @@ class OrderController extends Controller
 
     public function detail(Request $request)
     {
-        $order = Order::with(['user', 'plan', 'commission_log', 'invite_user'])->find($request->input('id'));
+        $order = Order::with([
+            'user',
+            'plan',
+            'commission_log',
+            'invite_user',
+            'distributorOrder.subscriber',
+            'distributorOrder.distributor:id,email',
+        ])->find($request->input('id'));
         if (!$order)
             return $this->fail([400202, '订单不存在']);
+
+        $distributorOrder = $order->distributorOrder;
+        $subscribeUrl = null;
+        if ($order->status === Order::STATUS_COMPLETED) {
+            $subscriber = $distributorOrder?->subscriber ?: $order->user;
+            $subscribeUrl = Helper::getSubscribeUrl($subscriber->token);
+        }
+
         if ($order->surplus_order_ids) {
             $order['surplus_orders'] = Order::whereIn('id', $order->surplus_order_ids)->get();
         }
-        $order['period'] = PlanService::getLegacyPeriod((string) $order->period);
-        return $this->success($order);
+        $data = $order->toArray();
+        unset($data['distributor_order']);
+        $data['period'] = PlanService::getLegacyPeriod((string) $order->period);
+        $data['is_distributor_order'] = $distributorOrder !== null;
+        $data['distributor_email'] = $distributorOrder?->distributor?->email;
+        $data['delivery_status'] = $distributorOrder?->delivery_status;
+        $data['settlement_status'] = $distributorOrder?->settlement_status;
+        $data['settled_at'] = $distributorOrder?->settled_at;
+        $data['subscribe_url'] = $subscribeUrl;
+
+        return $this->success($data);
     }
 
     public function fetch(Request $request)
     {
         $current = $request->input('current', 1);
         $pageSize = $request->input('pageSize', 10);
-        $orderModel = Order::with('plan:id,name');
+        $orderModel = Order::with([
+            'plan:id,name',
+            'distributorOrder:id,order_id,distributor_user_id,delivery_status,settlement_status,settled_at',
+            'distributorOrder.distributor:id,email',
+        ]);
+
+        $request->validate([
+            'distributor_user_id' => 'nullable|integer',
+            'settlement_status' => 'nullable|integer|in:0,1',
+            'distributor_only' => 'nullable|boolean',
+        ]);
+
+        if ($request->boolean('distributor_only')) {
+            $orderModel->whereHas('distributorOrder');
+        }
+
+        if ($request->filled('distributor_user_id')) {
+            $orderModel->whereHas('distributorOrder', function ($query) use ($request) {
+                $query->where('distributor_user_id', (int) $request->input('distributor_user_id'));
+            });
+        }
+        if ($request->input('settlement_status') !== null) {
+            $orderModel->whereHas('distributorOrder', function ($query) use ($request) {
+                $query->where('settlement_status', (int) $request->input('settlement_status'));
+            });
+        }
 
         if ($request->boolean('is_commission')) {
             $orderModel->whereNotNull('invite_user_id')
@@ -56,7 +106,14 @@ class OrderController extends Controller
 
         $paginatedResults->getCollection()->transform(function ($order) {
             $orderArray = $order->toArray();
+            $distributorOrder = $order->distributorOrder;
+            unset($orderArray['distributor_order']);
             $orderArray['period'] = PlanService::getLegacyPeriod((string) $order->period);
+            $orderArray['is_distributor_order'] = $distributorOrder !== null;
+            $orderArray['distributor_email'] = $distributorOrder?->distributor?->email;
+            $orderArray['delivery_status'] = $distributorOrder?->delivery_status;
+            $orderArray['settlement_status'] = $distributorOrder?->settlement_status;
+            $orderArray['settled_at'] = $distributorOrder?->settled_at;
             return $orderArray;
         });
 
@@ -248,5 +305,88 @@ class OrderController extends Controller
         }
 
         return $this->success($order->trade_no);
+    }
+
+    public function settlementPreview(Request $request)
+    {
+        $distributor = $this->resolveDistributor($request);
+        if (!$distributor) {
+            return $this->fail([422, '请选择有效的分销商']);
+        }
+
+        return $this->success($this->getSettlementSummary($distributor->id));
+    }
+
+    public function settle(Request $request)
+    {
+        $distributor = $this->resolveDistributor($request);
+        if (!$distributor) {
+            return $this->fail([422, '请选择有效的分销商']);
+        }
+
+        $result = DB::transaction(function () use ($request, $distributor) {
+            $deliveries = DistributorOrder::query()
+                ->where('distributor_user_id', $distributor->id)
+                ->where('settlement_status', DistributorOrder::SETTLEMENT_UNSETTLED)
+                ->whereHas('order', fn($query) => $query->where('status', Order::STATUS_COMPLETED))
+                ->lockForUpdate()
+                ->get(['id', 'order_id']);
+
+            $orderIds = $deliveries->pluck('order_id');
+            $amount = $orderIds->isEmpty()
+                ? 0
+                : (int) Order::whereIn('id', $orderIds)->sum('total_amount');
+            $settledAt = time();
+
+            if ($deliveries->isNotEmpty()) {
+                DistributorOrder::whereIn('id', $deliveries->pluck('id'))->update([
+                    'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
+                    'settled_at' => $settledAt,
+                    'settled_by' => $request->user()->id,
+                    'updated_at' => $settledAt,
+                ]);
+                Order::whereIn('id', $orderIds)
+                    ->whereNull('paid_at')
+                    ->update(['paid_at' => $settledAt, 'updated_at' => $settledAt]);
+            }
+
+            return [
+                'count' => $deliveries->count(),
+                'total_amount' => $amount,
+                'total_amount_yuan' => $amount / 100,
+                'settled_at' => $deliveries->isEmpty() ? null : $settledAt,
+            ];
+        });
+
+        return $this->success($result);
+    }
+
+    private function resolveDistributor(Request $request): ?User
+    {
+        $request->validate([
+            'distributor_user_id' => 'required|integer',
+        ]);
+
+        return User::notInternalSubscriber()
+            ->where('is_distributor', true)
+            ->find((int) $request->input('distributor_user_id'));
+    }
+
+    private function getSettlementSummary(int $distributorUserId): array
+    {
+        $summary = DistributorOrder::query()
+            ->join('v2_order', 'v2_order.id', '=', 'v2_distributor_order.order_id')
+            ->where('v2_distributor_order.distributor_user_id', $distributorUserId)
+            ->where('v2_distributor_order.settlement_status', DistributorOrder::SETTLEMENT_UNSETTLED)
+            ->where('v2_order.status', Order::STATUS_COMPLETED)
+            ->selectRaw('COUNT(v2_distributor_order.id) as order_count, COALESCE(SUM(v2_order.total_amount), 0) as total_amount')
+            ->first();
+
+        $amount = (int) ($summary->total_amount ?? 0);
+        return [
+            'count' => (int) ($summary->order_count ?? 0),
+            'total_amount' => $amount,
+            'total_amount_yuan' => $amount / 100,
+        ];
     }
 }

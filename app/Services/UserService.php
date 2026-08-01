@@ -178,6 +178,11 @@ class UserService
         // 可选字段
         $this->setOptionalFields($user, $data);
 
+        // 分销商账号只负责下单，不为账号本身开通订阅或试用。
+        if ($user->is_distributor) {
+            return $user;
+        }
+
         // 处理计划
         if (isset($data['plan_id'])) {
             $this->setPlanForUser($user, $data['plan_id'], $data['expired_at'] ?? null);
@@ -199,7 +204,8 @@ class UserService
             'group_id',
             'speed_limit',
             'expired_at',
-            'transfer_enable'
+            'transfer_enable',
+            'is_distributor'
         ];
 
         foreach ($optionalFields as $field) {
