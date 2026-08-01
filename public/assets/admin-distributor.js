@@ -289,7 +289,7 @@
     state.distributors = dataOf(await api('/user/distributor/options')) || [];
   }
 
-  async function loadOrders() {
+  async function fetchOrders() {
     const payload = await api('/order/fetch', {
       method: 'POST',
       data: {
@@ -306,6 +306,10 @@
     if (state.selectedDistributor) {
       state.summary = dataOf(await api(`/order/settlement/preview?distributor_user_id=${encodeURIComponent(state.selectedDistributor)}`));
     }
+  }
+
+  async function loadOrders() {
+    await fetchOrders();
     renderOrders();
   }
 
@@ -313,14 +317,18 @@
     return `${includeAll ? '<option value="">全部分销商</option>' : '<option value="">请选择分销商</option>'}${state.distributors.map((user) => `<option value="${user.id}" ${String(user.id) === String(state.selectedDistributor) ? 'selected' : ''}>${escapeHtml(user.email)}${user.banned ? '（已封禁）' : ''}</option>`).join('')}`;
   }
 
-  function renderOrders() {
-    const rows = state.orders.map((order) => `<tr>
+  function orderRows(detailAttribute = 'data-order-detail') {
+    return state.orders.map((order) => `<tr>
       <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
       <td>${escapeHtml(order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
       <td>${money(order.total_amount)}</td><td>${order.delivery_status === 0 ? '待领取' : order.delivery_status === 1 ? '已领取' : '已关闭'}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
-      <td><button class="admin-dist-link" data-order-detail="${order.id}">详情 / 订阅链接</button></td>
+      <td><button class="admin-dist-link" ${detailAttribute}="${order.id}">详情 / 订阅链接</button></td>
     </tr>`).join('');
+  }
+
+  function renderOrders() {
+    const rows = orderRows();
     const summary = state.summary
       ? `<div class="admin-dist-summary"><span>未结算：<b>${state.summary.count}</b> 个订单，合计 <b>${money(state.summary.total_amount)}</b></span><button data-admin-dist="settle" ${state.summary.count ? '' : 'disabled'}>结算全部未结算订单</button></div>`
       : '<div class="admin-dist-summary muted">选择一个分销商后可计算并执行结算。</div>';
@@ -371,13 +379,13 @@
     renderUsers();
   }
 
-  async function settle() {
+  async function settle(refresh = loadOrders) {
     if (!state.selectedDistributor || !state.summary?.count) return;
     const email = state.distributors.find((user) => String(user.id) === String(state.selectedDistributor))?.email || '';
     if (!window.confirm(`确认结算 ${email} 的 ${state.summary.count} 个订单，共 ${money(state.summary.total_amount)}？`)) return;
     const result = dataOf(await api('/order/settlement/settle', { method: 'POST', data: { distributor_user_id: Number(state.selectedDistributor) } }));
     toast(`已结算 ${result.count} 个订单，共 ${money(result.total_amount)}`);
-    await loadOrders();
+    await refresh();
   }
 
   async function showOrderDetail(id) {
@@ -429,6 +437,102 @@
     }
   }
 
+  function findOrderManagementTable() {
+    const heading = [...document.querySelectorAll('h1,h2')]
+      .find((node) => /^(订单管理|Order Management)$/i.test((node.textContent || '').trim()));
+    if (!heading) return null;
+
+    const page = heading.closest('main') || heading.parentElement?.parentElement || heading.parentElement;
+    const table = page?.querySelector('table');
+    if (!page || !table) return null;
+
+    return { page, table };
+  }
+
+  function nativeSummary() {
+    return state.summary
+      ? `<div class="admin-dist-summary"><span>未结算：<b>${state.summary.count}</b> 个订单，合计 <b>${money(state.summary.total_amount)}</b></span><button type="button" data-native-dist="settle" ${state.summary.count ? '' : 'disabled'}>结算全部未结算订单</button></div>`
+      : '<div class="admin-dist-summary muted">选择一个分销商后，将自动计算全部已完成且未结算的订单数量与金额。</div>';
+  }
+
+  function renderNativeOrders() {
+    const host = document.getElementById('xboard-native-distributor-orders');
+    if (!host) return;
+    const rows = orderRows('data-native-order-detail');
+    host.removeAttribute('aria-busy');
+    host.innerHTML = `<header class="xboard-native-dist-heading"><div><h2>分销订单与结算</h2><p>按购买该订单的分销商邮箱筛选，并对全部已完成、未结算订单执行线下结算。</p></div><button type="button" data-native-dist="refresh">刷新</button></header>
+      <div class="admin-dist-toolbar xboard-native-dist-toolbar">
+        <label>分销商<select id="native-dist-distributor">${distributorOptions(true)}</select></label>
+        <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
+      </div>${nativeSummary()}
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付状态</th><th>结算状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
+      <footer class="admin-dist-pagination"><span>共 ${state.total} 个分销订单</span><div><button type="button" data-native-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button type="button" data-native-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`;
+  }
+
+  async function loadNativeOrders() {
+    const host = document.getElementById('xboard-native-distributor-orders');
+    if (!host) return;
+    host.setAttribute('aria-busy', 'true');
+    host.innerHTML = '<div class="admin-dist-loading">正在加载分销订单与结算信息…</div>';
+    try {
+      await loadDistributors();
+      await fetchOrders();
+      renderNativeOrders();
+    } catch (error) {
+      host.removeAttribute('aria-busy');
+      host.innerHTML = `<div class="admin-dist-error">${escapeHtml(error.message)}<button type="button" data-native-dist="refresh">重试</button></div>`;
+    }
+  }
+
+  async function handleNativeOrderClick(event) {
+    try {
+      const action = event.target.closest('[data-native-dist]')?.dataset.nativeDist;
+      if (action === 'refresh') await loadNativeOrders();
+      else if (action === 'settle') await settle(loadNativeOrders);
+
+      const detail = event.target.closest('[data-native-order-detail]');
+      if (detail) await showOrderDetail(detail.dataset.nativeOrderDetail);
+
+      const page = event.target.closest('[data-native-page]');
+      if (page) {
+        state.page += page.dataset.nativePage === 'next' ? 1 : -1;
+        await loadNativeOrders();
+      }
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  }
+
+  async function handleNativeOrderChange(event) {
+    if (event.target.id === 'native-dist-distributor') {
+      state.selectedDistributor = event.target.value;
+    } else if (event.target.id === 'native-dist-settlement') {
+      state.settlementStatus = event.target.value;
+    } else {
+      return;
+    }
+    state.page = 1;
+    await loadNativeOrders();
+  }
+
+  function mountNativeOrderManagement() {
+    if (!authToken() || document.getElementById('xboard-native-distributor-orders')) return;
+    const context = findOrderManagementTable();
+    if (!context) return;
+
+    const host = document.createElement('section');
+    host.id = 'xboard-native-distributor-orders';
+    host.className = 'xboard-native-distributor-orders';
+    host.addEventListener('click', handleNativeOrderClick);
+    host.addEventListener('change', (event) => {
+      handleNativeOrderChange(event).catch((error) => toast(error.message, 'error'));
+    });
+
+    const tableContainer = context.table.parentElement || context.table;
+    tableContainer.parentElement?.insertBefore(host, tableContainer);
+    loadNativeOrders();
+  }
+
   installRequestBridge();
   document.addEventListener('click', async (event) => {
     const copy = event.target.closest('[data-native-copy-subscription]');
@@ -440,9 +544,9 @@
       toast('复制失败，请手动复制', 'error');
     }
   });
-  const observer = new MutationObserver(() => { mount(); injectDistributorFields(); injectOrderSubscriptionLinks(); });
+  const observer = new MutationObserver(() => { mount(); mountNativeOrderManagement(); injectDistributorFields(); injectOrderSubscriptionLinks(); });
   observer.observe(document.documentElement, { childList: true, subtree: true });
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
-  else mount();
-  setInterval(mount, 1000);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { mount(); mountNativeOrderManagement(); });
+  else { mount(); mountNativeOrderManagement(); }
+  setInterval(() => { mount(); mountNativeOrderManagement(); }, 1000);
 })();

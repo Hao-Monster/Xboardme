@@ -42,6 +42,7 @@ jobs:
         run: |
           node --check public/assets/admin-distributor.js
           node --check theme/Xboard/assets/distributor.js
+          node --test tests/JavaScript/*.test.js
 
   build:
     needs: verify

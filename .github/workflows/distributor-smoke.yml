@@ -1,0 +1,82 @@
+name: Distributor Production Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify distributor login and route isolation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$DISTRIBUTOR_EMAIL"
+          test -n "$DISTRIBUTOR_PASSWORD"
+
+          sshpass -e ssh -f -N \
+            -p "$DEPLOY_PORT" \
+            -o ExitOnForwardFailure=yes \
+            -L 17001:127.0.0.1:7001 \
+            "$DEPLOY_USER@$DEPLOY_HOST"
+          trap 'pkill -f "17001:127.0.0.1:7001" || true' EXIT
+
+          login_status=$(curl --silent --show-error \
+            --output login.json --write-out '%{http_code}' \
+            --request POST 'http://127.0.0.1:17001/api/v1/passport/auth/login' \
+            --data-urlencode "email=$DISTRIBUTOR_EMAIL" \
+            --data-urlencode "password=$DISTRIBUTOR_PASSWORD")
+          test "$login_status" = '200'
+          jq -e '(.status == "success") and (.data.is_distributor == true) and (.data.auth_data | type == "string")' login.json >/dev/null
+          auth_data=$(jq -r '.data.auth_data' login.json)
+
+          info_status=$(curl --silent --show-error \
+            --output info.json --write-out '%{http_code}' \
+            --header "Authorization: $auth_data" \
+            'http://127.0.0.1:17001/api/v1/user/info')
+          test "$info_status" = '200'
+          jq -e '(.status == "success") and (.data.is_distributor == true)' info.json >/dev/null
+
+          plans_status=$(curl --silent --show-error \
+            --output plans.json --write-out '%{http_code}' \
+            --header "Authorization: $auth_data" \
+            'http://127.0.0.1:17001/api/v1/user/plan/fetch')
+          test "$plans_status" = '200'
+
+          orders_status=$(curl --silent --show-error \
+            --output orders.json --write-out '%{http_code}' \
+            --header "Authorization: $auth_data" \
+            'http://127.0.0.1:17001/api/v1/user/order/fetch')
+          test "$orders_status" = '200'
+
+          restricted_status=$(curl --silent --show-error \
+            --output restricted.json --write-out '%{http_code}' \
+            --header "Authorization: $auth_data" \
+            'http://127.0.0.1:17001/api/v1/user/getSubscribe')
+          test "$restricted_status" = '403'
+
+          echo 'Distributor production smoke test passed.'
