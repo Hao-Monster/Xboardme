@@ -43,6 +43,7 @@ class UserRoute
             $router->get('/order/check', [OrderController::class, 'check']);
             $router->get('/order/detail', [OrderController::class, 'detail']);
             $router->get('/order/fetch', [OrderController::class, 'fetch']);
+            $router->get('/order/export', [OrderController::class, 'export']);
             $router->get('/order/getPaymentMethod', [OrderController::class, 'getPaymentMethod']);
             $router->post('/order/cancel', [OrderController::class, 'cancel']);
             // Distributor delivery

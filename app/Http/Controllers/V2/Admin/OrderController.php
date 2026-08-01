@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Models\DistributorOrder;
 use App\Services\OrderService;
 use App\Services\DistributorOrderEntitlementService;
+use App\Services\DistributorOrderExportService;
 use App\Services\PlanService;
 use App\Services\UserService;
 use App\Utils\Helper;
@@ -22,6 +23,19 @@ use Illuminate\Support\Facades\Log;
 
 class OrderController extends Controller
 {
+
+    public function export(Request $request, DistributorOrderExportService $exportService)
+    {
+        $validated = $request->validate([
+            'distributor_user_id' => 'nullable|integer',
+            'settlement_status' => 'nullable|integer|in:0,1',
+        ]);
+
+        return $exportService->downloadForAdmin(
+            isset($validated['distributor_user_id']) ? (int) $validated['distributor_user_id'] : null,
+            isset($validated['settlement_status']) ? (int) $validated['settlement_status'] : null
+        );
+    }
 
     public function detail(Request $request, DistributorOrderEntitlementService $entitlementService)
     {

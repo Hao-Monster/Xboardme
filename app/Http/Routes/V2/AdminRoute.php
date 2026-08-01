@@ -115,6 +115,7 @@ class AdminRoute
                 'prefix' => 'order'
             ], function ($router) {
                 $router->any('/fetch', [OrderController::class, 'fetch']);
+                $router->get('/export', [OrderController::class, 'export']);
                 $router->post('/update', [OrderController::class, 'update']);
                 $router->post('/assign', [OrderController::class, 'assign']);
                 $router->post('/paid', [OrderController::class, 'paid']);
