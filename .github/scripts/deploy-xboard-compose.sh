@@ -210,7 +210,12 @@ fi
 
 PRIMARY_CONTAINER=$("${COMPOSE[@]}" -p "$PROJECT" "${COMPOSE_FILES[@]}" -f "$OVERRIDE_FILE" ps -q "$PRIMARY_SERVICE")
 docker exec "$PRIMARY_CONTAINER" php /www/artisan migrate --force --no-interaction
-docker exec "$PRIMARY_CONTAINER" php /www/artisan optimize:clear
+docker exec \
+  -e CACHE_DRIVER=array \
+  -e CACHE_SETTINGS_STORE=array \
+  -e QUEUE_CONNECTION=sync \
+  -e SESSION_DRIVER=array \
+  "$PRIMARY_CONTAINER" php /www/artisan optimize:clear
 
 if [[ "$PRIMARY_SERVICE" == xboard || "$PRIMARY_SERVICE" == web ]]; then
   docker exec "$PRIMARY_CONTAINER" sh -lc '
