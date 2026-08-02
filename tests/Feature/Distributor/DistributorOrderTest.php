@@ -159,7 +159,8 @@ class DistributorOrderTest extends TestCase
 
     public function test_karing_receives_a_sing_box_config_with_real_server_outbounds(): void
     {
-        config(['cache.default' => 'array']);
+        config(['cache.stores.redis' => ['driver' => 'array']]);
+        app('cache')->forgetDriver('redis');
 
         $order = $this->createDistributorOrder(
             $this->makeUser('karing-dealer@example.com', true),
