@@ -17,7 +17,7 @@ test('distributor plan catalog exposes the new commerce-oriented page structure'
 });
 
 test('distributor shell uses the published site logo instead of the text mark', () => {
-  assert.match(source, /<img class="dist-brand-mark" src="https:\/\/cloud\.thinderbox\.com\/assets\/branding\/thinderbox-logo\.png"/);
+  assert.match(source, /<img class="dist-brand-mark" src="https:\/\/cloud\.thinderbox\.com\/assets\/branding\/thinderbox-logo\.png\?v=39e70a98"/);
   assert.doesNotMatch(source, /<span class="dist-brand-mark">X<\/span>/);
   assert.match(styles, /\.dist-brand-mark \{[^}]*width:32px[^}]*height:32px[^}]*object-fit:cover/);
 });
