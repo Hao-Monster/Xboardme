@@ -18,7 +18,7 @@
   const COPY = {
     'zh-CN': {
       buy: '购买订阅', orders: '我的订单', invite: '我的邀请', logout: '退出登录',
-      title: '分销订阅中心', subtitle: '每个订单生成一份独立订阅，客户扫码领取后不可再次领取。',
+      title: '分销订阅中心', subtitle: '每个订单生成一份独立订阅，默认通过 HWID 限制 1 台设备。',
       buyNow: '立即下单', original: '原价', free: '分销免支付', confirm: '确认下单', cancel: '取消',
       allPlans: '全部套餐', highTraffic: '大流量', unlimitedSpeed: '不限速', unlimitedDevices: '不限设备',
       featured: '精选套餐', traffic: '套餐流量', speed: '速度限制', devices: '同时在线', resetMethod: '流量重置',
@@ -30,9 +30,10 @@
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
       pending: '待领取', claimed: '已领取', closed: '已关闭', showQr: '显示二维码',
       checkDelivery: '检查交付', issuing: '二维码已领取，正在等待订阅配置成功下发。',
-      qrTitle: '客户订阅二维码', qrHint: '请让终端客户使用订阅客户端扫描。二维码只能成功领取一次。',
+      qrTitle: '客户订阅二维码', qrHint: '请让终端客户使用支持 HWID 的订阅客户端扫描，默认仅允许 1 台设备。',
       done: '已添加成功', closeAgain: '再次点击确认关闭', closeWarning: '请确保节点已经可用，关闭之后无法再次获取。',
       claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
+      waitingConnection: '等待用户开启代理 进入网络', connectedThrough: '客户已经通过 {node} 节点进入网络',
       delivery: '交付状态', settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
       customerName: '用户名称', customerNamePlaceholder: '请输入便于售后识别的用户名称',
       customerNameRequired: '为了售后方便，请输入备注清楚用户',
@@ -47,7 +48,7 @@
     },
     'en-US': {
       buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', logout: 'Sign out',
-      title: 'Distributor Center', subtitle: 'Each order creates an independent subscription that can be claimed once.',
+      title: 'Distributor Center', subtitle: 'Each order creates an independent subscription protected by a one-device HWID limit.',
       buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', confirm: 'Confirm', cancel: 'Cancel',
       allPlans: 'All plans', highTraffic: 'High traffic', unlimitedSpeed: 'Unlimited speed', unlimitedDevices: 'Unlimited devices',
       featured: 'Featured', traffic: 'Traffic', speed: 'Speed', devices: 'Devices', resetMethod: 'Traffic reset',
@@ -59,9 +60,10 @@
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
       pending: 'Pending claim', claimed: 'Claimed', closed: 'Closed', showQr: 'Show QR',
       checkDelivery: 'Check delivery', issuing: 'The QR was claimed. Waiting for the subscription configuration response.',
-      qrTitle: 'Customer subscription QR', qrHint: 'Scan with the customer subscription client. This QR can only be claimed once.',
+      qrTitle: 'Customer subscription QR', qrHint: 'Scan with an HWID-capable client. One device is allowed by default.',
       done: 'Added successfully', closeAgain: 'Click again to close', closeWarning: 'Make sure the nodes work. The QR cannot be recovered after closing.',
       claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
+      waitingConnection: 'Waiting for the customer to enable the proxy', connectedThrough: 'Customer connected through {node}',
       delivery: 'Delivery', settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
       customerName: 'Customer name', customerNamePlaceholder: 'Enter a name for after-sales identification',
       customerNameRequired: 'Enter a clear customer name for after-sales support.',
@@ -434,6 +436,9 @@
     const orders = dataOf(await api(`/user/order/fetch${params.size ? `?${params}` : ''}`)) || [];
     const rows = orders.map((order) => {
       const delivery = order.delivery_status === 0 ? t('pending') : order.delivery_status === 1 ? t('claimed') : t('closed');
+      const connectionText = order.connected_at
+        ? t('connectedThrough').replace('{node}', order.connected_node_name || '-')
+        : order.config_issued_at ? t('waitingConnection') : '';
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
       const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
@@ -450,9 +455,9 @@
         <td>${escapeHtml(order.customer_name || '-')}</td>
         <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
-        <td><span class="dist-badge delivery-${order.delivery_status}">${delivery}</span></td>
+        <td><span class="dist-badge delivery-${order.delivery_status}">${delivery}</span>${connectionText ? `<small class="dist-connection-status ${order.connected_at ? 'connected' : ''}">${escapeHtml(connectionText)}</small>` : ''}</td>
         <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
-        <td>${order.delivery_status === 0 || (order.delivery_status === 1 && !order.config_issued_at) ? `<button class="dist-link-btn" data-delivery="${escapeHtml(order.trade_no)}">${order.delivery_status === 0 ? t('showQr') : t('checkDelivery')}</button>` : '-'}</td>
+        <td>${order.delivery_status !== 2 && !order.connected_at ? `<button class="dist-link-btn" data-delivery="${escapeHtml(order.trade_no)}">${order.delivery_status === 0 ? t('showQr') : t('checkDelivery')}</button>` : '-'}</td>
       </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
@@ -527,12 +532,17 @@
     const claimed = delivery.delivery_status === 1;
     const pending = delivery.delivery_status === 0;
     const issued = Boolean(delivery.config_issued_at);
+    const connected = Boolean(delivery.connected_at);
+    const connectionText = connected
+      ? t('connectedThrough').replace('{node}', delivery.connected_node_name || '-')
+      : issued ? t('waitingConnection') : '';
     root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-qr-modal"><button class="dist-modal-x" data-modal-action="done">×</button><h2>${t('qrTitle')}</h2>
-      <p>${pending ? t('qrHint') : claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p>
-      ${pending && delivery.qr_code ? `<div class="dist-qr"><img src="${escapeHtml(delivery.qr_code)}" alt="Subscription QR"></div>` : `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong></div>`}
+      <p>${connected ? t('claimedOk') : issued ? t('waitingConnection') : pending ? t('qrHint') : claimed ? t('issuing') : t('closed')}</p>
+      ${!connected && delivery.qr_code ? `<div class="dist-qr"><img src="${escapeHtml(delivery.qr_code)}" alt="Subscription QR"></div>` : `<div class="dist-delivery-result">${connected ? '✓' : claimed ? '…' : '×'}<strong>${connected || claimed ? t('claimed') : t('closed')}</strong></div>`}
+      ${claimed && connectionText ? `<div class="dist-modal-connection ${connected ? 'connected' : ''}">${escapeHtml(connectionText)}</div>` : ''}
       <div class="dist-order-ref">${t('orderNo')}：${escapeHtml(delivery.trade_no)}</div>
-      ${state.closeArmed && !issued && delivery.delivery_status !== 2 ? `<div class="dist-warning">${t('closeWarning')}</div>` : ''}
-      <div class="dist-modal-actions"><button class="primary" data-modal-action="done">${state.closeArmed && !issued && delivery.delivery_status !== 2 ? t('closeAgain') : t('done')}</button></div>
+      ${state.closeArmed && !connected && delivery.delivery_status !== 2 ? `<div class="dist-warning">${t('closeWarning')}</div>` : ''}
+      <div class="dist-modal-actions"><button class="primary" data-modal-action="done">${state.closeArmed && !connected && delivery.delivery_status !== 2 ? t('closeAgain') : t('done')}</button></div>
       </section></div>`;
   }
 
@@ -545,7 +555,7 @@
   async function handleDone() {
     if (!state.modal || state.modal.type !== 'delivery') { closeModal(); return; }
     const delivery = state.modal.delivery;
-    if (delivery.delivery_status === 2 || delivery.config_issued_at) { closeModal(); return; }
+    if (delivery.delivery_status === 2 || delivery.connected_at) { closeModal(); return; }
     if (!state.closeArmed) {
       state.closeArmed = true;
       renderModal();
@@ -569,12 +579,17 @@
   function startPolling() {
     stopPolling();
     state.poller = setInterval(async () => {
-      if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.delivery_status === 2 || state.modal.delivery.config_issued_at) return;
+      if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.delivery_status === 2 || state.modal.delivery.connected_at) return;
       try {
         const updated = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(state.modal.delivery.trade_no)}`));
-        if (updated.delivery_status !== state.modal.delivery.delivery_status || updated.config_issued_at !== state.modal.delivery.config_issued_at) {
+        if (updated.delivery_status !== state.modal.delivery.delivery_status || updated.config_issued_at !== state.modal.delivery.config_issued_at || updated.connected_at !== state.modal.delivery.connected_at) {
           state.modal.delivery = updated;
           state.closeArmed = false;
+          if (updated.connected_at) {
+            closeModal();
+            await renderPage();
+            return;
+          }
           renderModal();
         }
       } catch (_) { /* keep the current QR visible during transient failures */ }
@@ -589,7 +604,7 @@
   async function recoverPendingDelivery() {
     try {
       const delivery = dataOf(await api('/user/distributor/delivery'));
-      if (delivery?.delivery_status === 0) {
+      if (delivery && delivery.delivery_status !== 2 && !delivery.connected_at) {
         state.modal = { type: 'delivery', delivery };
         renderModal();
         startPolling();
@@ -704,7 +719,7 @@
   });
   window.addEventListener('hashchange', () => { if (state.active) renderPage(); });
   window.addEventListener('beforeunload', (event) => {
-    if (state.modal?.type === 'delivery' && state.modal.delivery.delivery_status === 0) {
+    if (state.modal?.type === 'delivery' && state.modal.delivery.delivery_status !== 2 && !state.modal.delivery.connected_at) {
       event.preventDefault();
       event.returnValue = '';
     }

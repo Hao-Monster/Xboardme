@@ -427,7 +427,7 @@
     return state.orders.map((order) => `<tr>
       <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
       <td>${escapeHtml(order.customer_name || '-')}</td><td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
-      <td>${money(order.total_amount)}</td><td>${order.delivery_status === 0 ? '待领取' : order.delivery_status === 1 ? '已领取' : '已关闭'}</td>
+      <td>${money(order.total_amount)}</td><td>${order.delivery_status === 0 ? '待领取' : order.delivery_status === 1 ? '已领取' : '已关闭'}${order.connected_at ? `<small class="admin-dist-connected">客户已经通过 ${escapeHtml(order.connected_node_name || '-')} 节点进入网络</small>` : order.config_issued_at ? '<small class="admin-dist-waiting">等待用户开启代理 进入网络</small>' : ''}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
       <td><button class="admin-dist-link" ${detailAttribute}="${order.id}">详情 / 订阅链接</button></td>
     </tr>`).join('');
@@ -500,16 +500,22 @@
     await refresh();
   }
 
-  async function showOrderDetail(id) {
+  function hwidDeviceRows(devices) {
+    return devices.map((device) => `<tr><td><code>${escapeHtml(device.hwid)}</code></td><td>${escapeHtml([device.device_os, device.os_version].filter(Boolean).join(' ') || '-')}</td><td>${escapeHtml(device.device_model || '-')}</td><td>${escapeHtml(device.ip || '-')}</td><td>${formatTime(device.first_seen_at)}</td><td>${formatTime(device.last_seen_at)}</td><td><button type="button" data-delete-hwid="${device.id}">删除</button></td></tr>`).join('');
+  }
+
+  async function showOrderDetail(id, hwidSearch = '') {
     const order = dataOf(await api('/order/detail', { method: 'POST', data: { id: Number(id) } }));
     const entitlement = order.subscription_entitlement;
+    const devices = order.hwid ? dataOf(await api(`/order/hwid/devices?order_id=${encodeURIComponent(order.id)}${hwidSearch ? `&search=${encodeURIComponent(hwidSearch)}` : ''}`)) || [] : [];
     let modal = document.getElementById('admin-dist-detail');
     if (!modal) { modal = document.createElement('div'); modal.id = 'admin-dist-detail'; document.body.appendChild(modal); }
     modal.innerHTML = `<div class="admin-dist-detail-backdrop"><section><button data-detail-close>×</button><h2>分销订单详情</h2><dl>
       <div><dt>订单号</dt><dd>${escapeHtml(order.trade_no)}</dd></div><div><dt>分销商</dt><dd>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</dd></div>
       <div><dt>套餐</dt><dd>${escapeHtml(order.plan?.name || '-')}</dd></div><div><dt>原价</dt><dd>${money(order.total_amount)}</dd></div>
       <div><dt>结算状态</dt><dd>${order.settlement_status === 1 ? '已结算' : '未结算'}</dd></div><div><dt>订阅链接</dt><dd class="url">${order.subscribe_url ? `<code>${escapeHtml(order.subscribe_url)}</code><button data-copy-subscription="${escapeHtml(order.subscribe_url)}">复制</button>` : '订单未完成，暂无订阅链接'}</dd></div>
-      <div><dt>用户名称</dt><dd>${escapeHtml(order.customer_name || '-')}</dd></div>
+      <div><dt>用户名称</dt><dd>${escapeHtml(order.customer_name || '-')}</dd></div><div><dt>配置下发</dt><dd>${order.config_issued_at ? formatTime(order.config_issued_at) : '尚未下发'}</dd></div>
+      <div><dt>接入状态</dt><dd>${order.connected_at ? `客户已经通过 ${escapeHtml(order.connected_node_name || '-')} 节点进入网络（${formatTime(order.connected_at)}）` : '等待用户开启代理 进入网络'}</dd></div>
       </dl>${entitlement ? `<div class="admin-dist-entitlement"><h3>订阅权益</h3>
         <div class="admin-dist-entitlement-readonly"><span><b>套餐</b>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</span><span><b>已用流量</b>${formatTraffic(entitlement.used_traffic)}</span><span><b>剩余流量</b>${formatTraffic(entitlement.remaining_traffic)}</span></div>
         <div class="admin-dist-entitlement-form">
@@ -519,7 +525,8 @@
           <label>设备限制<div><input id="admin-dist-entitlement-device" type="number" min="0" step="1" value="${entitlement.device_limit ?? ''}" placeholder="留空则不限制"><span>台</span></div></label>
         </div><p class="admin-dist-entitlement-current">当前：${formatTraffic(entitlement.transfer_enable)} · ${entitlement.expired_at ? formatTime(entitlement.expired_at) : '长期有效'} · ${nullableLimit(entitlement.speed_limit, 'Mbps', '不限速')} · ${nullableLimit(entitlement.device_limit, '台', '不限制设备')}</p>
         <footer><button type="button" data-save-entitlement="${order.id}">保存订阅权益</button></footer>
-      </div>` : '<p class="admin-dist-entitlement-error">该分销订单没有可用的订阅权益。</p>'}</section></div>`;
+      </div>` : '<p class="admin-dist-entitlement-error">该分销订单没有可用的订阅权益。</p>'}
+      ${order.hwid ? `<div class="admin-dist-hwid"><h3>HWID 设备限制</h3><div class="admin-dist-hwid-settings"><label><input id="admin-dist-hwid-enabled" type="checkbox" ${order.hwid.enabled ? 'checked' : ''}> 启用 HWID</label><label>允许设备数<input id="admin-dist-hwid-limit" type="number" min="1" max="100" step="1" value="${order.hwid.limit}"></label><button type="button" data-save-hwid="${order.id}">保存 HWID 设置</button></div><p>已登记 ${order.hwid.registered_count} / ${order.hwid.limit} 台设备。降低上限不会删除已有设备，只会阻止新设备。</p><div class="admin-dist-hwid-search"><input id="admin-dist-hwid-search" type="search" maxlength="64" value="${escapeHtml(hwidSearch)}" placeholder="按 HWID 查询"><button type="button" data-search-hwid="${order.id}">查询</button><button type="button" data-clear-hwid="${order.id}" ${hwidSearch ? '' : 'disabled'}>清空</button></div><div class="admin-dist-hwid-table"><table><thead><tr><th>HWID</th><th>系统</th><th>设备型号</th><th>IP</th><th>首次登记</th><th>最近更新</th><th></th></tr></thead><tbody>${hwidDeviceRows(devices) || '<tr><td colspan="7">暂无已登记设备</td></tr>'}</tbody></table></div></div>` : ''}</section></div>`;
     modal.classList.add('open');
     modal.onclick = async (event) => {
       if (event.target.closest('[data-detail-close]')) { modal.classList.remove('open'); modal.innerHTML = ''; }
@@ -559,6 +566,28 @@
           save.disabled = false;
           toast(error.message, 'error');
         }
+      }
+      const saveHwid = event.target.closest('[data-save-hwid]');
+      if (saveHwid) {
+        const enabled = Boolean(modal.querySelector('#admin-dist-hwid-enabled')?.checked);
+        const limit = Number(modal.querySelector('#admin-dist-hwid-limit')?.value);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 100) { toast('HWID 数量必须在 1 到 100 之间', 'error'); return; }
+        saveHwid.disabled = true;
+        try {
+          await api('/order/hwid/update', { method: 'POST', data: { order_id: Number(saveHwid.dataset.saveHwid), enabled, limit } });
+          toast('HWID 设置已保存');
+          await showOrderDetail(saveHwid.dataset.saveHwid, hwidSearch);
+        } catch (error) { saveHwid.disabled = false; toast(error.message, 'error'); }
+      }
+      const searchHwid = event.target.closest('[data-search-hwid]');
+      if (searchHwid) await showOrderDetail(searchHwid.dataset.searchHwid, modal.querySelector('#admin-dist-hwid-search')?.value.trim() || '');
+      const clearHwid = event.target.closest('[data-clear-hwid]');
+      if (clearHwid) await showOrderDetail(clearHwid.dataset.clearHwid);
+      const deleteHwid = event.target.closest('[data-delete-hwid]');
+      if (deleteHwid && window.confirm('确认删除这台 HWID 设备并释放名额？')) {
+        await api('/order/hwid/device/delete', { method: 'POST', data: { order_id: Number(order.id), device_id: Number(deleteHwid.dataset.deleteHwid) } });
+        toast('HWID 设备已删除');
+        await showOrderDetail(order.id, hwidSearch);
       }
     };
   }

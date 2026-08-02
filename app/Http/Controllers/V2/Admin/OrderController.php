@@ -14,6 +14,7 @@ use App\Services\OrderService;
 use App\Services\DistributorOrderEntitlementService;
 use App\Services\DistributorOrderExportService;
 use App\Services\DistributorOrderSearchService;
+use App\Services\DistributorHwidService;
 use App\Services\PlanService;
 use App\Services\UserService;
 use App\Utils\Helper;
@@ -40,7 +41,11 @@ class OrderController extends Controller
         );
     }
 
-    public function detail(Request $request, DistributorOrderEntitlementService $entitlementService)
+    public function detail(
+        Request $request,
+        DistributorOrderEntitlementService $entitlementService,
+        DistributorHwidService $hwidService
+    )
     {
         $order = Order::with([
             'user',
@@ -72,11 +77,18 @@ class OrderController extends Controller
             ?: $distributorOrder?->distributor?->email;
         $data['customer_name'] = $distributorOrder?->customer_name;
         $data['delivery_status'] = $distributorOrder?->delivery_status;
+        $data['config_issued_at'] = $distributorOrder?->config_issued_at;
+        $data['connected_at'] = $distributorOrder?->connected_at;
+        $data['connected_node_id'] = $distributorOrder?->connected_node_id;
+        $data['connected_node_name'] = $distributorOrder?->connected_node_name;
         $data['settlement_status'] = $distributorOrder?->settlement_status;
         $data['settled_at'] = $distributorOrder?->settled_at;
         $data['subscribe_url'] = $subscribeUrl;
         $data['subscription_entitlement'] = $distributorOrder
             ? $entitlementService->data($distributorOrder)
+            : null;
+        $data['hwid'] = $distributorOrder
+            ? $hwidService->settingsForOrder($order->id)
             : null;
 
         return $this->success($data);
@@ -103,7 +115,7 @@ class OrderController extends Controller
         $pageSize = $request->input('pageSize', 10);
         $orderModel = Order::with([
             'plan:id,name',
-            'distributorOrder:id,order_id,distributor_user_id,customer_name,delivery_status,settlement_status,settled_at',
+            'distributorOrder:id,order_id,distributor_user_id,customer_name,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,settled_at',
             'distributorOrder.distributor:id,email,distributor_name',
         ]);
 
@@ -162,12 +174,58 @@ class OrderController extends Controller
                 ?: $distributorOrder?->distributor?->email;
             $orderArray['customer_name'] = $distributorOrder?->customer_name;
             $orderArray['delivery_status'] = $distributorOrder?->delivery_status;
+            $orderArray['config_issued_at'] = $distributorOrder?->config_issued_at;
+            $orderArray['connected_at'] = $distributorOrder?->connected_at;
+            $orderArray['connected_node_id'] = $distributorOrder?->connected_node_id;
+            $orderArray['connected_node_name'] = $distributorOrder?->connected_node_name;
             $orderArray['settlement_status'] = $distributorOrder?->settlement_status;
             $orderArray['settled_at'] = $distributorOrder?->settled_at;
             return $orderArray;
         });
 
         return $this->paginate($paginatedResults);
+    }
+
+    public function updateHwid(Request $request, DistributorHwidService $hwidService)
+    {
+        $validated = $request->validate([
+            'order_id' => 'required|integer',
+            'enabled' => 'required|boolean',
+            'limit' => 'required|integer|min:1|max:100',
+        ]);
+
+        return $this->success($hwidService->updateSettings(
+            (int) $validated['order_id'],
+            (bool) $validated['enabled'],
+            (int) $validated['limit']
+        ));
+    }
+
+    public function hwidDevices(Request $request, DistributorHwidService $hwidService)
+    {
+        $validated = $request->validate([
+            'order_id' => 'required|integer',
+            'search' => 'nullable|string|max:64',
+        ]);
+
+        return $this->success($hwidService->devicesForOrder(
+            (int) $validated['order_id'],
+            $validated['search'] ?? null
+        ));
+    }
+
+    public function deleteHwidDevice(Request $request, DistributorHwidService $hwidService)
+    {
+        $validated = $request->validate([
+            'order_id' => 'required|integer',
+            'device_id' => 'required|integer',
+        ]);
+
+        if (!$hwidService->deleteDevice((int) $validated['order_id'], (int) $validated['device_id'])) {
+            return $this->fail([404, 'HWID 设备不存在']);
+        }
+
+        return $this->success(true);
     }
 
     private function applyFiltersAndSorts(Request $request, Builder $builder): void

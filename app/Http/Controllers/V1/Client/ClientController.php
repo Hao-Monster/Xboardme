@@ -9,8 +9,10 @@ use App\Protocols\General;
 use App\Services\Plugin\HookManager;
 use App\Services\ServerService;
 use App\Services\UserService;
+use App\Services\DistributorHwidService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ClientController extends Controller
 {
@@ -34,6 +36,15 @@ class ClientController extends Controller
 
     public function subscribe(Request $request)
     {
+        if ($request->isMethod('HEAD')) {
+            return response('', 405, ['Allow' => 'GET', 'Cache-Control' => 'no-store']);
+        }
+
+        $purpose = strtolower((string) ($request->header('Sec-Purpose') ?: $request->header('Purpose')));
+        if (str_contains($purpose, 'prefetch')) {
+            return response('', 425, ['Cache-Control' => 'no-store']);
+        }
+
         HookManager::call('client.subscribe.before');
         $request->validate([
             'types' => ['nullable', 'string'],
@@ -49,15 +60,42 @@ class ClientController extends Controller
             return response('', 403, ['Content-Type' => 'text/plain']);
         }
 
+        $hwid = app(DistributorHwidService::class)->authorizeSubscription($user, $request);
+        if (!$hwid['allowed']) {
+            return response('', 404, $hwid['headers']);
+        }
+
         $response = $this->doSubscribe($request, $user);
 
-        DistributorOrder::query()
-            ->where('subscriber_user_id', $user->id)
-            ->where('delivery_status', DistributorOrder::DELIVERY_CLAIMED)
-            ->whereNull('config_issued_at')
-            ->update(['config_issued_at' => time()]);
+        if ($hwid['delivery'] && $this->isUsableSubscriptionResponse($response)) {
+            $now = time();
+            DistributorOrder::query()
+                ->whereKey($hwid['delivery']->id)
+                ->update([
+                    'delivery_status' => DB::raw('CASE WHEN delivery_status = 0 THEN 1 ELSE delivery_status END'),
+                    'claimed_at' => DB::raw("COALESCE(claimed_at, {$now})"),
+                    'config_issued_at' => DB::raw("COALESCE(config_issued_at, {$now})"),
+                    'claim_ip' => mb_substr((string) $request->ip(), 0, 45),
+                    'claim_ua' => mb_substr((string) $request->userAgent(), 0, 255),
+                    'updated_at' => $now,
+                ]);
+        }
+
+        foreach ($hwid['headers'] as $name => $value) {
+            $response->headers->set($name, $value);
+        }
 
         return $response;
+    }
+
+    private function isUsableSubscriptionResponse($response): bool
+    {
+        if (!method_exists($response, 'isSuccessful') || !$response->isSuccessful()) {
+            return false;
+        }
+
+        $content = trim((string) $response->getContent());
+        return $content !== '' && $content !== '[]' && $content !== '{}';
     }
 
     public function doSubscribe(Request $request, $user, $servers = null)

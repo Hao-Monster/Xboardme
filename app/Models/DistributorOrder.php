@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * @property int $id
@@ -16,6 +17,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $delivery_status
  * @property int $settlement_status
  * @property int|null $config_issued_at
+ * @property bool $hwid_enabled
+ * @property int $hwid_limit
+ * @property int|null $connected_at
+ * @property int|null $connected_node_id
+ * @property string|null $connected_node_name
  * @property int|null $claimed_at
  * @property int|null $closed_at
  * @property int|null $settled_at
@@ -35,7 +41,10 @@ class DistributorOrder extends Model
         'claim_token' => 'encrypted',
         'delivery_status' => 'integer',
         'settlement_status' => 'integer',
+        'hwid_enabled' => 'boolean',
+        'hwid_limit' => 'integer',
         'config_issued_at' => 'timestamp',
+        'connected_at' => 'timestamp',
         'claimed_at' => 'timestamp',
         'closed_at' => 'timestamp',
         'settled_at' => 'timestamp',
@@ -68,5 +77,10 @@ class DistributorOrder extends Model
     public function settledBy(): BelongsTo
     {
         return $this->belongsTo(User::class, 'settled_by');
+    }
+
+    public function hwidDevices(): HasMany
+    {
+        return $this->hasMany(DistributorHwidDevice::class, 'distributor_order_id');
     }
 }

@@ -122,6 +122,9 @@ class AdminRoute
                 $router->post('/cancel', [OrderController::class, 'cancel']);
                 $router->post('/detail', [OrderController::class, 'detail']);
                 $router->post('/entitlement/update', [OrderController::class, 'updateEntitlement']);
+                $router->post('/hwid/update', [OrderController::class, 'updateHwid']);
+                $router->get('/hwid/devices', [OrderController::class, 'hwidDevices']);
+                $router->post('/hwid/device/delete', [OrderController::class, 'deleteHwidDevice']);
                 $router->get('/settlement/preview', [OrderController::class, 'settlementPreview']);
                 $router->post('/settlement/settle', [OrderController::class, 'settle']);
             });

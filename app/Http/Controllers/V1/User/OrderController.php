@@ -32,7 +32,7 @@ class OrderController extends Controller
         ]);
         $orders = Order::with([
             'plan',
-            'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
+            'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at',
             'distributorOrder.subscriber:id,plan_id,transfer_enable,u,d,expired_at,speed_limit,device_limit',
         ])
             ->where('user_id', $request->user()->id)
@@ -79,7 +79,7 @@ class OrderController extends Controller
         $order = Order::with([
             'payment',
             'plan',
-            'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
+            'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at',
             'distributorOrder.subscriber:id,plan_id,transfer_enable,u,d,expired_at,speed_limit,device_limit',
         ])
             ->where('user_id', $request->user()->id)

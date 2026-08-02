@@ -6,9 +6,13 @@ use App\Http\Resources\OrderResource;
 use App\Http\Controllers\V2\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\V2\Admin\UserController as AdminUserController;
 use App\Models\DistributorOrder;
+use App\Models\DistributorHwidDevice;
 use App\Models\Order;
 use App\Models\Plan;
+use App\Models\Server;
 use App\Models\User;
+use App\Services\DistributorConnectionService;
+use App\Services\DistributorHwidService;
 use App\Services\DistributorOrderService;
 use App\Utils\Helper;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -50,6 +54,8 @@ class DistributorOrderTest extends TestCase
         $this->assertSame($plan->id, $firstDelivery->subscriber->plan_id);
         $this->assertSame(DistributorOrder::DELIVERY_PENDING, $firstDelivery->delivery_status);
         $this->assertSame(DistributorOrder::SETTLEMENT_UNSETTLED, $firstDelivery->settlement_status);
+        $this->assertTrue($firstDelivery->hwid_enabled);
+        $this->assertSame(1, $firstDelivery->hwid_limit);
         $this->assertSame('客户甲', $firstDelivery->customer_name);
         $this->assertSame('客户乙', $secondDelivery->customer_name);
 
@@ -123,9 +129,170 @@ class DistributorOrderTest extends TestCase
         $subscribeUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
         $subscribePath = parse_url($subscribeUrl, PHP_URL_PATH);
         $subscribeQuery = parse_url($subscribeUrl, PHP_URL_QUERY);
-        $this->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))->assertOk();
+        $this->makeServer();
+        $this->withHeaders(['X-HWID' => 'preview-device-01'])
+            ->call('HEAD', $subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))
+            ->assertStatus(405);
+        $this->withHeaders(['X-HWID' => 'prefetch-device-01', 'Purpose' => 'prefetch'])
+            ->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))
+            ->assertStatus(425);
+        $this->flushHeaders();
+        $this->assertSame(0, DistributorHwidDevice::where('distributor_order_id', $delivery->id)->count());
+
+        $this->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))
+            ->assertNotFound()
+            ->assertHeader('x-hwid-not-supported', 'true');
+        $this->assertNull($delivery->refresh()->config_issued_at);
+
+        $this->withHeaders(['X-HWID' => 'legacy-device-001'])
+            ->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))
+            ->assertOk()
+            ->assertHeader('x-hwid-active', 'true');
+        $this->flushHeaders();
 
         $this->assertNotNull($delivery->refresh()->config_issued_at);
+        $this->withHeaders(['X-HWID' => 'another-device-002'])
+            ->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))
+            ->assertNotFound()
+            ->assertHeader('x-hwid-max-devices-reached', 'true');
+    }
+
+    public function test_delivery_returns_only_an_embedded_qr_and_never_exposes_the_subscription_as_plain_json(): void
+    {
+        $order = $this->createDistributorOrder(
+            $this->makeUser('long-url-dealer@example.com', true),
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY
+        );
+        $delivery = $order->distributorOrder()->with(['order', 'subscriber'])->firstOrFail();
+
+        $data = app(DistributorOrderService::class)->deliveryData($delivery);
+        $this->assertArrayNotHasKey('claim_url', $data);
+        $this->assertArrayHasKey('qr_code', $data);
+
+        [, $encodedSvg] = explode(',', $data['qr_code'], 2);
+        $svg = base64_decode($encodedSvg, true);
+        $this->assertIsString($svg);
+        $this->assertStringContainsString('<svg', $svg);
+        $this->assertStringNotContainsString('/client/distributor/claim/', $svg);
+    }
+
+    public function test_hwid_rejects_unsupported_and_extra_devices_but_allows_registered_device_updates(): void
+    {
+        $order = $this->createDistributorOrder(
+            $this->makeUser('hwid-dealer@example.com', true),
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY
+        );
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $service = app(DistributorHwidService::class);
+
+        $missing = $service->authorizeSubscription($delivery->subscriber, Request::create('/s/test'));
+        $this->assertFalse($missing['allowed']);
+        $this->assertSame('true', $missing['headers']['x-hwid-not-supported']);
+
+        $firstRequest = Request::create('/s/test', 'GET', [], [], [], [
+            'REMOTE_ADDR' => '203.0.113.10',
+            'HTTP_X_HWID' => 'device-primary-001',
+            'HTTP_X_DEVICE_OS' => 'iOS',
+            'HTTP_X_VER_OS' => '18.1',
+            'HTTP_X_DEVICE_MODEL' => 'iPhone',
+            'HTTP_USER_AGENT' => 'Shadowrocket/2.2',
+        ]);
+        $first = $service->authorizeSubscription($delivery->subscriber, $firstRequest);
+        $this->assertTrue($first['allowed']);
+        $this->assertSame('true', $first['headers']['x-hwid-active']);
+        $this->assertDatabaseHas('v2_distributor_hwid_device', [
+            'distributor_order_id' => $delivery->id,
+            'hwid' => 'device-primary-001',
+            'device_os' => 'iOS',
+            'device_model' => 'iPhone',
+        ]);
+
+        $this->assertTrue($service->authorizeSubscription($delivery->subscriber, $firstRequest)['allowed']);
+        $this->assertSame(1, DistributorHwidDevice::where('distributor_order_id', $delivery->id)->count());
+
+        $extraRequest = Request::create('/s/test', 'GET', [], [], [], [
+            'HTTP_X_HWID' => 'device-secondary-02',
+        ]);
+        $extra = $service->authorizeSubscription($delivery->subscriber, $extraRequest);
+        $this->assertFalse($extra['allowed']);
+        $this->assertSame('true', $extra['headers']['x-hwid-max-devices-reached']);
+        $this->assertSame('true', $extra['headers']['x-hwid-limit']);
+    }
+
+    public function test_admin_can_disable_change_search_and_delete_order_hwid_devices(): void
+    {
+        $order = $this->createDistributorOrder(
+            $this->makeUser('hwid-admin-dealer@example.com', true),
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY
+        );
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $service = app(DistributorHwidService::class);
+        $service->authorizeSubscription($delivery->subscriber, Request::create('/s/test', 'GET', [], [], [], [
+            'HTTP_X_HWID' => 'searchable-device-01',
+        ]));
+
+        Sanctum::actingAs($this->makeUser('hwid-admin@example.com', false, ['is_admin' => true]));
+        $this->postJson('/' . $this->adminRouteUri('updateHwid'), [
+            'order_id' => $order->id,
+            'enabled' => false,
+            'limit' => 3,
+        ])->assertOk()
+            ->assertJsonPath('data.enabled', false)
+            ->assertJsonPath('data.limit', 3)
+            ->assertJsonPath('data.registered_count', 1);
+
+        $devices = $this->getJson('/' . $this->adminRouteUri('hwidDevices') . '?' . http_build_query([
+            'order_id' => $order->id,
+            'search' => 'searchable',
+        ]))->assertOk()->json('data');
+        $this->assertCount(1, $devices);
+
+        $this->postJson('/' . $this->adminRouteUri('deleteHwidDevice'), [
+            'order_id' => $order->id,
+            'device_id' => $devices[0]['id'],
+        ])->assertOk();
+        $this->assertDatabaseMissing('v2_distributor_hwid_device', ['id' => $devices[0]['id']]);
+
+        $disabledRequest = Request::create('/s/test');
+        $this->assertTrue($service->authorizeSubscription($delivery->subscriber, $disabledRequest)['allowed']);
+    }
+
+    public function test_first_positive_node_traffic_records_connection_once_after_configuration_is_issued(): void
+    {
+        $order = $this->createDistributorOrder(
+            $this->makeUser('traffic-dealer@example.com', true),
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY
+        );
+        $delivery = $order->distributorOrder()->firstOrFail();
+        $service = app(DistributorConnectionService::class);
+
+        $service->recordFirstTraffic(['id' => 8, 'name' => '东京 A'], [
+            $delivery->subscriber_user_id => [100, 200],
+        ]);
+        $this->assertNull($delivery->refresh()->connected_at);
+
+        $delivery->update(['config_issued_at' => time()]);
+        $service->recordFirstTraffic(['id' => 8, 'name' => '东京 A'], [
+            $delivery->subscriber_user_id => [0, 0],
+        ]);
+        $this->assertNull($delivery->refresh()->connected_at);
+
+        $service->recordFirstTraffic(['id' => 8, 'name' => '东京 A'], [
+            $delivery->subscriber_user_id => [1, 0],
+        ]);
+        $delivery->refresh();
+        $this->assertNotNull($delivery->connected_at);
+        $this->assertSame(8, $delivery->connected_node_id);
+        $this->assertSame('东京 A', $delivery->connected_node_name);
+
+        $service->recordFirstTraffic(['id' => 9, 'name' => '新加坡 B'], [
+            $delivery->subscriber_user_id => [1, 1],
+        ]);
+        $this->assertSame('东京 A', $delivery->refresh()->connected_node_name);
     }
 
     public function test_distributor_cannot_access_normal_subscription_api_and_order_resource_never_exposes_real_token(): void
@@ -532,6 +699,11 @@ class DistributorOrderTest extends TestCase
 
         $delivery->update(['config_issued_at' => time()]);
 
+        $this->getJson('/api/v1/user/distributor/delivery')
+            ->assertOk()
+            ->assertJsonPath('data.connected_at', null);
+
+        $delivery->update(['connected_at' => time(), 'connected_node_id' => 1, 'connected_node_name' => '测试节点']);
         $this->getJson('/api/v1/user/distributor/delivery')->assertNotFound();
     }
 
@@ -769,6 +941,22 @@ class DistributorOrderTest extends TestCase
                 Plan::PERIOD_QUARTERLY => 30,
             ],
             'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
+        ]);
+    }
+
+    private function makeServer(): Server
+    {
+        return Server::create([
+            'name' => 'HWID Test Node',
+            'type' => Server::TYPE_SOCKS,
+            'host' => '127.0.0.1',
+            'port' => 1080,
+            'server_port' => 1080,
+            'rate' => 1,
+            'group_ids' => ['1'],
+            'show' => true,
+            'enabled' => true,
+            'protocol_settings' => [],
         ]);
     }
 

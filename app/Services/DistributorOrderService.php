@@ -89,6 +89,8 @@ class DistributorOrderService
                 'claim_token_hash' => hash('sha256', $claimToken),
                 'delivery_status' => DistributorOrder::DELIVERY_PENDING,
                 'settlement_status' => DistributorOrder::SETTLEMENT_UNSETTLED,
+                'hwid_enabled' => true,
+                'hwid_limit' => 1,
             ]);
 
             return $order->load(['plan', 'distributorOrder']);
@@ -107,21 +109,24 @@ class DistributorOrderService
             'delivery_status' => $delivery->delivery_status,
             'settlement_status' => $delivery->settlement_status,
             'config_issued_at' => $delivery->config_issued_at,
+            'connected_at' => $delivery->connected_at,
+            'connected_node_id' => $delivery->connected_node_id,
+            'connected_node_name' => $delivery->connected_node_name,
             'claimed_at' => $delivery->claimed_at,
             'closed_at' => $delivery->closed_at,
-            'can_open' => $delivery->delivery_status === DistributorOrder::DELIVERY_PENDING,
+            'hwid_enabled' => (bool) $delivery->hwid_enabled,
+            'hwid_limit' => (int) $delivery->hwid_limit,
+            'can_open' => $delivery->delivery_status !== DistributorOrder::DELIVERY_CLOSED
+                && !$delivery->connected_at,
         ];
 
         if (
             $includeClaimUrl
-            && $delivery->delivery_status === DistributorOrder::DELIVERY_PENDING
-            && $delivery->claim_token
+            && $delivery->delivery_status !== DistributorOrder::DELIVERY_CLOSED
+            && !$delivery->connected_at
         ) {
-            $claimUrl = route('client.distributor.claim', [
-                'token' => $delivery->claim_token,
-            ]);
-            $data['claim_url'] = $claimUrl;
-            $data['qr_code'] = $this->makeQrDataUri($claimUrl);
+            $subscribeUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
+            $data['qr_code'] = $this->makeQrDataUri($subscribeUrl);
         }
 
         return $data;

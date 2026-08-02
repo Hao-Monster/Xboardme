@@ -27,7 +27,7 @@ class DistributorController extends Controller
                 $query->where('delivery_status', DistributorOrder::DELIVERY_PENDING)
                     ->orWhere(function ($query) {
                         $query->where('delivery_status', DistributorOrder::DELIVERY_CLAIMED)
-                            ->whereNull('config_issued_at');
+                            ->whereNull('connected_at');
                     });
             })
                 ->latest('id');

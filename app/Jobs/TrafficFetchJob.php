@@ -9,6 +9,8 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Redis;
+use App\Services\DistributorConnectionService;
+use Illuminate\Support\Facades\Log;
 
 class TrafficFetchJob implements ShouldQueue
 {
@@ -46,6 +48,15 @@ class TrafficFetchJob implements ShouldQueue
 
         if (!empty($userIds)) {
             Redis::sadd('traffic:pending_check', ...$userIds);
+        }
+
+        try {
+            app(DistributorConnectionService::class)->recordFirstTraffic($this->server, $this->data);
+        } catch (\Throwable $exception) {
+            Log::warning('Failed to record distributor connection state', [
+                'server_id' => $this->server['id'] ?? null,
+                'error' => $exception->getMessage(),
+            ]);
         }
     }
 }
