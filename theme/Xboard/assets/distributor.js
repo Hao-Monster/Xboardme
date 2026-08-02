@@ -7,19 +7,32 @@
   const TOKEN_KEY = 'VUE_NAIVE_ACCESS_TOKEN';
   const API_BASE = `${window.location.origin}${(window.routerBase || '/').replace(/\/$/, '')}/api/v1`;
   const PERIODS = [
-    ['month_price', '月付'],
-    ['quarter_price', '季付'],
-    ['half_year_price', '半年付'],
-    ['year_price', '年付'],
-    ['two_year_price', '两年付'],
-    ['three_year_price', '三年付'],
-    ['onetime_price', '一次性'],
+    ['month_price', '月付', 'Monthly', 1],
+    ['quarter_price', '季付', 'Quarterly', 3],
+    ['half_year_price', '半年付', 'Half-year', 6],
+    ['year_price', '年付', 'Yearly', 12],
+    ['two_year_price', '两年付', 'Two-year', 24],
+    ['three_year_price', '三年付', 'Three-year', 36],
+    ['onetime_price', '一次性', 'One-time', 0],
   ];
   const COPY = {
     'zh-CN': {
       buy: '购买订阅', orders: '我的订单', invite: '我的邀请', logout: '退出登录',
       title: '分销订阅中心', subtitle: '每个订单生成一份独立订阅，客户扫码领取后不可再次领取。',
       buyNow: '立即下单', original: '原价', free: '分销免支付', confirm: '确认下单', cancel: '取消',
+      distributorOnly: '分销专属', catalogTitle: '选择套餐，免支付快速交付',
+      catalogDescription: '标准化商品参数与周期价格一目了然，下单后立即生成客户专属的一次性领取二维码。',
+      independentSubscription: '每单独立订阅', oneTimeClaim: '二维码仅领取一次', instantDelivery: '下单即时交付',
+      choosePlan: '选择要交付的订阅套餐', choosePlanHint: '点击分类快速比较套餐，再选择客户需要的购买周期。',
+      allPlans: '全部套餐', highTraffic: '大流量', unlimitedSpeed: '不限速', unlimitedDevices: '不限设备',
+      featured: '精选套餐', traffic: '套餐流量', speed: '速度限制', devices: '同时在线', resetMethod: '流量重置',
+      followSystem: '跟随系统', firstDayMonth: '每月1日', monthlyReset: '按月重置', neverReset: '不重置', firstDayYear: '每年1月1日', yearlyReset: '按年重置',
+      perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次购买，按套餐规则交付', monthlyHint: '按月购买，灵活交付',
+      distributorOrder: '分销免支付下单', generateQrHint: '确认后将生成客户专属领取二维码', soldOut: '已售罄',
+      deliveryGuide: '三步完成客户交付', deliveryGuideHint: '从选择套餐到客户领取，全程无需在线支付。',
+      deliveryStepOne: '选择套餐并下单', deliveryStepOneHint: '确认周期与商品参数，分销订单免在线支付。',
+      deliveryStepTwo: '客户扫描二维码', deliveryStepTwoHint: '每个订单生成独立二维码，仅允许成功领取一次。',
+      deliveryStepThree: '确认节点可用', deliveryStepThreeHint: '确认订阅配置已下发，再完成本次客户交付。',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
       pending: '待领取', claimed: '已领取', closed: '已关闭', showQr: '显示二维码',
       checkDelivery: '检查交付', issuing: '二维码已领取，正在等待订阅配置成功下发。',
@@ -39,6 +52,19 @@
       buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', logout: 'Sign out',
       title: 'Distributor Center', subtitle: 'Each order creates an independent subscription that can be claimed once.',
       buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', confirm: 'Confirm', cancel: 'Cancel',
+      distributorOnly: 'Distributor exclusive', catalogTitle: 'Choose a plan and deliver without online payment',
+      catalogDescription: 'Compare standardized benefits and period prices, then instantly create a one-time customer claim QR.',
+      independentSubscription: 'Independent subscription', oneTimeClaim: 'One successful claim', instantDelivery: 'Instant delivery',
+      choosePlan: 'Choose a subscription plan', choosePlanHint: 'Filter plans, compare benefits, and select the customer billing period.',
+      allPlans: 'All plans', highTraffic: 'High traffic', unlimitedSpeed: 'Unlimited speed', unlimitedDevices: 'Unlimited devices',
+      featured: 'Featured', traffic: 'Traffic', speed: 'Speed', devices: 'Devices', resetMethod: 'Traffic reset',
+      followSystem: 'System default', firstDayMonth: '1st of each month', monthlyReset: 'Monthly', neverReset: 'Never', firstDayYear: 'January 1st', yearlyReset: 'Yearly',
+      perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time purchase under the plan terms', monthlyHint: 'Flexible monthly delivery',
+      distributorOrder: 'Place distributor order', generateQrHint: 'A customer claim QR will be created after confirmation', soldOut: 'Sold out',
+      deliveryGuide: 'Deliver in three steps', deliveryGuideHint: 'From plan selection to customer claim, no online payment is required.',
+      deliveryStepOne: 'Choose and order', deliveryStepOneHint: 'Confirm the period and benefits. Distributor orders skip online payment.',
+      deliveryStepTwo: 'Customer scans QR', deliveryStepTwoHint: 'Each order creates an independent QR that can only be claimed once.',
+      deliveryStepThree: 'Verify service', deliveryStepThreeHint: 'Confirm the subscription was issued before completing delivery.',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
       pending: 'Pending claim', claimed: 'Claimed', closed: 'Closed', showQr: 'Show QR',
       checkDelivery: 'Check delivery', issuing: 'The QR was claimed. Waiting for the subscription configuration response.',
@@ -67,6 +93,9 @@
     closeArmed: false,
     poller: null,
     orderSettlementStatus: '',
+    plans: [],
+    planFilter: 'all',
+    selectedPeriods: {},
   };
 
   const t = (key) => (COPY[state.locale] || COPY['zh-CN'])[key] || key;
@@ -90,6 +119,51 @@
   };
   const formatLimit = (value, unit) => value === null || Number(value) === 0 ? t('unlimited') : `${value} ${unit}`;
   const dataOf = (payload) => payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
+
+  const periodName = (key) => {
+    const found = PERIODS.find(([period]) => period === key);
+    if (!found) return key;
+    return state.locale === 'zh-CN' ? found[1] : found[2];
+  };
+  const availablePeriods = (plan) => PERIODS.filter(([key]) => Number(plan[key]) > 0);
+  const planHasUnlimitedSpeed = (plan) => plan.speed_limit === null || Number(plan.speed_limit) === 0;
+  const planHasUnlimitedDevices = (plan) => plan.device_limit === null || Number(plan.device_limit) === 0;
+  const planMatchesFilter = (plan, filter) => {
+    if (filter === 'high-traffic') return Number(plan.transfer_enable) >= 100;
+    if (filter === 'unlimited-speed') return planHasUnlimitedSpeed(plan);
+    if (filter === 'unlimited-devices') return planHasUnlimitedDevices(plan);
+    return true;
+  };
+  const resetMethodLabel = (method) => method === null || method === undefined ? t('followSystem') : ({
+    0: t('firstDayMonth'), 1: t('monthlyReset'), 2: t('neverReset'),
+    3: t('firstDayYear'), 4: t('yearlyReset'),
+  })[Number(method)] || t('followSystem');
+  const planSummary = (plan) => {
+    const normalized = stripHtml(plan.content)
+      .replace(/#{1,6}\s*/g, '')
+      .replace(/(^|\n)\s*[-*]\s*/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const specWords = normalized.match(/流量|速度|设备|traffic|speed|device/gi) || [];
+    if (normalized && !/套餐详情|服务说明/i.test(normalized) && specWords.length < 2) {
+      return normalized.length > 110 ? `${normalized.slice(0, 108)}…` : normalized;
+    }
+    return state.locale === 'zh-CN'
+      ? `独立订阅交付，包含 ${plan.transfer_enable} GB 套餐流量，客户扫码即可领取。`
+      : `An independent subscription with ${plan.transfer_enable} GB of traffic, ready for customer claim.`;
+  };
+  const periodInsight = (plan, period) => {
+    const found = PERIODS.find(([key]) => key === period);
+    const months = found?.[3] || 0;
+    const price = Number(plan[period]) || 0;
+    if (!months) return t('oneTimeHint');
+    if (months === 1) return t('monthlyHint');
+    const effective = price / months;
+    const monthlyPrice = Number(plan.month_price) || 0;
+    const saving = monthlyPrice > 0 ? Math.max(0, Math.round((1 - price / (monthlyPrice * months)) * 100)) : 0;
+    const monthlyText = t('perMonth').replace('{price}', money(effective));
+    return saving > 0 ? `${monthlyText} · ${t('save').replace('{percent}', saving)}` : monthlyText;
+  };
 
   function authToken() {
     try {
@@ -252,36 +326,80 @@
   }
 
   async function renderPlans() {
-    const plans = dataOf(await api('/user/plan/fetch')) || [];
-    const cards = plans.map((plan) => {
-      const prices = PERIODS.filter(([key]) => Number(plan[key]) > 0);
-      if (!prices.length) return '';
-      const options = prices.map(([key, label]) => `<option value="${key}" data-price="${Number(plan[key])}">${label} · ${money(plan[key])}</option>`).join('');
-      return `<article class="dist-plan-card">
+    state.plans = (dataOf(await api('/user/plan/fetch')) || []).filter((plan) => availablePeriods(plan).length);
+    state.plans.forEach((plan) => {
+      if (!availablePeriods(plan).some(([key]) => key === state.selectedPeriods[plan.id])) {
+        state.selectedPeriods[plan.id] = availablePeriods(plan)[0][0];
+      }
+    });
+    if (!state.plans.some((plan) => planMatchesFilter(plan, state.planFilter))) state.planFilter = 'all';
+    renderPlanCatalog();
+  }
+
+  function renderPlanCatalog() {
+    const filters = [
+      ['all', t('allPlans'), () => true],
+      ['high-traffic', t('highTraffic'), (plan) => Number(plan.transfer_enable) >= 100],
+      ['unlimited-speed', t('unlimitedSpeed'), planHasUnlimitedSpeed],
+      ['unlimited-devices', t('unlimitedDevices'), planHasUnlimitedDevices],
+    ].filter(([key, , matches]) => key === 'all' || state.plans.some(matches));
+    const filterButtons = filters.map(([key, label]) => `<button type="button" data-plan-filter="${key}" class="${state.planFilter === key ? 'active' : ''}">${label}</button>`).join('');
+    const visiblePlans = state.plans.filter((plan) => planMatchesFilter(plan, state.planFilter));
+    const cards = visiblePlans.map((plan) => {
+      const prices = availablePeriods(plan);
+      const selectedPeriod = state.selectedPeriods[plan.id] || prices[0][0];
+      const selectedPrice = Number(plan[selectedPeriod]) || 0;
+      const isFeatured = plan.id === state.plans[0]?.id;
+      const soldOut = typeof plan.capacity_limit === 'string';
+      const tags = [
+        isFeatured ? t('featured') : '',
+        Number(plan.transfer_enable) >= 100 ? t('highTraffic') : '',
+        planHasUnlimitedSpeed(plan) ? t('unlimitedSpeed') : '',
+        planHasUnlimitedDevices(plan) ? t('unlimitedDevices') : '',
+      ].filter(Boolean).slice(0, 3).map((tag, index) => `<span class="${index === 0 && isFeatured ? 'primary' : ''}">${tag}</span>`).join('');
+      const periodButtons = prices.map(([key]) => `<button type="button" role="radio" aria-checked="${selectedPeriod === key}" class="${selectedPeriod === key ? 'active' : ''}" data-plan-period="${key}" data-plan-id="${plan.id}"><span>${periodName(key)}</span><strong>${money(plan[key])}</strong></button>`).join('');
+      return `<article class="dist-plan-card ${isFeatured ? 'is-featured' : ''}">
         <div class="dist-plan-body">
-          <div class="dist-plan-heading"><h2>${escapeHtml(plan.name)}</h2><span>${money(plan[prices[0][0]])}</span></div>
-          <p>${escapeHtml(stripHtml(plan.content))}</p>
-          <ul>
-            <li>流量：${escapeHtml(plan.transfer_enable)} GB</li>
-            <li>速度：${plan.speed_limit ? `${escapeHtml(plan.speed_limit)} Mbps` : '不限'}</li>
-            <li>设备：${plan.device_limit || '不限'}</li>
-          </ul>
+          <div class="dist-plan-tags">${tags}</div>
+          <div class="dist-plan-heading">
+            <div><h2>${escapeHtml(plan.name)}</h2><p>${escapeHtml(planSummary(plan))}</p></div>
+            <div class="dist-plan-current-price"><small>${periodName(selectedPeriod)}</small><strong>${money(selectedPrice)}</strong></div>
+          </div>
+          <div class="dist-plan-specs">
+            <div><span>${t('traffic')}</span><strong>${escapeHtml(plan.transfer_enable)} GB</strong></div>
+            <div><span>${t('speed')}</span><strong>${planHasUnlimitedSpeed(plan) ? t('unlimited') : `${escapeHtml(plan.speed_limit)} Mbps`}</strong></div>
+            <div><span>${t('devices')}</span><strong>${planHasUnlimitedDevices(plan) ? t('unlimited') : `${escapeHtml(plan.device_limit)} ${state.locale === 'zh-CN' ? '台' : ''}`}</strong></div>
+            <div><span>${t('resetMethod')}</span><strong>${resetMethodLabel(plan.reset_traffic_method)}</strong></div>
+          </div>
+          <div class="dist-plan-period-label"><span>${t('period')}</span><small>${periodInsight(plan, selectedPeriod)}</small></div>
+          <div class="dist-period-options" role="radiogroup" aria-label="${t('period')}">${periodButtons}</div>
         </div>
         <div class="dist-plan-actions">
-          <select id="period-${plan.id}">${options}</select>
-          <button data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}">${t('buyNow')}</button>
+          <div class="dist-plan-checkout-summary"><span>${t('original')} ${money(selectedPrice)}</span><strong>${t('free')}</strong></div>
+          <button type="button" data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}" ${soldOut ? 'disabled' : ''}>${soldOut ? t('soldOut') : t('distributorOrder')}</button>
+          <small>${soldOut ? '' : t('generateQrHint')}</small>
         </div>
       </article>`;
     }).join('');
-    setContent(`<section class="dist-page-head"><h1>${t('title')}</h1><p>${t('subtitle')}</p></section>
-      <div class="dist-plan-grid">${cards || `<div class="dist-empty">${t('empty')}</div>`}</div>`);
+    const steps = [
+      [t('deliveryStepOne'), t('deliveryStepOneHint')],
+      [t('deliveryStepTwo'), t('deliveryStepTwoHint')],
+      [t('deliveryStepThree'), t('deliveryStepThreeHint')],
+    ].map(([title, hint], index) => `<div class="dist-delivery-step"><span>0${index + 1}</span><div><strong>${title}</strong><p>${hint}</p></div></div>`).join('');
+    setContent(`<section class="dist-catalog-hero">
+        <div><span class="dist-catalog-eyebrow">${t('distributorOnly')}</span><h1>${t('catalogTitle')}</h1><p>${t('catalogDescription')}</p></div>
+        <div class="dist-catalog-trust"><span>✓ ${t('independentSubscription')}</span><span>✓ ${t('oneTimeClaim')}</span><span>✓ ${t('instantDelivery')}</span></div>
+      </section>
+      <section class="dist-catalog-toolbar"><div><h2>${t('choosePlan')}</h2><p>${t('choosePlanHint')}</p></div><div class="dist-plan-filters">${filterButtons}</div></section>
+      <div class="dist-plan-grid">${cards || `<div class="dist-empty">${t('empty')}</div>`}</div>
+      <section class="dist-delivery-guide"><header><h2>${t('deliveryGuide')}</h2><p>${t('deliveryGuideHint')}</p></header><div>${steps}</div></section>`);
   }
 
   function confirmPurchase(planId, planName) {
-    const select = document.getElementById(`period-${planId}`);
-    const option = select?.selectedOptions?.[0];
-    if (!option) return;
-    state.modal = { type: 'purchase', planId, planName, period: option.value, periodLabel: option.textContent, price: option.dataset.price };
+    const plan = state.plans.find((item) => String(item.id) === String(planId));
+    const period = state.selectedPeriods[planId];
+    if (!plan || !period || Number(plan[period]) <= 0) return;
+    state.modal = { type: 'purchase', planId, planName, period, periodLabel: `${periodName(period)} · ${money(plan[period])}`, price: plan[period] };
     renderModal();
   }
 
@@ -334,8 +452,7 @@
   }
 
   function periodLabel(period) {
-    const found = PERIODS.find(([key]) => key === period);
-    return found ? found[1] : period;
+    return periodName(period);
   }
 
   async function renderInvite() {
@@ -472,6 +589,18 @@
   async function handleAction(target) {
     const nav = target.closest('[data-nav]');
     if (nav) { navigate(nav.dataset.nav); return; }
+    const filter = target.closest('[data-plan-filter]');
+    if (filter) {
+      state.planFilter = filter.dataset.planFilter;
+      renderPlanCatalog();
+      return;
+    }
+    const period = target.closest('[data-plan-period]');
+    if (period) {
+      state.selectedPeriods[period.dataset.planId] = period.dataset.planPeriod;
+      renderPlanCatalog();
+      return;
+    }
     const buy = target.closest('[data-buy]');
     if (buy) { confirmPurchase(buy.dataset.buy, buy.dataset.name); return; }
     const delivery = target.closest('[data-delivery]');
