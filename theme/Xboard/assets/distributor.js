@@ -368,7 +368,7 @@
           <div class="dist-period-options" role="radiogroup" aria-label="${t('period')}">${periodButtons}</div>
         </div>
         <div class="dist-plan-actions">
-          <div class="dist-plan-checkout-summary"><span>${t('original')} ${money(selectedPrice)}</span><strong>${t('free')}</strong></div>
+          <div class="dist-plan-checkout-summary"><span>${t('original')} ${money(selectedPrice)}</span></div>
           <button type="button" data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}" ${soldOut ? 'disabled' : ''}>${soldOut ? t('soldOut') : t('distributorOrder')}</button>
           <small>${soldOut ? '' : t('generateQrHint')}</small>
         </div>

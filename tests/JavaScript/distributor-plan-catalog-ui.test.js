@@ -14,6 +14,8 @@ test('distributor plan catalog exposes the new commerce-oriented page structure'
   assert.match(source, /data-plan-period/);
   assert.match(source, /dist-plan-checkout-summary/);
   assert.match(source, /分销免支付下单/);
+  assert.match(source, /dist-plan-checkout-summary"><span>\$\{t\('original'\)\} \$\{money\(selectedPrice\)\}<\/span><\/div>/);
+  assert.doesNotMatch(source, /dist-plan-checkout-summary"><span>[\s\S]*?<strong>\$\{t\('free'\)\}<\/strong>/);
   assert.doesNotMatch(source, /dist-catalog-hero|dist-delivery-guide|选择套餐，免支付快速交付|选择要交付的订阅套餐/);
 });
 

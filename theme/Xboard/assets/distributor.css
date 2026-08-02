@@ -66,7 +66,6 @@ html.distributor-mode, html.distributor-mode body { margin:0; min-height:100%; b
 .dist-plan-actions { display:grid; gap:10px; padding:17px 26px 19px; background:color-mix(in srgb,var(--dist-bg) 70%,var(--dist-panel)); border-top:1px solid var(--dist-border); }
 .dist-plan-checkout-summary { display:flex; align-items:center; justify-content:space-between; gap:16px; font-size:12px; }
 .dist-plan-checkout-summary span { color:var(--dist-muted); }
-.dist-plan-checkout-summary strong { color:#168466; }
 .dist-plan-actions>small { color:var(--dist-muted); font-size:11px; text-align:center; }
 .dist-transfer input { flex:1; min-width:0; border:1px solid var(--dist-border); border-radius:8px; padding:10px 12px; color:var(--dist-text); background:var(--dist-panel); }
 .dist-plan-actions button,.dist-panel-head button,.dist-transfer button { border:0; border-radius:9px; padding:12px 18px; color:#fff; background:var(--dist-primary); cursor:pointer; font-weight:750; }
