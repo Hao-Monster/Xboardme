@@ -6,7 +6,7 @@ html.distributor-mode, html.distributor-mode body { margin:0; background:var(--d
 .dist-shell.is-dark { --dist-bg:#0f1115; --dist-panel:#181b21; --dist-text:#edf1f6; --dist-muted:#9aa7b5; --dist-border:#2a3039; --dist-primary-soft:#16363a; }
 .dist-sidebar { width:244px; position:fixed; inset:0 auto 0 0; background:var(--dist-panel); border-right:1px solid var(--dist-border); padding:24px 14px; box-sizing:border-box; z-index:10; }
 .dist-brand { display:flex; align-items:center; gap:12px; height:44px; padding:0 14px 22px; font-size:19px; font-weight:700; }
-.dist-brand-mark { display:grid; place-items:center; width:32px; height:32px; color:white; border-radius:9px; background:linear-gradient(135deg,#2a8188,#55b2a6); }
+.dist-brand-mark { display:block; width:32px; height:32px; flex:0 0 32px; border-radius:9px; object-fit:cover; }
 .dist-sidebar nav { display:grid; gap:8px; }
 .dist-sidebar nav button { border:0; background:transparent; color:var(--dist-muted); padding:13px 16px; border-radius:9px; text-align:left; font-size:15px; cursor:pointer; display:flex; gap:12px; align-items:center; }
 .dist-sidebar nav button:hover,.dist-sidebar nav button.active { color:var(--dist-primary); background:var(--dist-primary-soft); }

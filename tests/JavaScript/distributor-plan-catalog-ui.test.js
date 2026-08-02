@@ -16,6 +16,12 @@ test('distributor plan catalog exposes the new commerce-oriented page structure'
   assert.doesNotMatch(source, /dist-catalog-hero|dist-delivery-guide|选择套餐，免支付快速交付|选择要交付的订阅套餐/);
 });
 
+test('distributor shell uses the published site logo instead of the text mark', () => {
+  assert.match(source, /<img class="dist-brand-mark" src="https:\/\/cloud\.thinderbox\.com\/assets\/branding\/thinderbox-logo\.png"/);
+  assert.doesNotMatch(source, /<span class="dist-brand-mark">X<\/span>/);
+  assert.match(styles, /\.dist-brand-mark \{[^}]*width:32px[^}]*height:32px[^}]*object-fit:cover/);
+});
+
 test('order button combines original price, calculated saving and emphasized action', () => {
   const savingBlock = source.match(/const periodSavings = \(plan, period\) => \{[\s\S]*?\n  };/);
   assert.ok(savingBlock, 'period saving calculator should exist');
