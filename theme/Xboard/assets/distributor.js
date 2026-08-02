@@ -489,11 +489,13 @@
     if (!state.modal) {
       root.innerHTML = '';
       root.classList.remove('open');
+      document.documentElement.classList.remove('dist-modal-open');
       document.body.classList.remove('dist-modal-open');
       stopPolling();
       return;
     }
     root.classList.add('open');
+    document.documentElement.classList.add('dist-modal-open');
     document.body.classList.add('dist-modal-open');
     if (state.modal.type === 'purchase') {
       const m = state.modal;

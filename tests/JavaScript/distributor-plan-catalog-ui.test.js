@@ -79,3 +79,14 @@ test('catalog remains isolated behind distributor detection and scoped styles', 
   assert.doesNotMatch(styles, /\.dist-catalog-hero|\.dist-delivery-guide/);
   assert.doesNotMatch(styles, /(^|[,{])\s*\.plan-card\b/m);
 });
+
+test('distributor mode restores document scrolling and modal state locks it deliberately', () => {
+  assert.match(styles, /html\.distributor-mode \{[^}]*height:auto!important[^}]*overflow-y:auto!important/);
+  assert.match(styles, /html\.distributor-mode body \{[^}]*height:auto!important[^}]*overflow:visible!important/);
+  assert.match(styles, /html\.distributor-mode\.dist-modal-open,html\.distributor-mode\.dist-modal-open body \{ overflow:hidden!important; \}/);
+
+  const modalBlock = source.match(/function renderModal\(\)[\s\S]*?\n  }/);
+  assert.ok(modalBlock, 'modal renderer should exist');
+  assert.match(modalBlock[0], /document\.documentElement\.classList\.add\('dist-modal-open'\)/);
+  assert.match(modalBlock[0], /document\.documentElement\.classList\.remove\('dist-modal-open'\)/);
+});
