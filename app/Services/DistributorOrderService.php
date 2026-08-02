@@ -116,14 +116,12 @@ class DistributorOrderService
             'closed_at' => $delivery->closed_at,
             'hwid_enabled' => (bool) $delivery->hwid_enabled,
             'hwid_limit' => (int) $delivery->hwid_limit,
-            'can_open' => $delivery->delivery_status !== DistributorOrder::DELIVERY_CLOSED
-                && !$delivery->connected_at,
+            'can_open' => $delivery->delivery_status === DistributorOrder::DELIVERY_PENDING,
         ];
 
         if (
             $includeClaimUrl
-            && $delivery->delivery_status !== DistributorOrder::DELIVERY_CLOSED
-            && !$delivery->connected_at
+            && $delivery->delivery_status === DistributorOrder::DELIVERY_PENDING
         ) {
             $subscribeUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
             $data['qr_code'] = $this->makeQrDataUri($subscribeUrl);

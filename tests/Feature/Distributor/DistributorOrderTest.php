@@ -184,7 +184,10 @@ class DistributorOrderTest extends TestCase
         $this->assertFalse(collect($emptyResponse->json('outbounds') ?? [])->contains(
             fn ($outbound) => ($outbound['type'] ?? null) === Server::TYPE_SOCKS
         ));
-        $this->assertNull($delivery->refresh()->config_issued_at);
+        $delivery->refresh();
+        $this->assertSame(DistributorOrder::DELIVERY_CLAIMED, $delivery->delivery_status);
+        $this->assertNotNull($delivery->claimed_at);
+        $this->assertNull($delivery->config_issued_at);
 
         $this->makeServer();
         $response = $this->withHeaders($headers)->get($uri);
@@ -217,6 +220,14 @@ class DistributorOrderTest extends TestCase
         $this->assertIsString($svg);
         $this->assertStringContainsString('<svg', $svg);
         $this->assertStringNotContainsString('/client/distributor/claim/', $svg);
+
+        $delivery->update([
+            'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
+            'claimed_at' => time(),
+        ]);
+        $claimedData = app(DistributorOrderService::class)->deliveryData($delivery->fresh(['order', 'subscriber']));
+        $this->assertArrayNotHasKey('qr_code', $claimedData);
+        $this->assertFalse($claimedData['can_open']);
     }
 
     public function test_hwid_rejects_unsupported_and_extra_devices_but_allows_registered_device_updates(): void
@@ -741,11 +752,6 @@ class DistributorOrderTest extends TestCase
 
         $delivery->update(['config_issued_at' => time()]);
 
-        $this->getJson('/api/v1/user/distributor/delivery')
-            ->assertOk()
-            ->assertJsonPath('data.connected_at', null);
-
-        $delivery->update(['connected_at' => time(), 'connected_node_id' => 1, 'connected_node_name' => '测试节点']);
         $this->getJson('/api/v1/user/distributor/delivery')->assertNotFound();
     }
 

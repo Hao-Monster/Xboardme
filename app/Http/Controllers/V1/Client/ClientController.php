@@ -65,18 +65,29 @@ class ClientController extends Controller
             return response('', 404, $hwid['headers']);
         }
 
+        if ($hwid['delivery']) {
+            $now = time();
+            DistributorOrder::query()
+                ->whereKey($hwid['delivery']->id)
+                ->where('delivery_status', DistributorOrder::DELIVERY_PENDING)
+                ->update([
+                    'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
+                    'claimed_at' => DB::raw("COALESCE(claimed_at, {$now})"),
+                    'claim_ip' => mb_substr((string) $request->ip(), 0, 45),
+                    'claim_ua' => mb_substr((string) $request->userAgent(), 0, 255),
+                    'updated_at' => $now,
+                ]);
+        }
+
         $response = $this->doSubscribe($request, $user);
 
         if ($hwid['delivery'] && $this->isUsableSubscriptionResponse($response)) {
             $now = time();
             DistributorOrder::query()
                 ->whereKey($hwid['delivery']->id)
+                ->where('delivery_status', DistributorOrder::DELIVERY_CLAIMED)
                 ->update([
-                    'delivery_status' => DB::raw('CASE WHEN delivery_status = 0 THEN 1 ELSE delivery_status END'),
-                    'claimed_at' => DB::raw("COALESCE(claimed_at, {$now})"),
                     'config_issued_at' => DB::raw("COALESCE(config_issued_at, {$now})"),
-                    'claim_ip' => mb_substr((string) $request->ip(), 0, 45),
-                    'claim_ua' => mb_substr((string) $request->userAgent(), 0, 255),
                     'updated_at' => $now,
                 ]);
         }
