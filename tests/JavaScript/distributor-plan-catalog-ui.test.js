@@ -12,11 +12,20 @@ test('distributor plan catalog exposes the new commerce-oriented page structure'
   assert.match(source, /dist-plan-specs/);
   assert.match(source, /role="radiogroup"/);
   assert.match(source, /data-plan-period/);
-  assert.match(source, /dist-plan-checkout-summary/);
-  assert.match(source, /分销免支付下单/);
-  assert.match(source, /dist-plan-checkout-summary"><span>\$\{t\('original'\)\} \$\{money\(selectedPrice\)\}<\/span><\/div>/);
-  assert.doesNotMatch(source, /dist-plan-checkout-summary"><span>[\s\S]*?<strong>\$\{t\('free'\)\}<\/strong>/);
+  assert.doesNotMatch(source, /dist-plan-checkout-summary|generateQrHint|确认后将生成客户专属领取二维码/);
   assert.doesNotMatch(source, /dist-catalog-hero|dist-delivery-guide|选择套餐，免支付快速交付|选择要交付的订阅套餐/);
+});
+
+test('order button combines original price, calculated saving and emphasized action', () => {
+  const savingBlock = source.match(/const periodSavings = \(plan, period\) => \{[\s\S]*?\n  };/);
+  assert.ok(savingBlock, 'period saving calculator should exist');
+  assert.match(savingBlock[0], /monthlyPrice \* months/);
+  assert.match(savingBlock[0], /Math\.max\(0/);
+  assert.match(source, /const selectedSaving = periodSavings\(plan, selectedPeriod\)/);
+  assert.match(source, /<span>\$\{t\('original'\)\} \$\{money\(selectedPrice\)\}<\/span><span>\$\{t\('saved'\)\} \$\{money\(selectedSaving\)\}<\/span><strong>\$\{t\('orderAction'\)\}<\/strong>/);
+  assert.match(source, /saved: '已省'/);
+  assert.match(source, /orderAction: '下单'/);
+  assert.match(styles, /\.dist-plan-actions button strong \{[^}]*font-size:18px/);
 });
 
 test('plan route renders the slogan and compact delivery steps inside dist-topbar', () => {

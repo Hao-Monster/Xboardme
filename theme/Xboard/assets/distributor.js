@@ -24,7 +24,7 @@
       featured: '精选套餐', traffic: '套餐流量', speed: '速度限制', devices: '同时在线', resetMethod: '流量重置',
       followSystem: '跟随系统', firstDayMonth: '每月1日', monthlyReset: '按月重置', neverReset: '不重置', firstDayYear: '每年1月1日', yearlyReset: '按年重置',
       perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次性交付',
-      distributorOrder: '分销免支付下单', generateQrHint: '确认后将生成客户专属领取二维码', soldOut: '已售罄',
+      saved: '已省', orderAction: '下单', soldOut: '已售罄',
       promoStable: '稳定', promoFast: '高速', promoCompensation: '慢必赔',
       deliveryStepOne: '选择套餐并下单', deliveryStepTwo: '客户扫描二维码', deliveryStepThree: '确认节点可用',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
@@ -50,7 +50,7 @@
       featured: 'Featured', traffic: 'Traffic', speed: 'Speed', devices: 'Devices', resetMethod: 'Traffic reset',
       followSystem: 'System default', firstDayMonth: '1st of each month', monthlyReset: 'Monthly', neverReset: 'Never', firstDayYear: 'January 1st', yearlyReset: 'Yearly',
       perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time delivery',
-      distributorOrder: 'Place distributor order', generateQrHint: 'A customer claim QR will be created after confirmation', soldOut: 'Sold out',
+      saved: 'Saved', orderAction: 'Order', soldOut: 'Sold out',
       promoStable: 'Stable', promoFast: 'Fast', promoCompensation: 'Performance guaranteed',
       deliveryStepOne: 'Choose and order', deliveryStepTwo: 'Customer scans QR', deliveryStepThree: 'Verify service',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
@@ -150,6 +150,13 @@
     const saving = monthlyPrice > 0 ? Math.max(0, Math.round((1 - price / (monthlyPrice * months)) * 100)) : 0;
     const monthlyText = t('perMonth').replace('{price}', money(effective));
     return saving > 0 ? `${monthlyText} · ${t('save').replace('{percent}', saving)}` : monthlyText;
+  };
+  const periodSavings = (plan, period) => {
+    const months = PERIODS.find(([key]) => key === period)?.[3] || 0;
+    const monthlyPrice = Number(plan.month_price) || 0;
+    const currentPrice = Number(plan[period]) || 0;
+    if (!months || !monthlyPrice) return 0;
+    return Math.max(0, (monthlyPrice * months) - currentPrice);
   };
 
   function authToken() {
@@ -342,6 +349,7 @@
       const prices = availablePeriods(plan);
       const selectedPeriod = state.selectedPeriods[plan.id] || prices[0][0];
       const selectedPrice = Number(plan[selectedPeriod]) || 0;
+      const selectedSaving = periodSavings(plan, selectedPeriod);
       const isFeatured = plan.id === state.plans[0]?.id;
       const soldOut = typeof plan.capacity_limit === 'string';
       const tags = [
@@ -368,9 +376,7 @@
           <div class="dist-period-options" role="radiogroup" aria-label="${t('period')}">${periodButtons}</div>
         </div>
         <div class="dist-plan-actions">
-          <div class="dist-plan-checkout-summary"><span>${t('original')} ${money(selectedPrice)}</span></div>
-          <button type="button" data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}" ${soldOut ? 'disabled' : ''}>${soldOut ? t('soldOut') : t('distributorOrder')}</button>
-          <small>${soldOut ? '' : t('generateQrHint')}</small>
+          <button type="button" data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}" ${soldOut ? 'disabled' : ''}>${soldOut ? t('soldOut') : `<span>${t('original')} ${money(selectedPrice)}</span><span>${t('saved')} ${money(selectedSaving)}</span><strong>${t('orderAction')}</strong>`}</button>
         </div>
       </article>`;
     }).join('');

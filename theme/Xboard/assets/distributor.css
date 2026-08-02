@@ -64,11 +64,11 @@ html.distributor-mode, html.distributor-mode body { margin:0; min-height:100%; b
 .dist-period-options button:hover,.dist-period-options button.active { border-color:var(--dist-primary); background:var(--dist-primary-soft); }
 .dist-period-options button.active span,.dist-period-options button.active strong { color:var(--dist-primary); }
 .dist-plan-actions { display:grid; gap:10px; padding:17px 26px 19px; background:color-mix(in srgb,var(--dist-bg) 70%,var(--dist-panel)); border-top:1px solid var(--dist-border); }
-.dist-plan-checkout-summary { display:flex; align-items:center; justify-content:space-between; gap:16px; font-size:12px; }
-.dist-plan-checkout-summary span { color:var(--dist-muted); }
-.dist-plan-actions>small { color:var(--dist-muted); font-size:11px; text-align:center; }
 .dist-transfer input { flex:1; min-width:0; border:1px solid var(--dist-border); border-radius:8px; padding:10px 12px; color:var(--dist-text); background:var(--dist-panel); }
 .dist-plan-actions button,.dist-panel-head button,.dist-transfer button { border:0; border-radius:9px; padding:12px 18px; color:#fff; background:var(--dist-primary); cursor:pointer; font-weight:750; }
+.dist-plan-actions button { display:flex; align-items:baseline; justify-content:center; flex-wrap:wrap; gap:4px 8px; }
+.dist-plan-actions button span { font-size:12px; font-weight:650; }
+.dist-plan-actions button strong { font-size:18px; font-weight:900; line-height:1; }
 .dist-plan-actions button:disabled { opacity:.48; cursor:not-allowed; }
 .dist-table-wrap { overflow:auto; }
 .dist-table-wrap table { width:100%; border-collapse:collapse; min-width:840px; }
