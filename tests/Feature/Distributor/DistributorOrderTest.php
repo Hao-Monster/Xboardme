@@ -69,29 +69,29 @@ class DistributorOrderTest extends TestCase
         foreach ([null, '   '] as $customerName) {
             $payload = [
                 'plan_id' => $plan->id,
-                'period' => Plan::PERIOD_MONTHLY,
+                'period' => 'month_price',
             ];
             if ($customerName !== null) {
                 $payload['customer_name'] = $customerName;
             }
 
             $response = $this->postJson('/api/v1/user/order/save', $payload);
-            $response->assertUnprocessable();
-            $this->assertStringContainsString(
-                '为了售后方便，请输入备注清楚用户',
-                $response->getContent()
-            );
+            $response->assertUnprocessable()
+                ->assertJsonPath(
+                    'errors.customer_name.0',
+                    '为了售后方便，请输入备注清楚用户'
+                );
         }
 
         $this->postJson('/api/v1/user/order/save', [
             'plan_id' => $plan->id,
-            'period' => Plan::PERIOD_MONTHLY,
+            'period' => 'month_price',
             'customer_name' => str_repeat('客', 65),
         ])->assertUnprocessable();
 
         $tradeNo = $this->postJson('/api/v1/user/order/save', [
             'plan_id' => $plan->id,
-            'period' => Plan::PERIOD_MONTHLY,
+            'period' => 'month_price',
             'customer_name' => '  终端客户甲  ',
         ])->assertOk()->json('data');
 
