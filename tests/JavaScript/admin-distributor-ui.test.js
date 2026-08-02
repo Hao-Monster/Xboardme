@@ -315,8 +315,30 @@ test('admin order page exposes distributor filters, summary and settlement actio
     is_distributor: 1,
     distributor_name: '华东渠道',
   });
+  const readonlyWrapper = {
+    dataset: { distributorName: '已保存分销商' },
+    querySelector: () => null,
+  };
+  document.injectedSwitches = [{
+    checked: true,
+    offsetParent: {},
+    closest: () => readonlyWrapper,
+  }];
+  const readonlyXhr = new XMLHttpRequestMock();
+  readonlyXhr.open('POST', '/api/v2/admin-api/user/update');
+  readonlyXhr.send(JSON.stringify({ id: 8, remarks: '只修改备注' }));
+  assert.deepEqual(JSON.parse(readonlyXhr.sentBody), {
+    id: 8,
+    remarks: '只修改备注',
+    is_distributor: 1,
+    distributor_name: '已保存分销商',
+  });
   assert.match(source, /data-distributor-name/);
+  assert.match(source, /data-distributor-name-readonly-row/);
+  assert.match(source, /data-distributor-name-value/);
   assert.match(source, /maxlength="100"/);
+  assert.match(source, /showReadonly = checkbox\.checked && savedName !== ''/);
+  assert.match(source, /input\.required = checkbox\.checked && !showReadonly/);
   assert.match(source, /<dt>用户名称<\/dt><dd>\$\{escapeHtml\(order\.customer_name \|\| '-'\)\}<\/dd>/);
   assert.match(source, /search: state\.orderSearch \|\| null/);
   assert.match(source, /params\.set\('search', state\.orderSearch\)/);

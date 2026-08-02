@@ -197,8 +197,10 @@
     const checkbox = activeInjectedSwitch();
     if (!checkbox) return body;
     const value = checkbox.checked ? 1 : 0;
-    const nameInput = checkbox.closest('.xboard-distributor-injected')?.querySelector('[data-distributor-name]');
-    const distributorName = value ? String(nameInput?.value || '').trim() : '';
+    const field = checkbox.closest('.xboard-distributor-injected');
+    const nameInput = field?.querySelector('[data-distributor-name]');
+    const savedName = String(field?.dataset?.distributorName || '').trim();
+    const distributorName = value ? savedName || String(nameInput?.value || '').trim() : '';
     if (body instanceof FormData || body instanceof URLSearchParams) {
       body.set('is_distributor', String(value));
       body.set('distributor_name', distributorName);
@@ -251,8 +253,11 @@
       const user = emailInput ? userCache.get(String(emailInput.value).toLowerCase()) : null;
       if (user) {
         checkbox.checked = Boolean(user.is_distributor);
+        const field = checkbox.closest('.xboard-distributor-injected');
+        const distributorName = String(user.distributor_name || '').trim();
+        if (field) field.dataset.distributorName = distributorName;
         const nameInput = dialog.querySelector('[data-distributor-name]');
-        if (nameInput) nameInput.value = user.distributor_name || '';
+        if (nameInput) nameInput.value = distributorName;
       }
       syncDistributorNameField(checkbox);
     });
@@ -260,12 +265,18 @@
 
   function syncDistributorNameField(checkbox) {
     const field = checkbox?.closest('.xboard-distributor-injected');
-    const row = field?.querySelector('[data-distributor-name-row]');
+    const inputRow = field?.querySelector('[data-distributor-name-row]');
+    const readonlyRow = field?.querySelector('[data-distributor-name-readonly-row]');
+    const readonlyValue = field?.querySelector('[data-distributor-name-value]');
     const input = field?.querySelector('[data-distributor-name]');
-    if (!row || !input) return;
-    row.hidden = !checkbox.checked;
-    input.disabled = !checkbox.checked;
-    input.required = checkbox.checked;
+    if (!inputRow || !readonlyRow || !readonlyValue || !input) return;
+    const savedName = String(field.dataset.distributorName || '').trim();
+    const showReadonly = checkbox.checked && savedName !== '';
+    inputRow.hidden = !checkbox.checked || showReadonly;
+    readonlyRow.hidden = !showReadonly;
+    readonlyValue.textContent = savedName;
+    input.disabled = !checkbox.checked || showReadonly;
+    input.required = checkbox.checked && !showReadonly;
   }
 
   function injectDistributorFields() {
@@ -278,16 +289,19 @@
       if (!isCreate && !isEdit) return;
 
       let checked = false;
+      let savedDistributorName = '';
       if (isEdit) {
         const emailInput = [...dialog.querySelectorAll('input')]
           .find((input) => String(input.value || '').includes('@'));
         const user = emailInput ? userCache.get(String(emailInput.value).toLowerCase()) : null;
         checked = Boolean(user?.is_distributor);
+        savedDistributorName = String(user?.distributor_name || '').trim();
       }
 
       const field = document.createElement('div');
       field.className = 'xboard-distributor-injected';
-      field.innerHTML = `<div class="xboard-distributor-injected-toggle"><div><strong>是否分销商</strong><small>Distributor account</small></div><label class="admin-dist-switch"><input type="checkbox" ${checked ? 'checked' : ''}><span></span></label></div><label class="xboard-distributor-name" data-distributor-name-row>分销商名称<input type="text" maxlength="100" data-distributor-name placeholder="请输入分销商名称"></label>`;
+      field.dataset.distributorName = savedDistributorName;
+      field.innerHTML = `<div class="xboard-distributor-injected-toggle"><div><strong>是否分销商</strong><small>Distributor account</small></div><label class="admin-dist-switch"><input type="checkbox" ${checked ? 'checked' : ''}><span></span></label></div><label class="xboard-distributor-name" data-distributor-name-row>分销商名称<input type="text" maxlength="100" data-distributor-name placeholder="请输入分销商名称"></label><div class="xboard-distributor-name-readonly" data-distributor-name-readonly-row><span>分销商名称</span><strong data-distributor-name-value></strong></div>`;
 
       const staffNode = [...dialog.querySelectorAll('label,div,span')]
         .find((node) => /^(是否员工|Is Staff|Staff)$/i.test((node.textContent || '').trim()));
