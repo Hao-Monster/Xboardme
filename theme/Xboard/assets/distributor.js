@@ -20,19 +20,12 @@
       buy: '购买订阅', orders: '我的订单', invite: '我的邀请', logout: '退出登录',
       title: '分销订阅中心', subtitle: '每个订单生成一份独立订阅，客户扫码领取后不可再次领取。',
       buyNow: '立即下单', original: '原价', free: '分销免支付', confirm: '确认下单', cancel: '取消',
-      distributorOnly: '分销专属', catalogTitle: '选择套餐，免支付快速交付',
-      catalogDescription: '标准化商品参数与周期价格一目了然，下单后立即生成客户专属的一次性领取二维码。',
-      independentSubscription: '每单独立订阅', oneTimeClaim: '二维码仅领取一次', instantDelivery: '下单即时交付',
-      choosePlan: '选择要交付的订阅套餐', choosePlanHint: '点击分类快速比较套餐，再选择客户需要的购买周期。',
       allPlans: '全部套餐', highTraffic: '大流量', unlimitedSpeed: '不限速', unlimitedDevices: '不限设备',
       featured: '精选套餐', traffic: '套餐流量', speed: '速度限制', devices: '同时在线', resetMethod: '流量重置',
       followSystem: '跟随系统', firstDayMonth: '每月1日', monthlyReset: '按月重置', neverReset: '不重置', firstDayYear: '每年1月1日', yearlyReset: '按年重置',
-      perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次购买，按套餐规则交付', monthlyHint: '按月购买，灵活交付',
+      perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次性交付',
       distributorOrder: '分销免支付下单', generateQrHint: '确认后将生成客户专属领取二维码', soldOut: '已售罄',
-      deliveryGuide: '三步完成客户交付', deliveryGuideHint: '从选择套餐到客户领取，全程无需在线支付。',
-      deliveryStepOne: '选择套餐并下单', deliveryStepOneHint: '确认周期与商品参数，分销订单免在线支付。',
-      deliveryStepTwo: '客户扫描二维码', deliveryStepTwoHint: '每个订单生成独立二维码，仅允许成功领取一次。',
-      deliveryStepThree: '确认节点可用', deliveryStepThreeHint: '确认订阅配置已下发，再完成本次客户交付。',
+      deliveryStepOne: '选择套餐并下单', deliveryStepTwo: '客户扫描二维码', deliveryStepThree: '确认节点可用',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
       pending: '待领取', claimed: '已领取', closed: '已关闭', showQr: '显示二维码',
       checkDelivery: '检查交付', issuing: '二维码已领取，正在等待订阅配置成功下发。',
@@ -52,19 +45,12 @@
       buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', logout: 'Sign out',
       title: 'Distributor Center', subtitle: 'Each order creates an independent subscription that can be claimed once.',
       buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', confirm: 'Confirm', cancel: 'Cancel',
-      distributorOnly: 'Distributor exclusive', catalogTitle: 'Choose a plan and deliver without online payment',
-      catalogDescription: 'Compare standardized benefits and period prices, then instantly create a one-time customer claim QR.',
-      independentSubscription: 'Independent subscription', oneTimeClaim: 'One successful claim', instantDelivery: 'Instant delivery',
-      choosePlan: 'Choose a subscription plan', choosePlanHint: 'Filter plans, compare benefits, and select the customer billing period.',
       allPlans: 'All plans', highTraffic: 'High traffic', unlimitedSpeed: 'Unlimited speed', unlimitedDevices: 'Unlimited devices',
       featured: 'Featured', traffic: 'Traffic', speed: 'Speed', devices: 'Devices', resetMethod: 'Traffic reset',
       followSystem: 'System default', firstDayMonth: '1st of each month', monthlyReset: 'Monthly', neverReset: 'Never', firstDayYear: 'January 1st', yearlyReset: 'Yearly',
-      perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time purchase under the plan terms', monthlyHint: 'Flexible monthly delivery',
+      perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time delivery',
       distributorOrder: 'Place distributor order', generateQrHint: 'A customer claim QR will be created after confirmation', soldOut: 'Sold out',
-      deliveryGuide: 'Deliver in three steps', deliveryGuideHint: 'From plan selection to customer claim, no online payment is required.',
-      deliveryStepOne: 'Choose and order', deliveryStepOneHint: 'Confirm the period and benefits. Distributor orders skip online payment.',
-      deliveryStepTwo: 'Customer scans QR', deliveryStepTwoHint: 'Each order creates an independent QR that can only be claimed once.',
-      deliveryStepThree: 'Verify service', deliveryStepThreeHint: 'Confirm the subscription was issued before completing delivery.',
+      deliveryStepOne: 'Choose and order', deliveryStepTwo: 'Customer scans QR', deliveryStepThree: 'Verify service',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
       pending: 'Pending claim', claimed: 'Claimed', closed: 'Closed', showQr: 'Show QR',
       checkDelivery: 'Check delivery', issuing: 'The QR was claimed. Waiting for the subscription configuration response.',
@@ -157,7 +143,6 @@
     const months = found?.[3] || 0;
     const price = Number(plan[period]) || 0;
     if (!months) return t('oneTimeHint');
-    if (months === 1) return t('monthlyHint');
     const effective = price / months;
     const monthlyPrice = Number(plan.month_price) || 0;
     const saving = monthlyPrice > 0 ? Math.max(0, Math.round((1 - price / (monthlyPrice * months)) * 100)) : 0;
@@ -357,7 +342,7 @@
         planHasUnlimitedSpeed(plan) ? t('unlimitedSpeed') : '',
         planHasUnlimitedDevices(plan) ? t('unlimitedDevices') : '',
       ].filter(Boolean).slice(0, 3).map((tag, index) => `<span class="${index === 0 && isFeatured ? 'primary' : ''}">${tag}</span>`).join('');
-      const periodButtons = prices.map(([key]) => `<button type="button" role="radio" aria-checked="${selectedPeriod === key}" class="${selectedPeriod === key ? 'active' : ''}" data-plan-period="${key}" data-plan-id="${plan.id}"><span>${periodName(key)}</span><strong>${money(plan[key])}</strong></button>`).join('');
+      const periodButtons = prices.map(([key]) => `<button type="button" role="radio" aria-checked="${selectedPeriod === key}" class="${selectedPeriod === key ? 'active' : ''}" data-plan-period="${key}" data-plan-id="${plan.id}"><span>${periodName(key)}</span><strong>${money(plan[key])}</strong><small>${periodInsight(plan, key)}</small></button>`).join('');
       return `<article class="dist-plan-card ${isFeatured ? 'is-featured' : ''}">
         <div class="dist-plan-body">
           <div class="dist-plan-tags">${tags}</div>
@@ -371,7 +356,7 @@
             <div><span>${t('devices')}</span><strong>${planHasUnlimitedDevices(plan) ? t('unlimited') : `${escapeHtml(plan.device_limit)} ${state.locale === 'zh-CN' ? '台' : ''}`}</strong></div>
             <div><span>${t('resetMethod')}</span><strong>${resetMethodLabel(plan.reset_traffic_method)}</strong></div>
           </div>
-          <div class="dist-plan-period-label"><span>${t('period')}</span><small>${periodInsight(plan, selectedPeriod)}</small></div>
+          <div class="dist-plan-period-label"><span>${t('period')}</span></div>
           <div class="dist-period-options" role="radiogroup" aria-label="${t('period')}">${periodButtons}</div>
         </div>
         <div class="dist-plan-actions">
@@ -381,18 +366,14 @@
         </div>
       </article>`;
     }).join('');
-    const steps = [
-      [t('deliveryStepOne'), t('deliveryStepOneHint')],
-      [t('deliveryStepTwo'), t('deliveryStepTwoHint')],
-      [t('deliveryStepThree'), t('deliveryStepThreeHint')],
-    ].map(([title, hint], index) => `<div class="dist-delivery-step"><span>0${index + 1}</span><div><strong>${title}</strong><p>${hint}</p></div></div>`).join('');
-    setContent(`<section class="dist-catalog-hero">
-        <div><span class="dist-catalog-eyebrow">${t('distributorOnly')}</span><h1>${t('catalogTitle')}</h1><p>${t('catalogDescription')}</p></div>
-        <div class="dist-catalog-trust"><span>✓ ${t('independentSubscription')}</span><span>✓ ${t('oneTimeClaim')}</span><span>✓ ${t('instantDelivery')}</span></div>
+    const steps = [t('deliveryStepOne'), t('deliveryStepTwo'), t('deliveryStepThree')]
+      .map((title, index) => `<div class="dist-delivery-step"><span>0${index + 1}</span><strong>${title}</strong></div>`).join('');
+    setContent(`<section class="dist-catalog-topbar">
+        <div class="dist-plan-filters">${filterButtons}</div>
+        <div class="dist-delivery-strip">${steps}</div>
       </section>
-      <section class="dist-catalog-toolbar"><div><h2>${t('choosePlan')}</h2><p>${t('choosePlanHint')}</p></div><div class="dist-plan-filters">${filterButtons}</div></section>
       <div class="dist-plan-grid">${cards || `<div class="dist-empty">${t('empty')}</div>`}</div>
-      <section class="dist-delivery-guide"><header><h2>${t('deliveryGuide')}</h2><p>${t('deliveryGuideHint')}</p></header><div>${steps}</div></section>`);
+    `);
   }
 
   function confirmPurchase(planId, planName) {

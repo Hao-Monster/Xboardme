@@ -6,17 +6,26 @@ const source = fs.readFileSync('theme/Xboard/assets/distributor.js', 'utf8');
 const styles = fs.readFileSync('theme/Xboard/assets/distributor.css', 'utf8');
 
 test('distributor plan catalog exposes the new commerce-oriented page structure', () => {
-  assert.match(source, /dist-catalog-hero/);
+  assert.match(source, /dist-catalog-topbar/);
   assert.match(source, /dist-plan-filters/);
   assert.match(source, /data-plan-filter/);
+  assert.match(source, /dist-delivery-strip/);
+  assert.match(source, /<span>0\$\{index \+ 1\}<\/span><strong>\$\{title\}<\/strong>/);
   assert.match(source, /dist-plan-specs/);
   assert.match(source, /role="radiogroup"/);
   assert.match(source, /data-plan-period/);
   assert.match(source, /dist-plan-checkout-summary/);
-  assert.match(source, /dist-delivery-guide/);
   assert.match(source, /分销免支付下单/);
-  assert.match(source, /每单独立订阅/);
-  assert.match(source, /二维码仅领取一次/);
+  assert.doesNotMatch(source, /dist-catalog-hero|dist-delivery-guide|选择套餐，免支付快速交付|选择要交付的订阅套餐/);
+});
+
+test('every period price carries its own gold monthly-equivalent insight', () => {
+  const periodButton = source.match(/const periodButtons = prices\.map[\s\S]*?\.join\(''\);/);
+  assert.ok(periodButton, 'period price buttons should exist');
+  assert.match(periodButton[0], /<strong>\$\{money\(plan\[key\]\)\}<\/strong><small>\$\{periodInsight\(plan, key\)\}<\/small>/);
+  assert.match(source, /perMonth: '折合 \{price\}\/月'/);
+  assert.match(source, /save: '省 \{percent\}%'/);
+  assert.match(styles, /\.dist-period-options button small \{[^}]*color:#b7791f/);
 });
 
 test('period selection changes display state while checkout keeps the existing order contract', () => {
@@ -39,7 +48,8 @@ test('catalog remains isolated behind distributor detection and scoped styles', 
   assert.match(source, /if \(user\?\.is_distributor\) activate\(user\)/);
   assert.match(source, /normalApp\.style\.display = 'none'/);
   assert.match(source, /document\.documentElement\.classList\.add\('distributor-mode'\)/);
-  assert.match(styles, /\.dist-catalog-hero/);
+  assert.match(styles, /\.dist-catalog-topbar/);
   assert.match(styles, /\.dist-plan-card/);
+  assert.doesNotMatch(styles, /\.dist-catalog-hero|\.dist-delivery-guide/);
   assert.doesNotMatch(styles, /(^|[,{])\s*\.plan-card\b/m);
 });
