@@ -9,14 +9,29 @@ test('distributor plan catalog exposes the new commerce-oriented page structure'
   assert.match(source, /dist-catalog-topbar/);
   assert.match(source, /dist-plan-filters/);
   assert.match(source, /data-plan-filter/);
-  assert.match(source, /dist-delivery-strip/);
-  assert.match(source, /<span>0\$\{index \+ 1\}<\/span><strong>\$\{title\}<\/strong>/);
   assert.match(source, /dist-plan-specs/);
   assert.match(source, /role="radiogroup"/);
   assert.match(source, /data-plan-period/);
   assert.match(source, /dist-plan-checkout-summary/);
   assert.match(source, /分销免支付下单/);
   assert.doesNotMatch(source, /dist-catalog-hero|dist-delivery-guide|选择套餐，免支付快速交付|选择要交付的订阅套餐/);
+});
+
+test('plan route renders the slogan and compact delivery steps inside dist-topbar', () => {
+  const shellBlock = source.match(/function shell\(content\)[\s\S]*?\n  }/);
+  assert.ok(shellBlock, 'distributor shell should exist');
+  assert.match(shellBlock[0], /page === '\/plan'/);
+  assert.match(shellBlock[0], /dist-topbar-promo/);
+  assert.match(shellBlock[0], /dist-topbar-steps/);
+  assert.match(shellBlock[0], /dist-topbar \$\{page === '\/plan' \? 'has-promo' : ''\}/);
+  assert.match(shellBlock[0], /<small><b>0\$\{index \+ 1\}<\/b>\$\{title\}<\/small>/);
+  assert.match(source, /promoStable: '稳定'/);
+  assert.match(source, /promoFast: '高速'/);
+  assert.match(source, /promoCompensation: '慢必赔'/);
+  assert.match(styles, /\.dist-topbar-promo/);
+  assert.match(styles, /\.dist-topbar-steps small/);
+  assert.doesNotMatch(source, /dist-delivery-strip|dist-delivery-step/);
+  assert.doesNotMatch(styles, /\.dist-delivery-strip|\.dist-delivery-step/);
 });
 
 test('every period price carries its own gold monthly-equivalent insight', () => {

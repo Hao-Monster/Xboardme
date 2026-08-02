@@ -25,6 +25,7 @@
       followSystem: '跟随系统', firstDayMonth: '每月1日', monthlyReset: '按月重置', neverReset: '不重置', firstDayYear: '每年1月1日', yearlyReset: '按年重置',
       perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次性交付',
       distributorOrder: '分销免支付下单', generateQrHint: '确认后将生成客户专属领取二维码', soldOut: '已售罄',
+      promoStable: '稳定', promoFast: '高速', promoCompensation: '慢必赔',
       deliveryStepOne: '选择套餐并下单', deliveryStepTwo: '客户扫描二维码', deliveryStepThree: '确认节点可用',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
       pending: '待领取', claimed: '已领取', closed: '已关闭', showQr: '显示二维码',
@@ -50,6 +51,7 @@
       followSystem: 'System default', firstDayMonth: '1st of each month', monthlyReset: 'Monthly', neverReset: 'Never', firstDayYear: 'January 1st', yearlyReset: 'Yearly',
       perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time delivery',
       distributorOrder: 'Place distributor order', generateQrHint: 'A customer claim QR will be created after confirmation', soldOut: 'Sold out',
+      promoStable: 'Stable', promoFast: 'Fast', promoCompensation: 'Performance guaranteed',
       deliveryStepOne: 'Choose and order', deliveryStepTwo: 'Customer scans QR', deliveryStepThree: 'Verify service',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
       pending: 'Pending claim', claimed: 'Claimed', closed: 'Closed', showQr: 'Show QR',
@@ -259,6 +261,11 @@
 
   function shell(content) {
     const page = currentPage();
+    const topbarPromo = page === '/plan' ? `<div class="dist-topbar-promo">
+      <strong><span>${t('promoStable')}</span><span>${t('promoFast')}</span><span>${t('promoCompensation')}</span></strong>
+      <div class="dist-topbar-steps">${[t('deliveryStepOne'), t('deliveryStepTwo'), t('deliveryStepThree')]
+        .map((title, index) => `<small><b>0${index + 1}</b>${title}</small>`).join('')}</div>
+    </div>` : '';
     return `
       <div class="dist-shell ${state.dark ? 'is-dark' : ''}">
         <aside class="dist-sidebar">
@@ -270,8 +277,9 @@
           </nav>
         </aside>
         <section class="dist-main">
-          <header class="dist-topbar">
+          <header class="dist-topbar ${page === '/plan' ? 'has-promo' : ''}">
             <div class="dist-mobile-title">${escapeHtml(window.settings?.title || 'XBoard')}</div>
+            ${topbarPromo}
             <div class="dist-top-actions">
               <button data-action="theme" title="${state.dark ? t('light') : t('dark')}">${state.dark ? '☀' : '◐'}</button>
               <button data-action="language" title="${t('language')}">${state.locale === 'zh-CN' ? '中' : 'EN'}</button>
@@ -366,11 +374,8 @@
         </div>
       </article>`;
     }).join('');
-    const steps = [t('deliveryStepOne'), t('deliveryStepTwo'), t('deliveryStepThree')]
-      .map((title, index) => `<div class="dist-delivery-step"><span>0${index + 1}</span><strong>${title}</strong></div>`).join('');
     setContent(`<section class="dist-catalog-topbar">
         <div class="dist-plan-filters">${filterButtons}</div>
-        <div class="dist-delivery-strip">${steps}</div>
       </section>
       <div class="dist-plan-grid">${cards || `<div class="dist-empty">${t('empty')}</div>`}</div>
     `);
