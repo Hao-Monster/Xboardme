@@ -43,6 +43,7 @@
       inviteCode: '邀请码', copy: '复制邀请链接', commissionHistory: '佣金记录', noCode: '暂无邀请码',
       success: '操作成功', language: '语言', dark: '深色模式', light: '浅色模式', account: '账号',
       settlementFilter: '结算状态', allSettlements: '全部', exportExcel: '导出 Excel', exportSuccess: 'Excel 导出成功',
+      orderSearchPlaceholder: '输入订单号或用户名称查询', search: '查询', clear: '清空',
     },
     'en-US': {
       buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', logout: 'Sign out',
@@ -72,6 +73,7 @@
       commissionHistory: 'Commission history', noCode: 'No invite code', success: 'Success',
       language: 'Language', dark: 'Dark mode', light: 'Light mode', account: 'Account',
       settlementFilter: 'Settlement', allSettlements: 'All', exportExcel: 'Export Excel', exportSuccess: 'Excel exported',
+      orderSearchPlaceholder: 'Search by order or customer name', search: 'Search', clear: 'Clear',
     },
   };
 
@@ -85,6 +87,7 @@
     closeArmed: false,
     poller: null,
     orderSettlementStatus: '',
+    orderSearch: '',
     plans: [],
     planFilter: 'all',
     selectedPeriods: {},
@@ -239,6 +242,7 @@
     if (button) button.disabled = true;
     const params = new URLSearchParams();
     if (state.orderSettlementStatus !== '') params.set('settlement_status', state.orderSettlementStatus);
+    if (state.orderSearch) params.set('search', state.orderSearch);
     try {
       await downloadFile(`/user/order/export${params.size ? `?${params}` : ''}`);
       toast(t('exportSuccess'));
@@ -426,6 +430,7 @@
   async function renderOrders() {
     const params = new URLSearchParams();
     if (state.orderSettlementStatus !== '') params.set('settlement_status', state.orderSettlementStatus);
+    if (state.orderSearch) params.set('search', state.orderSearch);
     const orders = dataOf(await api(`/user/order/fetch${params.size ? `?${params}` : ''}`)) || [];
     const rows = orders.map((order) => {
       const delivery = order.delivery_status === 0 ? t('pending') : order.delivery_status === 1 ? t('claimed') : t('closed');
@@ -451,7 +456,7 @@
       </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
-      <div class="dist-order-toolbar"><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
+      <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
       <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('delivery')}</th><th>${t('settlement')}</th><th></th></tr></thead>
       <tbody>${rows || `<tr><td colspan="8" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
   }
@@ -633,6 +638,12 @@
       await renderPage();
     } else if (action === 'export-orders') {
       try { await exportOrders(target.closest('[data-action]')); } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'search-orders') {
+      state.orderSearch = document.getElementById('dist-order-search')?.value.trim() || '';
+      try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'clear-order-search') {
+      state.orderSearch = '';
+      try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
     } else if (action === 'generate-code') {
       try { await api('/user/invite/save'); toast(t('success')); await renderInvite(); } catch (e) { toast(e.message, 'error'); }
     } else if (action === 'transfer') {
@@ -684,6 +695,12 @@
     if (!state.active || event.target.id !== 'dist-order-settlement') return;
     state.orderSettlementStatus = event.target.value;
     renderPage();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (!state.active || event.key !== 'Enter' || event.target.id !== 'dist-order-search') return;
+    event.preventDefault();
+    state.orderSearch = event.target.value.trim();
+    renderOrders().catch((error) => toast(error.message, 'error'));
   });
   window.addEventListener('hashchange', () => { if (state.active) renderPage(); });
   window.addEventListener('beforeunload', (event) => {

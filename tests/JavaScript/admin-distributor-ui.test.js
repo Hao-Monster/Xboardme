@@ -252,6 +252,10 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(host.innerHTML, /DIST-ORDER-1/);
   assert.match(host.innerHTML, /用户名称/);
   assert.match(host.innerHTML, /终端客户甲/);
+  assert.match(host.innerHTML, /id="native-dist-order-search"/);
+  assert.match(host.innerHTML, /订单号\/用户名称\/订阅链接/);
+  assert.match(host.innerHTML, /data-native-dist="search-orders"/);
+  assert.match(host.innerHTML, /data-native-dist="clear-order-search"/);
 
   const change = host.listeners.get('change')[0];
   const click = host.listeners.get('click')[0];
@@ -314,4 +318,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(source, /data-distributor-name/);
   assert.match(source, /maxlength="100"/);
   assert.match(source, /<dt>用户名称<\/dt><dd>\$\{escapeHtml\(order\.customer_name \|\| '-'\)\}<\/dd>/);
+  assert.match(source, /search: state\.orderSearch \|\| null/);
+  assert.match(source, /params\.set\('search', state\.orderSearch\)/);
+  assert.match(source, /event\.key !== 'Enter'/);
 });

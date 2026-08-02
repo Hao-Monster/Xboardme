@@ -8,6 +8,10 @@ test('distributor orders share one settlement filter between list and xlsx expor
   assert.match(source, /orderSettlementStatus:\s*''/);
   assert.match(source, /id="dist-order-settlement"/);
   assert.match(source, /settlement_status/);
+  assert.match(source, /orderSearch:\s*''/);
+  assert.match(source, /id="dist-order-search"/);
+  assert.match(source, /data-action="search-orders"/);
+  assert.match(source, /data-action="clear-order-search"/);
   assert.match(source, /\/user\/order\/fetch/);
   assert.match(source, /\/user\/order\/export/);
 
@@ -15,7 +19,18 @@ test('distributor orders share one settlement filter between list and xlsx expor
   assert.ok(exportBlock, 'distributor export handler should exist');
   assert.match(exportBlock[0], /state\.orderSettlementStatus/);
   assert.match(exportBlock[0], /settlement_status/);
+  assert.match(exportBlock[0], /state\.orderSearch/);
+  assert.match(exportBlock[0], /params\.set\('search', state\.orderSearch\)/);
   assert.doesNotMatch(exportBlock[0], /user_id|distributor_user_id|current|pageSize/);
+});
+
+test('distributor order search supports enter, trims input and searches on the server', () => {
+  const renderBlock = source.match(/async function renderOrders\(\)[\s\S]*?\n  }/);
+  assert.ok(renderBlock, 'order list renderer should exist');
+  assert.match(renderBlock[0], /params\.set\('search', state\.orderSearch\)/);
+  assert.match(source, /event\.key !== 'Enter'/);
+  assert.match(source, /event\.target\.value\.trim\(\)/);
+  assert.match(source, /输入订单号或用户名称查询/);
 });
 
 test('binary download handles xlsx filenames and json errors without exposing subscription data', () => {

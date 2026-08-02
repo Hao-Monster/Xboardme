@@ -17,16 +17,18 @@ use App\Services\PlanService;
 use App\Services\UserService;
 use App\Services\DistributorOrderService;
 use App\Services\DistributorOrderExportService;
+use App\Services\DistributorOrderSearchService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class OrderController extends Controller
 {
-    public function fetch(Request $request)
+    public function fetch(Request $request, DistributorOrderSearchService $searchService)
     {
         $request->validate([
             'status' => 'nullable|integer|in:0,1,2,3',
             'settlement_status' => 'nullable|integer|in:0,1',
+            'search' => 'nullable|string|max:512',
         ]);
         $orders = Order::with([
             'plan',
@@ -34,6 +36,9 @@ class OrderController extends Controller
             'distributorOrder.subscriber:id,plan_id,transfer_enable,u,d,expired_at,speed_limit,device_limit',
         ])
             ->where('user_id', $request->user()->id)
+            ->when($request->user()->is_distributor, function ($query) use ($request, $searchService) {
+                $searchService->applyToOrderQuery($query, $request->input('search'));
+            })
             ->when($request->user()->is_distributor, function ($query) use ($request) {
                 $query->whereHas('distributorOrder', function ($query) use ($request) {
                     if ($request->input('settlement_status') !== null) {
@@ -56,11 +61,13 @@ class OrderController extends Controller
 
         $validated = $request->validate([
             'settlement_status' => 'nullable|integer|in:0,1',
+            'search' => 'nullable|string|max:512',
         ]);
 
         return $exportService->downloadForDistributor(
             (int) $request->user()->id,
-            isset($validated['settlement_status']) ? (int) $validated['settlement_status'] : null
+            isset($validated['settlement_status']) ? (int) $validated['settlement_status'] : null,
+            $validated['search'] ?? null
         );
     }
 

@@ -189,6 +189,92 @@ class DistributorOrderTest extends TestCase
         $this->assertStringNotContainsString($otherOrder->trade_no, $encoded);
     }
 
+    public function test_distributor_can_search_only_their_orders_by_number_or_customer_name_and_export_the_result(): void
+    {
+        $distributor = $this->makeUser('search-own@example.com', true);
+        $otherDistributor = $this->makeUser('search-other@example.com', true);
+        $plan = $this->makePlan();
+        $namedOrder = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '售后客户张三');
+        $numberOrder = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '客户李四');
+        $otherOrder = $this->createDistributorOrder($otherDistributor, $plan, Plan::PERIOD_MONTHLY, '售后客户张三');
+        $namedOrder->distributorOrder()->update([
+            'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
+        ]);
+        Sanctum::actingAs($distributor);
+
+        $this->getJson('/api/v1/user/order/fetch?' . http_build_query([
+            'search' => '张三',
+            'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
+        ]))->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.trade_no', $namedOrder->trade_no)
+            ->assertJsonPath('data.0.customer_name', '售后客户张三');
+
+        $this->getJson('/api/v1/user/order/fetch?' . http_build_query([
+            'search' => substr($numberOrder->trade_no, -8),
+        ]))->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.trade_no', $numberOrder->trade_no);
+
+        $this->getJson('/api/v1/user/order/fetch?' . http_build_query([
+            'search' => $otherOrder->trade_no,
+        ]))->assertOk()->assertJsonCount(0, 'data');
+
+        $rows = $this->readXlsx($this->get('/api/v1/user/order/export?' . http_build_query([
+            'search' => '李四',
+        ]))->assertOk());
+        $this->assertCount(2, $rows);
+        $this->assertSame($numberOrder->trade_no, $rows[1][0]);
+        $this->assertSame('客户李四', $rows[1][1]);
+    }
+
+    public function test_admin_can_search_distributor_orders_by_number_customer_name_or_subscription_link(): void
+    {
+        $firstDistributor = $this->makeUser('admin-search-first@example.com', true);
+        $secondDistributor = $this->makeUser('admin-search-second@example.com', true);
+        $plan = $this->makePlan();
+        $firstOrder = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY, '链接查询客户');
+        $secondOrder = $this->createDistributorOrder($secondDistributor, $plan, Plan::PERIOD_MONTHLY, '普通查询客户');
+        $firstDelivery = $firstOrder->distributorOrder()->with('subscriber')->firstOrFail();
+        $subscribeUrl = Helper::getSubscribeUrl($firstDelivery->subscriber->token);
+
+        Sanctum::actingAs($this->makeUser('admin-search@example.com', false, ['is_admin' => true]));
+        $fetchUri = '/' . $this->adminRouteUri('fetch');
+
+        foreach ([
+            substr($secondOrder->trade_no, -8) => $secondOrder->trade_no,
+            '链接查询' => $firstOrder->trade_no,
+            $subscribeUrl => $firstOrder->trade_no,
+            $firstDelivery->subscriber->token => $firstOrder->trade_no,
+        ] as $search => $expectedTradeNo) {
+            $this->postJson($fetchUri, [
+                'current' => 1,
+                'pageSize' => 20,
+                'distributor_only' => true,
+                'search' => $search,
+            ])->assertOk()
+                ->assertJsonCount(1, 'data')
+                ->assertJsonPath('data.0.trade_no', $expectedTradeNo);
+        }
+
+        $this->postJson($fetchUri, [
+            'current' => 1,
+            'pageSize' => 20,
+            'distributor_only' => true,
+            'distributor_user_id' => $firstDistributor->id,
+            'search' => '查询客户',
+        ])->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.trade_no', $firstOrder->trade_no);
+
+        $rows = $this->readXlsx($this->get('/' . $this->adminRouteUri('export') . '?' . http_build_query([
+            'search' => $subscribeUrl,
+        ]))->assertOk());
+        $this->assertCount(2, $rows);
+        $this->assertSame($firstOrder->trade_no, $rows[1][0]);
+        $this->assertSame('链接查询客户', $rows[1][1]);
+    }
+
     public function test_admin_xlsx_export_contains_only_distributor_orders_with_exact_columns_and_numeric_amounts(): void
     {
         $firstDistributor = $this->makeUser('first-dealer@example.com', true, ['distributor_name' => '第一分销商']);

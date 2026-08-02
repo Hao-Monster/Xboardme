@@ -15,6 +15,7 @@
     total: 0,
     selectedDistributor: '',
     settlementStatus: '',
+    orderSearch: '',
     summary: null,
     page: 1,
     pageSize: 20,
@@ -116,6 +117,7 @@
     const params = new URLSearchParams();
     if (state.selectedDistributor) params.set('distributor_user_id', state.selectedDistributor);
     if (state.settlementStatus !== '') params.set('settlement_status', state.settlementStatus);
+    if (state.orderSearch) params.set('search', state.orderSearch);
     try {
       await downloadFile(`/order/export${params.size ? `?${params}` : ''}`);
       toast('Excel 导出成功');
@@ -387,6 +389,7 @@
         distributor_only: true,
         distributor_user_id: state.selectedDistributor || null,
         settlement_status: state.settlementStatus === '' ? null : Number(state.settlementStatus),
+        search: state.orderSearch || null,
       },
     });
     state.orders = payload?.data || [];
@@ -424,6 +427,7 @@
     renderPanel(`<div class="admin-dist-toolbar">
       <label>分销商<select id="admin-dist-distributor">${distributorOptions(true)}</select></label>
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
+      <div class="admin-dist-search"><input id="admin-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button data-admin-dist="search-orders">查询</button><button class="secondary" data-admin-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付</th><th>结算状态</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个订单</span><div><button data-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button data-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`);
@@ -555,6 +559,8 @@
       if (action === 'refresh') await loadOrders();
       else if (action === 'export') await exportOrders(event.target.closest('[data-admin-dist]'));
       else if (action === 'settle') await settle();
+      else if (action === 'search-orders') { state.orderSearch = document.getElementById('admin-dist-order-search')?.value.trim() || ''; state.page = 1; await loadOrders(); }
+      else if (action === 'clear-order-search') { state.orderSearch = ''; state.page = 1; await loadOrders(); }
       else if (action === 'search-user') await searchUser();
       else if (action === 'create-user') await createUser();
       const toggle = event.target.closest('[data-user-toggle]');
@@ -605,6 +611,7 @@
       <div class="admin-dist-toolbar xboard-native-dist-toolbar">
         <label>分销商<select id="native-dist-distributor">${distributorOptions(true)}</select></label>
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
+        <div class="admin-dist-search"><input id="native-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button type="button" data-native-dist="search-orders">查询</button><button type="button" class="secondary" data-native-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       </div>${nativeSummary()}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付状态</th><th>结算状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个分销订单</span><div><button type="button" data-native-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button type="button" data-native-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`;
@@ -631,6 +638,8 @@
       if (action === 'refresh') await loadNativeOrders();
       else if (action === 'export') await exportOrders(event.target.closest('[data-native-dist]'));
       else if (action === 'settle') await settle(loadNativeOrders);
+      else if (action === 'search-orders') { state.orderSearch = document.getElementById('native-dist-order-search')?.value.trim() || ''; state.page = 1; await loadNativeOrders(); }
+      else if (action === 'clear-order-search') { state.orderSearch = ''; state.page = 1; await loadNativeOrders(); }
 
       const detail = event.target.closest('[data-native-order-detail]');
       if (detail) await showOrderDetail(detail.dataset.nativeOrderDetail);
@@ -696,6 +705,14 @@
     if (event.target.matches?.('.xboard-distributor-injected input[type="checkbox"]')) {
       syncDistributorNameField(event.target);
     }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || !['admin-dist-order-search', 'native-dist-order-search'].includes(event.target.id)) return;
+    event.preventDefault();
+    state.orderSearch = event.target.value.trim();
+    state.page = 1;
+    const refresh = event.target.id === 'native-dist-order-search' ? loadNativeOrders : loadOrders;
+    refresh().catch((error) => toast(error.message, 'error'));
   });
   const observer = new MutationObserver(() => { mount(); mountNativeOrderManagement(); injectDistributorFields(); injectOrderSubscriptionLinks(); });
   observer.observe(document.documentElement, { childList: true, subtree: true });

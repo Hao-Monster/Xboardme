@@ -13,6 +13,7 @@ use App\Models\DistributorOrder;
 use App\Services\OrderService;
 use App\Services\DistributorOrderEntitlementService;
 use App\Services\DistributorOrderExportService;
+use App\Services\DistributorOrderSearchService;
 use App\Services\PlanService;
 use App\Services\UserService;
 use App\Utils\Helper;
@@ -29,11 +30,13 @@ class OrderController extends Controller
         $validated = $request->validate([
             'distributor_user_id' => 'nullable|integer',
             'settlement_status' => 'nullable|integer|in:0,1',
+            'search' => 'nullable|string|max:512',
         ]);
 
         return $exportService->downloadForAdmin(
             isset($validated['distributor_user_id']) ? (int) $validated['distributor_user_id'] : null,
-            isset($validated['settlement_status']) ? (int) $validated['settlement_status'] : null
+            isset($validated['settlement_status']) ? (int) $validated['settlement_status'] : null,
+            $validated['search'] ?? null
         );
     }
 
@@ -94,7 +97,7 @@ class OrderController extends Controller
         ));
     }
 
-    public function fetch(Request $request)
+    public function fetch(Request $request, DistributorOrderSearchService $searchService)
     {
         $current = $request->input('current', 1);
         $pageSize = $request->input('pageSize', 10);
@@ -108,7 +111,14 @@ class OrderController extends Controller
             'distributor_user_id' => 'nullable|integer',
             'settlement_status' => 'nullable|integer|in:0,1',
             'distributor_only' => 'nullable|boolean',
+            'search' => 'nullable|string|max:512',
         ]);
+
+        $searchService->applyToOrderQuery(
+            $orderModel,
+            $request->input('search'),
+            true
+        );
 
         if ($request->boolean('distributor_only')) {
             $orderModel->whereHas('distributorOrder');

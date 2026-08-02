@@ -28,7 +28,15 @@ class DistributorOrderExportService
         '订单号', '用户名称', '订阅计划', '周期', '订单金额', '交付状态', '结算状态',
     ];
 
-    public function downloadForAdmin(?int $distributorUserId, ?int $settlementStatus): BinaryFileResponse
+    public function __construct(private readonly DistributorOrderSearchService $searchService)
+    {
+    }
+
+    public function downloadForAdmin(
+        ?int $distributorUserId,
+        ?int $settlementStatus,
+        ?string $search = null
+    ): BinaryFileResponse
     {
         $query = $this->baseQuery()
             ->when($distributorUserId !== null, function (Builder $query) use ($distributorUserId) {
@@ -37,6 +45,7 @@ class DistributorOrderExportService
             ->when($settlementStatus !== null, function (Builder $query) use ($settlementStatus) {
                 $query->where('v2_distributor_order.settlement_status', $settlementStatus);
             });
+        $this->searchService->applyToExportQuery($query, $search, true);
 
         return $this->download(
             $query,
@@ -54,7 +63,11 @@ class DistributorOrderExportService
         );
     }
 
-    public function downloadForDistributor(int $distributorUserId, ?int $settlementStatus): BinaryFileResponse
+    public function downloadForDistributor(
+        int $distributorUserId,
+        ?int $settlementStatus,
+        ?string $search = null
+    ): BinaryFileResponse
     {
         $query = $this->baseQuery()
             ->where('v2_order.user_id', $distributorUserId)
@@ -62,6 +75,7 @@ class DistributorOrderExportService
             ->when($settlementStatus !== null, function (Builder $query) use ($settlementStatus) {
                 $query->where('v2_distributor_order.settlement_status', $settlementStatus);
             });
+        $this->searchService->applyToExportQuery($query, $search);
 
         return $this->download(
             $query,
@@ -84,6 +98,7 @@ class DistributorOrderExportService
         return DB::table('v2_distributor_order')
             ->join('v2_order', 'v2_order.id', '=', 'v2_distributor_order.order_id')
             ->join('v2_user as distributor', 'distributor.id', '=', 'v2_distributor_order.distributor_user_id')
+            ->leftJoin('v2_user as subscriber', 'subscriber.id', '=', 'v2_distributor_order.subscriber_user_id')
             ->leftJoin('v2_plan', 'v2_plan.id', '=', 'v2_order.plan_id')
             ->select([
                 'v2_order.id',
