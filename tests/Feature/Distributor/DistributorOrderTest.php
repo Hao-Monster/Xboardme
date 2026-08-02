@@ -157,6 +157,45 @@ class DistributorOrderTest extends TestCase
             ->assertHeader('x-hwid-max-devices-reached', 'true');
     }
 
+    public function test_karing_receives_a_sing_box_config_with_real_server_outbounds(): void
+    {
+        $order = $this->createDistributorOrder(
+            $this->makeUser('karing-dealer@example.com', true),
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY,
+            'Karing customer'
+        );
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+
+        $subscribeUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
+        $subscribePath = parse_url($subscribeUrl, PHP_URL_PATH);
+        $subscribeQuery = parse_url($subscribeUrl, PHP_URL_QUERY);
+        $headers = [
+            'User-Agent' => 'Karing/1.2.22.2502 Android',
+            'X-HWID' => 'karing-device-001',
+        ];
+        $uri = $subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : '');
+
+        $emptyResponse = $this->withHeaders($headers)->get($uri);
+        $emptyResponse->assertOk()->assertHeader('x-hwid-active', 'true');
+        $this->assertFalse(collect($emptyResponse->json('outbounds') ?? [])->contains(
+            fn ($outbound) => ($outbound['type'] ?? null) === Server::TYPE_SOCKS
+        ));
+        $this->assertNull($delivery->refresh()->config_issued_at);
+
+        $this->makeServer();
+        $response = $this->withHeaders($headers)->get($uri);
+
+        $response->assertOk()->assertHeader('x-hwid-active', 'true');
+        $config = $response->json();
+        $this->assertIsArray($config);
+        $this->assertTrue(collect($config['outbounds'] ?? [])->contains(
+            fn ($outbound) => ($outbound['type'] ?? null) === Server::TYPE_SOCKS
+                && ($outbound['tag'] ?? null) === 'HWID Test Node'
+        ));
+        $this->assertNotNull($delivery->refresh()->config_issued_at);
+    }
+
     public function test_delivery_returns_only_an_embedded_qr_and_never_exposes_the_subscription_as_plain_json(): void
     {
         $order = $this->createDistributorOrder(

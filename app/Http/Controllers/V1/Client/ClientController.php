@@ -95,7 +95,25 @@ class ClientController extends Controller
         }
 
         $content = trim((string) $response->getContent());
-        return $content !== '' && $content !== '[]' && $content !== '{}';
+        if ($content === '' || $content === '[]' || $content === '{}') {
+            return false;
+        }
+
+        $contentType = strtolower((string) $response->headers->get('Content-Type'));
+        if (!str_contains($contentType, 'json') && !str_starts_with($content, '{')) {
+            return true;
+        }
+
+        $config = json_decode($content, true);
+        if (!is_array($config) || !isset($config['outbounds']) || !is_array($config['outbounds'])) {
+            return true;
+        }
+
+        $nonServerTypes = ['selector', 'urltest', 'direct', 'block', 'dns'];
+        return collect($config['outbounds'])->contains(function ($outbound) use ($nonServerTypes) {
+            $type = strtolower((string) data_get($outbound, 'type', ''));
+            return $type !== '' && !in_array($type, $nonServerTypes, true);
+        });
     }
 
     public function doSubscribe(Request $request, $user, $servers = null)
