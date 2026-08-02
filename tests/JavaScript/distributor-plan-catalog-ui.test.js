@@ -95,13 +95,13 @@ test('mobile catalog uses compact spacing without changing desktop defaults', ()
   const compactStart = styles.lastIndexOf('@media (max-width:640px)');
   assert.ok(compactStart >= 0, 'compact mobile breakpoint should exist');
   const compact = styles.slice(compactStart);
-  assert.match(compact, /\.dist-content \{ padding:12px 10px 18px; \}/);
-  assert.match(compact, /\.dist-catalog-topbar \{ margin-bottom:12px; padding:11px 12px;/);
-  assert.match(compact, /\.dist-plan-grid \{ gap:12px; \}/);
+  assert.match(compact, /\.dist-content \{ padding:0 10px 10px; \}/);
+  assert.match(compact, /\.dist-catalog-topbar \{ margin-bottom:0; padding:6px 8px;/);
+  assert.match(compact, /\.dist-plan-grid \{ gap:0; \}/);
   assert.match(compact, /\.dist-plan-body \{ padding:16px 14px 14px; \}/);
-  assert.match(compact, /\.dist-plan-specs \{[^}]*margin:13px 0;/);
+  assert.match(compact, /\.dist-plan-specs \{[^}]*margin:10px 0 0;/);
   assert.match(compact, /\.dist-period-options \{ gap:6px; \}/);
-  assert.match(compact, /\.dist-plan-actions \{ padding:11px 14px 13px; \}/);
+  assert.match(compact, /\.dist-plan-actions \{ padding:6px 14px; \}/);
   assert.match(compact, /\.dist-topbar\.has-promo \{ height:64px; \}/);
   assert.match(styles, /\.dist-content \{ max-width:1420px; margin:0 auto; padding:36px; \}/);
 });

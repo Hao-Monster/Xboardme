@@ -109,11 +109,11 @@ html.distributor-mode.dist-modal-open,html.distributor-mode.dist-modal-open body
 @media (max-width:900px) { .dist-sidebar { width:78px; padding:20px 9px; }.dist-brand span:last-child,.dist-sidebar nav button:not(.active) span+*,.dist-sidebar nav button { font-size:0; }.dist-brand { padding-left:13px; }.dist-sidebar nav button { justify-content:center; padding:14px; }.dist-sidebar nav button span { font-size:19px; }.dist-main { margin-left:78px; }.dist-content { padding:24px 18px; }.dist-stats { grid-template-columns:repeat(2,1fr); }.dist-two-column { grid-template-columns:1fr; }.dist-entitlement-row dl { grid-template-columns:repeat(2,minmax(125px,1fr)); }.dist-account { display:none; } }
 @media (max-width:560px) { .dist-sidebar { position:fixed; width:auto; height:64px; inset:auto 0 0; border-right:0; border-top:1px solid var(--dist-border); padding:7px 10px; }.dist-brand { display:none; }.dist-sidebar nav { grid-template-columns:repeat(3,1fr); }.dist-sidebar nav button,.dist-sidebar nav button:not(.active) { font-size:11px; display:grid; justify-items:center; gap:2px; padding:4px; }.dist-sidebar nav button span { font-size:17px; }.dist-main { margin-left:0; padding-bottom:64px; }.dist-topbar { height:60px; padding:0 12px; justify-content:space-between; }.dist-topbar.has-promo { height:72px; gap:8px; }.dist-topbar.has-promo .dist-mobile-title { display:none; }.dist-mobile-title { display:block; }.dist-topbar-promo>strong { gap:10px; font-size:14px; }.dist-topbar-steps { flex-wrap:nowrap; gap:5px; }.dist-topbar-steps small,.dist-topbar-steps b { gap:2px; font-size:8px; }.dist-top-actions { flex:0 0 auto; gap:5px; }.dist-top-actions button { min-height:32px; padding:0 9px; }.dist-logout { font-size:0; }.dist-logout:after { content:'↪'; font-size:17px; }.dist-content { padding:20px 12px; }.dist-page-head h1 { font-size:25px; }.dist-order-toolbar { justify-content:stretch; }.dist-order-toolbar label { flex:1; }.dist-order-toolbar select { width:100%; min-width:0; }.dist-plan-grid { grid-template-columns:1fr; }.dist-plan-actions { flex-direction:column; }.dist-stats { grid-template-columns:1fr 1fr; }.dist-stat-card { padding:15px; }.dist-stat-card strong { font-size:19px; }.dist-modal { padding:22px 18px; }.dist-qr { width:280px; } }
 @media (max-width:640px) {
-  .dist-content { padding:12px 10px 18px; }
-  .dist-catalog-topbar { margin-bottom:12px; padding:11px 12px; border-radius:12px; }
+  .dist-content { padding:0 10px 10px; }
+  .dist-catalog-topbar { margin-bottom:0; padding:6px 8px; border-radius:12px; }
   .dist-plan-filters { gap:6px; }
   .dist-plan-filters button { padding:7px 11px; }
-  .dist-plan-grid { gap:12px; }
+  .dist-plan-grid { gap:0; }
   .dist-plan-card { border-radius:13px; }
   .dist-plan-body { padding:16px 14px 14px; }
   .dist-plan-tags { min-height:22px; margin-bottom:8px; gap:5px; }
@@ -123,13 +123,13 @@ html.distributor-mode.dist-modal-open,html.distributor-mode.dist-modal-open body
   .dist-plan-heading p { min-height:0; font-size:12px; line-height:1.5; }
   .dist-plan-current-price { justify-items:start; margin-top:7px; gap:0; }
   .dist-plan-current-price strong { font-size:24px; }
-  .dist-plan-specs { grid-template-columns:repeat(2,minmax(0,1fr)); margin:13px 0; border-radius:9px; }
+  .dist-plan-specs { grid-template-columns:repeat(2,minmax(0,1fr)); margin:10px 0 0; border-radius:9px; }
   .dist-plan-specs div { padding:9px; }
   .dist-plan-specs span { margin-bottom:3px; }
-  .dist-plan-period-label { margin-bottom:6px; }
+  .dist-plan-period-label { margin-bottom:4px; }
   .dist-period-options { gap:6px; }
   .dist-period-options button { min-height:68px; padding:7px 8px; }
-  .dist-plan-actions { padding:11px 14px 13px; }
+  .dist-plan-actions { padding:6px 14px; }
 }
 @media (max-width:560px) {
   .dist-topbar.has-promo { height:64px; }
