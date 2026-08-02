@@ -317,7 +317,10 @@
       const manage = detail.is_distributor_order
         ? `<button type="button" data-native-manage-entitlement="${detail.id}">管理订阅权益</button>`
         : '';
-      field.innerHTML = `<strong>订阅链接</strong><div>${value}${manage}</div>`;
+      const customerName = detail.is_distributor_order
+        ? `<strong>用户名称</strong><div>${escapeHtml(detail.customer_name || '-')}</div>`
+        : '';
+      field.innerHTML = `<strong>订阅链接</strong><div>${value}${manage}</div>${customerName}`;
 
       const scrollArea = dialog.querySelector('[data-radix-scroll-area-viewport], .overflow-y-auto, .n-scrollbar-content') || dialog;
       const footer = [...scrollArea.children].find((node) => /关闭|取消|确认|Close|Cancel|Confirm/i.test(node.textContent || ''));
@@ -406,7 +409,7 @@
   function orderRows(detailAttribute = 'data-order-detail') {
     return state.orders.map((order) => `<tr>
       <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
-      <td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
+      <td>${escapeHtml(order.customer_name || '-')}</td><td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
       <td>${money(order.total_amount)}</td><td>${order.delivery_status === 0 ? '待领取' : order.delivery_status === 1 ? '已领取' : '已关闭'}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
       <td><button class="admin-dist-link" ${detailAttribute}="${order.id}">详情 / 订阅链接</button></td>
@@ -422,7 +425,7 @@
       <label>分销商<select id="admin-dist-distributor">${distributorOptions(true)}</select></label>
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
       <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
-      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付</th><th>结算状态</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付</th><th>结算状态</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个订单</span><div><button data-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button data-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`);
   }
 
@@ -488,6 +491,7 @@
       <div><dt>订单号</dt><dd>${escapeHtml(order.trade_no)}</dd></div><div><dt>分销商</dt><dd>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</dd></div>
       <div><dt>套餐</dt><dd>${escapeHtml(order.plan?.name || '-')}</dd></div><div><dt>原价</dt><dd>${money(order.total_amount)}</dd></div>
       <div><dt>结算状态</dt><dd>${order.settlement_status === 1 ? '已结算' : '未结算'}</dd></div><div><dt>订阅链接</dt><dd class="url">${order.subscribe_url ? `<code>${escapeHtml(order.subscribe_url)}</code><button data-copy-subscription="${escapeHtml(order.subscribe_url)}">复制</button>` : '订单未完成，暂无订阅链接'}</dd></div>
+      <div><dt>用户名称</dt><dd>${escapeHtml(order.customer_name || '-')}</dd></div>
       </dl>${entitlement ? `<div class="admin-dist-entitlement"><h3>订阅权益</h3>
         <div class="admin-dist-entitlement-readonly"><span><b>套餐</b>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</span><span><b>已用流量</b>${formatTraffic(entitlement.used_traffic)}</span><span><b>剩余流量</b>${formatTraffic(entitlement.remaining_traffic)}</span></div>
         <div class="admin-dist-entitlement-form">
@@ -602,7 +606,7 @@
         <label>分销商<select id="native-dist-distributor">${distributorOptions(true)}</select></label>
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
       </div>${nativeSummary()}
-      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付状态</th><th>结算状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付状态</th><th>结算状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个分销订单</span><div><button type="button" data-native-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button type="button" data-native-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`;
   }
 

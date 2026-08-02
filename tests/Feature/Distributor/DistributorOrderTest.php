@@ -33,8 +33,8 @@ class DistributorOrderTest extends TestCase
         $plan = $this->makePlan();
         $originalExpiredAt = $distributor->expired_at;
 
-        $first = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_MONTHLY);
-        $second = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_MONTHLY);
+        $first = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '客户甲');
+        $second = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '客户乙');
 
         $firstDelivery = $first->distributorOrder()->with('subscriber')->firstOrFail();
         $secondDelivery = $second->distributorOrder()->with('subscriber')->firstOrFail();
@@ -50,6 +50,8 @@ class DistributorOrderTest extends TestCase
         $this->assertSame($plan->id, $firstDelivery->subscriber->plan_id);
         $this->assertSame(DistributorOrder::DELIVERY_PENDING, $firstDelivery->delivery_status);
         $this->assertSame(DistributorOrder::SETTLEMENT_UNSETTLED, $firstDelivery->settlement_status);
+        $this->assertSame('客户甲', $firstDelivery->customer_name);
+        $this->assertSame('客户乙', $secondDelivery->customer_name);
 
         $distributor->refresh();
         $this->assertSame(50000, $distributor->balance);
@@ -58,9 +60,48 @@ class DistributorOrderTest extends TestCase
         $this->assertSame($originalExpiredAt, $distributor->expired_at);
     }
 
+    public function test_distributor_checkout_requires_and_trims_customer_name(): void
+    {
+        $distributor = $this->makeUser('checkout-name@example.com', true);
+        $plan = $this->makePlan();
+        Sanctum::actingAs($distributor);
+
+        foreach ([null, '   '] as $customerName) {
+            $payload = [
+                'plan_id' => $plan->id,
+                'period' => Plan::PERIOD_MONTHLY,
+            ];
+            if ($customerName !== null) {
+                $payload['customer_name'] = $customerName;
+            }
+
+            $response = $this->postJson('/api/v1/user/order/save', $payload);
+            $response->assertUnprocessable();
+            $this->assertStringContainsString(
+                '为了售后方便，请输入备注清楚用户',
+                $response->getContent()
+            );
+        }
+
+        $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'customer_name' => str_repeat('客', 65),
+        ])->assertUnprocessable();
+
+        $tradeNo = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'customer_name' => '  终端客户甲  ',
+        ])->assertOk()->json('data');
+
+        $order = Order::where('trade_no', $tradeNo)->firstOrFail();
+        $this->assertSame('终端客户甲', $order->distributorOrder()->value('customer_name'));
+    }
+
     public function test_claim_url_can_only_be_consumed_once(): void
     {
-        $order = app(DistributorOrderService::class)->create(
+        $order = $this->createDistributorOrder(
             $this->makeUser('dealer@example.com', true),
             $this->makePlan(),
             Plan::PERIOD_MONTHLY
@@ -96,7 +137,7 @@ class DistributorOrderTest extends TestCase
         $this->getJson('/api/v1/user/getSubscribe')->assertForbidden();
         $this->getJson('/api/v1/user/plan/fetch')->assertOk();
 
-        $order = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_MONTHLY);
+        $order = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY);
         $order->load(['plan', 'distributorOrder']);
         $resource = (new OrderResource($order))->toArray(Request::create('/'));
         $subscriber = $order->distributorOrder->subscriber()->firstOrFail();
@@ -116,7 +157,7 @@ class DistributorOrderTest extends TestCase
     public function test_distributor_order_fetch_exposes_read_only_entitlement_without_credentials(): void
     {
         $distributor = $this->makeUser('dealer@example.com', true);
-        $order = app(DistributorOrderService::class)->create(
+        $order = $this->createDistributorOrder(
             $distributor,
             $this->makePlan(),
             Plan::PERIOD_MONTHLY
@@ -126,7 +167,7 @@ class DistributorOrderTest extends TestCase
             'u' => 2 * 1073741824,
             'd' => 3 * 1073741824,
         ]);
-        $otherOrder = app(DistributorOrderService::class)->create(
+        $otherOrder = $this->createDistributorOrder(
             $this->makeUser('other-dealer@example.com', true),
             Plan::findOrFail($order->plan_id),
             Plan::PERIOD_MONTHLY
@@ -153,8 +194,8 @@ class DistributorOrderTest extends TestCase
         $firstDistributor = $this->makeUser('first-dealer@example.com', true, ['distributor_name' => '第一分销商']);
         $secondDistributor = $this->makeUser('second-dealer@example.com', true, ['distributor_name' => '第二分销商']);
         $plan = $this->makePlan();
-        $older = app(DistributorOrderService::class)->create($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
-        $newer = app(DistributorOrderService::class)->create($secondDistributor, $plan, Plan::PERIOD_QUARTERLY);
+        $older = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY, '老客户');
+        $newer = $this->createDistributorOrder($secondDistributor, $plan, Plan::PERIOD_QUARTERLY, '新客户');
         $older->update(['created_at' => 100]);
         $newer->update(['created_at' => 200]);
 
@@ -173,14 +214,15 @@ class DistributorOrderTest extends TestCase
         $response->assertOk();
 
         $rows = $this->readXlsx($response);
-        $this->assertSame(['订单号', '分销商', '套餐', '原价', '交付状态', '结算状态'], $rows[0]);
+        $this->assertSame(['订单号', '用户名称', '分销商', '套餐', '原价', '交付状态', '结算状态'], $rows[0]);
         $this->assertSame($newer->trade_no, $rows[1][0]);
-        $this->assertSame('第二分销商', $rows[1][1]);
-        $this->assertSame('Distributor Test Plan', $rows[1][2]);
-        $this->assertTrue(is_int($rows[1][3]) || is_float($rows[1][3]));
-        $this->assertEquals(30.0, $rows[1][3]);
-        $this->assertSame('待领取', $rows[1][4]);
-        $this->assertSame('未结算', $rows[1][5]);
+        $this->assertSame('新客户', $rows[1][1]);
+        $this->assertSame('第二分销商', $rows[1][2]);
+        $this->assertSame('Distributor Test Plan', $rows[1][3]);
+        $this->assertTrue(is_int($rows[1][4]) || is_float($rows[1][4]));
+        $this->assertEquals(30.0, $rows[1][4]);
+        $this->assertSame('待领取', $rows[1][5]);
+        $this->assertSame('未结算', $rows[1][6]);
         $this->assertSame($older->trade_no, $rows[2][0]);
         $this->assertCount(3, $rows);
         $this->assertStringNotContainsString('NORMAL-ORDER-MUST-NOT-EXPORT', json_encode($rows));
@@ -191,10 +233,10 @@ class DistributorOrderTest extends TestCase
         $firstDistributor = $this->makeUser('filter-dealer@example.com', true);
         $secondDistributor = $this->makeUser('other-filter-dealer@example.com', true);
         $plan = $this->makePlan();
-        $unsettled = app(DistributorOrderService::class)->create($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
-        $settled = app(DistributorOrderService::class)->create($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
+        $unsettled = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
+        $settled = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
         $settled->distributorOrder()->update(['settlement_status' => DistributorOrder::SETTLEMENT_SETTLED]);
-        app(DistributorOrderService::class)->create($secondDistributor, $plan, Plan::PERIOD_MONTHLY);
+        $this->createDistributorOrder($secondDistributor, $plan, Plan::PERIOD_MONTHLY);
 
         Sanctum::actingAs($this->makeUser('admin-filter@example.com', false, ['is_admin' => true]));
         $uri = '/' . $this->adminRouteUri('export');
@@ -220,13 +262,13 @@ class DistributorOrderTest extends TestCase
         $distributor = $this->makeUser('own-orders@example.com', true);
         $otherDistributor = $this->makeUser('other-orders@example.com', true);
         $plan = $this->makePlan();
-        $unsettled = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_MONTHLY);
-        $settled = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_QUARTERLY);
+        $unsettled = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY);
+        $settled = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_QUARTERLY, '导出客户');
         $settled->distributorOrder()->update([
             'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
             'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
         ]);
-        $otherOrder = app(DistributorOrderService::class)->create($otherDistributor, $plan, Plan::PERIOD_QUARTERLY);
+        $otherOrder = $this->createDistributorOrder($otherDistributor, $plan, Plan::PERIOD_QUARTERLY);
 
         Sanctum::actingAs($distributor);
         $this->getJson('/api/v1/user/order/fetch?settlement_status=1')
@@ -235,15 +277,16 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.trade_no', $settled->trade_no);
 
         $rows = $this->readXlsx($this->get('/api/v1/user/order/export?settlement_status=1')->assertOk());
-        $this->assertSame(['订单号', '订阅计划', '周期', '订单金额', '交付状态', '结算状态'], $rows[0]);
+        $this->assertSame(['订单号', '用户名称', '订阅计划', '周期', '订单金额', '交付状态', '结算状态'], $rows[0]);
         $this->assertCount(2, $rows);
         $this->assertSame($settled->trade_no, $rows[1][0]);
-        $this->assertSame('Distributor Test Plan', $rows[1][1]);
-        $this->assertSame('季付', $rows[1][2]);
-        $this->assertTrue(is_int($rows[1][3]) || is_float($rows[1][3]));
-        $this->assertEquals(30.0, $rows[1][3]);
-        $this->assertSame('已领取', $rows[1][4]);
-        $this->assertSame('已结算', $rows[1][5]);
+        $this->assertSame('导出客户', $rows[1][1]);
+        $this->assertSame('Distributor Test Plan', $rows[1][2]);
+        $this->assertSame('季付', $rows[1][3]);
+        $this->assertTrue(is_int($rows[1][4]) || is_float($rows[1][4]));
+        $this->assertEquals(30.0, $rows[1][4]);
+        $this->assertSame('已领取', $rows[1][5]);
+        $this->assertSame('已结算', $rows[1][6]);
         $this->assertStringNotContainsString($unsettled->trade_no, json_encode($rows));
         $this->assertStringNotContainsString($otherOrder->trade_no, json_encode($rows));
 
@@ -275,7 +318,7 @@ class DistributorOrderTest extends TestCase
             'prices' => [Plan::PERIOD_MONTHLY => 50],
             'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
         ]);
-        $order = app(DistributorOrderService::class)->create($distributor, $plan, Plan::PERIOD_MONTHLY);
+        $order = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY);
         $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
         $subscriber = $delivery->subscriber;
         $originalToken = $subscriber->token;
@@ -359,7 +402,7 @@ class DistributorOrderTest extends TestCase
             'device_limit' => null,
         ])->assertStatus(422);
 
-        $distributorOrder = app(DistributorOrderService::class)->create(
+        $distributorOrder = $this->createDistributorOrder(
             $this->makeUser('dealer@example.com', true),
             $plan,
             Plan::PERIOD_MONTHLY
@@ -386,7 +429,7 @@ class DistributorOrderTest extends TestCase
     public function test_claimed_delivery_is_recovered_until_the_real_subscription_response_is_issued(): void
     {
         $distributor = $this->makeUser('dealer@example.com', true);
-        $order = app(DistributorOrderService::class)->create($distributor, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $order = $this->createDistributorOrder($distributor, $this->makePlan(), Plan::PERIOD_MONTHLY);
         $delivery = $order->distributorOrder()->firstOrFail();
         $delivery->update([
             'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
@@ -409,7 +452,7 @@ class DistributorOrderTest extends TestCase
     public function test_admin_settlement_is_idempotent_and_reveals_subscription_only_in_detail(): void
     {
         $distributor = $this->makeUser('dealer@example.com', true);
-        $order = app(DistributorOrderService::class)->create($distributor, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $order = $this->createDistributorOrder($distributor, $this->makePlan(), Plan::PERIOD_MONTHLY, '详情客户');
         $admin = $this->makeUser('admin@example.com', false, ['is_admin' => true]);
         Sanctum::actingAs($admin);
 
@@ -440,6 +483,7 @@ class DistributorOrderTest extends TestCase
         $subscriber = $order->distributorOrder()->with('subscriber')->firstOrFail()->subscriber;
         $this->postJson('/' . $detailUri, ['id' => $order->id])
             ->assertOk()
+            ->assertJsonPath('data.customer_name', '详情客户')
             ->assertJsonPath('data.subscribe_url', Helper::getSubscribeUrl($subscriber->token));
     }
 
@@ -464,7 +508,7 @@ class DistributorOrderTest extends TestCase
         $this->assertTrue($target->is_distributor);
         $this->assertSame('混合权限分销商', $target->distributor_name);
 
-        $order = app(DistributorOrderService::class)->create($target, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $order = $this->createDistributorOrder($target, $this->makePlan(), Plan::PERIOD_MONTHLY);
         $this->assertSame($target->id, $order->user_id);
     }
 
@@ -498,16 +542,18 @@ class DistributorOrderTest extends TestCase
         $this->assertSame('华东渠道', $option['distributor_name']);
         $this->assertSame($target->email, $option['email']);
 
-        $order = app(DistributorOrderService::class)->create($target, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $order = $this->createDistributorOrder($target, $this->makePlan(), Plan::PERIOD_MONTHLY, '渠道客户');
         $this->postJson('/' . $this->adminRouteUri('fetch'), [
             'current' => 1,
             'pageSize' => 10,
             'distributor_only' => true,
         ])->assertOk()
+            ->assertJsonPath('data.0.customer_name', '渠道客户')
             ->assertJsonPath('data.0.distributor_name', '华东渠道')
             ->assertJsonPath('data.0.distributor_email', $target->email);
         $this->postJson('/' . $this->adminRouteUri('detail'), ['id' => $order->id])
             ->assertOk()
+            ->assertJsonPath('data.customer_name', '渠道客户')
             ->assertJsonPath('data.distributor_name', '华东渠道');
 
         $this->postJson($updateUri, [
@@ -586,7 +632,7 @@ class DistributorOrderTest extends TestCase
         $sheetXml = (string) $archive->getFromName('xl/worksheets/sheet1.xml');
         $archive->close();
         $this->assertStringContainsString('numFmtId="2"', $styles);
-        $this->assertStringContainsString('<autoFilter ref="A1:F', $sheetXml);
+        $this->assertStringContainsString('<autoFilter ref="A1:G', $sheetXml);
         $this->assertStringContainsString('state="frozen"', $sheetXml);
 
         $reader = new Reader();
@@ -638,6 +684,20 @@ class DistributorOrderTest extends TestCase
             ],
             'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
         ]);
+    }
+
+    private function createDistributorOrder(
+        User $distributor,
+        Plan $plan,
+        string $period,
+        string $customerName = '测试客户'
+    ): Order {
+        return app(DistributorOrderService::class)->create(
+            $distributor,
+            $plan,
+            $period,
+            $customerName
+        );
     }
 
     private function makeUser(string $email, bool $isDistributor = false, array $attributes = []): User

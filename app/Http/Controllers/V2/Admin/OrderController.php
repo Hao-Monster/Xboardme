@@ -67,6 +67,7 @@ class OrderController extends Controller
         $data['distributor_email'] = $distributorOrder?->distributor?->email;
         $data['distributor_name'] = $distributorOrder?->distributor?->distributor_name
             ?: $distributorOrder?->distributor?->email;
+        $data['customer_name'] = $distributorOrder?->customer_name;
         $data['delivery_status'] = $distributorOrder?->delivery_status;
         $data['settlement_status'] = $distributorOrder?->settlement_status;
         $data['settled_at'] = $distributorOrder?->settled_at;
@@ -99,7 +100,7 @@ class OrderController extends Controller
         $pageSize = $request->input('pageSize', 10);
         $orderModel = Order::with([
             'plan:id,name',
-            'distributorOrder:id,order_id,distributor_user_id,delivery_status,settlement_status,settled_at',
+            'distributorOrder:id,order_id,distributor_user_id,customer_name,delivery_status,settlement_status,settled_at',
             'distributorOrder.distributor:id,email,distributor_name',
         ]);
 
@@ -149,6 +150,7 @@ class OrderController extends Controller
             $orderArray['distributor_email'] = $distributorOrder?->distributor?->email;
             $orderArray['distributor_name'] = $distributorOrder?->distributor?->distributor_name
                 ?: $distributorOrder?->distributor?->email;
+            $orderArray['customer_name'] = $distributorOrder?->customer_name;
             $orderArray['delivery_status'] = $distributorOrder?->delivery_status;
             $orderArray['settlement_status'] = $distributorOrder?->settlement_status;
             $orderArray['settled_at'] = $distributorOrder?->settled_at;

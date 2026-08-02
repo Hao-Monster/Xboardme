@@ -189,6 +189,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
         data: [{
           id: 99,
           trade_no: 'DIST-ORDER-1',
+          customer_name: '终端客户甲',
           created_at: 1785580800,
           distributor_email: 'dealer@example.com',
           distributor_name: '华东渠道',
@@ -249,6 +250,8 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(host.innerHTML, /华东渠道/);
   assert.doesNotMatch(host.innerHTML, /dealer@example\.com/);
   assert.match(host.innerHTML, /DIST-ORDER-1/);
+  assert.match(host.innerHTML, /用户名称/);
+  assert.match(host.innerHTML, /终端客户甲/);
 
   const change = host.listeners.get('change')[0];
   const click = host.listeners.get('click')[0];
@@ -310,4 +313,5 @@ test('admin order page exposes distributor filters, summary and settlement actio
   });
   assert.match(source, /data-distributor-name/);
   assert.match(source, /maxlength="100"/);
+  assert.match(source, /<dt>用户名称<\/dt><dd>\$\{escapeHtml\(order\.customer_name \|\| '-'\)\}<\/dd>/);
 });

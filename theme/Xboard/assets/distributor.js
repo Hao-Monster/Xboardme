@@ -34,6 +34,8 @@
       done: '已添加成功', closeAgain: '再次点击确认关闭', closeWarning: '请确保节点已经可用，关闭之后无法再次获取。',
       claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
       delivery: '交付状态', settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
+      customerName: '用户名称', customerNamePlaceholder: '请输入便于售后识别的用户名称',
+      customerNameRequired: '为了售后方便，请输入备注清楚用户',
       entitlement: '订阅权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
       expiresAt: '到期时间', speedLimit: '限速', deviceLimit: '设备限制', permanent: '长期有效', unlimited: '不限',
       inviteUsers: '已邀请用户', validCommission: '有效佣金', pendingCommission: '确认中佣金',
@@ -60,6 +62,8 @@
       done: 'Added successfully', closeAgain: 'Click again to close', closeWarning: 'Make sure the nodes work. The QR cannot be recovered after closing.',
       claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
       delivery: 'Delivery', settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
+      customerName: 'Customer name', customerNamePlaceholder: 'Enter a name for after-sales identification',
+      customerNameRequired: 'Enter a clear customer name for after-sales support.',
       entitlement: 'Subscription entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
       expiresAt: 'Expires at', speedLimit: 'Speed limit', deviceLimit: 'Device limit', permanent: 'Never expires', unlimited: 'Unlimited',
       inviteUsers: 'Invited users', validCommission: 'Valid commission', pendingCommission: 'Pending commission',
@@ -391,18 +395,26 @@
     const plan = state.plans.find((item) => String(item.id) === String(planId));
     const period = state.selectedPeriods[planId];
     if (!plan || !period || Number(plan[period]) <= 0) return;
-    state.modal = { type: 'purchase', planId, planName, period, periodLabel: `${periodName(period)} · ${money(plan[period])}`, price: plan[period] };
+    state.modal = { type: 'purchase', planId, planName, period, periodLabel: `${periodName(period)} · ${money(plan[period])}`, price: plan[period], customerName: '' };
     renderModal();
   }
 
   async function submitPurchase() {
     const modal = state.modal;
     if (!modal || modal.type !== 'purchase') return;
+    const customerNameInput = document.getElementById('dist-customer-name');
+    const customerName = String(customerNameInput?.value || '').trim();
+    if (!customerName) {
+      toast(t('customerNameRequired'), 'error');
+      customerNameInput?.focus();
+      return;
+    }
+    modal.customerName = customerName;
     const button = document.querySelector('[data-modal-action="confirm-purchase"]');
     if (button) button.disabled = true;
     try {
       const tradeNo = dataOf(await api('/user/order/save', {
-        method: 'POST', data: { plan_id: modal.planId, period: modal.period },
+        method: 'POST', data: { plan_id: modal.planId, period: modal.period, customer_name: customerName },
       }));
       await openDelivery(tradeNo);
     } catch (error) {
@@ -419,7 +431,7 @@
       const delivery = order.delivery_status === 0 ? t('pending') : order.delivery_status === 1 ? t('claimed') : t('closed');
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
-      const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="7"><div><strong>${t('entitlement')}</strong><dl>
+      const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
         <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
@@ -430,6 +442,7 @@
       </dl></div></td></tr>` : '';
       return `<tr>
         <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
+        <td>${escapeHtml(order.customer_name || '-')}</td>
         <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
         <td><span class="dist-badge delivery-${order.delivery_status}">${delivery}</span></td>
@@ -439,8 +452,8 @@
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
       <div class="dist-order-toolbar"><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
-      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('delivery')}</th><th>${t('settlement')}</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="7" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
+      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('delivery')}</th><th>${t('settlement')}</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="8" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
   }
 
   function periodLabel(period) {
@@ -501,6 +514,7 @@
       const m = state.modal;
       root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${t('confirm')}</h2>
         <dl><div><dt>${t('plan')}</dt><dd>${escapeHtml(m.planName)}</dd></div><div><dt>${t('period')}</dt><dd>${escapeHtml(m.periodLabel)}</dd></div><div><dt>${t('original')}</dt><dd>${money(m.price)}</dd></div><div><dt>${t('status')}</dt><dd class="dist-free">${t('free')}</dd></div></dl>
+        <label class="dist-customer-name" for="dist-customer-name"><span>${t('customerName')} <b>*</b></span><input id="dist-customer-name" type="text" maxlength="64" autocomplete="off" value="${escapeHtml(m.customerName || '')}" placeholder="${t('customerNamePlaceholder')}"></label>
         <div class="dist-modal-actions"><button data-modal-action="cancel">${t('cancel')}</button><button class="primary" data-modal-action="confirm-purchase">${t('confirm')}</button></div></section></div>`;
       return;
     }

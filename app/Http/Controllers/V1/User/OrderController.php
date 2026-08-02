@@ -30,7 +30,7 @@ class OrderController extends Controller
         ]);
         $orders = Order::with([
             'plan',
-            'distributorOrder:id,order_id,subscriber_user_id,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
+            'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
             'distributorOrder.subscriber:id,plan_id,transfer_enable,u,d,expired_at,speed_limit,device_limit',
         ])
             ->where('user_id', $request->user()->id)
@@ -72,7 +72,7 @@ class OrderController extends Controller
         $order = Order::with([
             'payment',
             'plan',
-            'distributorOrder:id,order_id,subscriber_user_id,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
+            'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,claimed_at,closed_at',
             'distributorOrder.subscriber:id,plan_id,transfer_enable,u,d,expired_at,speed_limit,device_limit',
         ])
             ->where('user_id', $request->user()->id)
@@ -110,7 +110,8 @@ class OrderController extends Controller
             $order = app(DistributorOrderService::class)->create(
                 $user,
                 $plan,
-                $request->input('period')
+                $request->input('period'),
+                $request->input('customer_name')
             );
 
             return $this->success($order->trade_no);

@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $id
  * @property int $order_id
  * @property int $distributor_user_id
+ * @property string|null $customer_name
  * @property int $subscriber_user_id
  * @property string|null $claim_token
  * @property string $claim_token_hash

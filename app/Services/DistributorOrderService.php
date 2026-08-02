@@ -19,8 +19,16 @@ use BaconQrCode\Writer;
 
 class DistributorOrderService
 {
-    public function create(User $distributor, Plan $plan, string $period): Order
+    public function create(User $distributor, Plan $plan, string $period, string $customerName): Order
     {
+        $customerName = trim($customerName);
+        if ($customerName === '') {
+            throw new ApiException('为了售后方便，请输入备注清楚用户', 422);
+        }
+        if (mb_strlen($customerName) > 64) {
+            throw new ApiException('用户名称不能超过64个字符', 422);
+        }
+
         if (!$distributor->is_distributor) {
             throw new ApiException('当前账号不是可用的分销商账号', 403);
         }
@@ -28,7 +36,7 @@ class DistributorOrderService
         (new PlanService($plan))->validateDistributorPurchase($period);
         HookManager::call('order.create.before', [$distributor, $plan, $period, null]);
 
-        $order = DB::transaction(function () use ($distributor, $plan, $period) {
+        $order = DB::transaction(function () use ($distributor, $plan, $period, $customerName) {
             $lockedDistributor = User::lockForUpdate()->find($distributor->id);
             if (!$lockedDistributor?->is_distributor || $lockedDistributor->banned) {
                 throw new ApiException('当前分销商账号不可用', 403);
@@ -75,6 +83,7 @@ class DistributorOrderService
             DistributorOrder::create([
                 'order_id' => $order->id,
                 'distributor_user_id' => $lockedDistributor->id,
+                'customer_name' => $customerName,
                 'subscriber_user_id' => $subscriber->id,
                 'claim_token' => $claimToken,
                 'claim_token_hash' => hash('sha256', $claimToken),

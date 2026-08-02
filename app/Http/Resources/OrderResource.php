@@ -37,6 +37,7 @@ class OrderResource extends JsonResource
             ...$data,
             'period' => PlanService::getLegacyPeriod((string)$this->period),
             'is_distributor_order' => $distributorOrder !== null,
+            'customer_name' => $distributorOrder?->customer_name,
             'payment_label' => $distributorOrder ? '分销免支付' : null,
             'delivery_status' => $distributorOrder?->delivery_status,
             'settlement_status' => $distributorOrder?->settlement_status,

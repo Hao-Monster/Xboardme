@@ -21,11 +21,11 @@ class DistributorOrderExportService
     private const CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     private const ADMIN_HEADERS = [
-        '订单号', '分销商', '套餐', '原价', '交付状态', '结算状态',
+        '订单号', '用户名称', '分销商', '套餐', '原价', '交付状态', '结算状态',
     ];
 
     private const DISTRIBUTOR_HEADERS = [
-        '订单号', '订阅计划', '周期', '订单金额', '交付状态', '结算状态',
+        '订单号', '用户名称', '订阅计划', '周期', '订单金额', '交付状态', '结算状态',
     ];
 
     public function downloadForAdmin(?int $distributorUserId, ?int $settlementStatus): BinaryFileResponse
@@ -43,6 +43,7 @@ class DistributorOrderExportService
             self::ADMIN_HEADERS,
             fn (object $order): array => [
                 (string) $order->trade_no,
+                (string) ($order->customer_name ?: '-'),
                 (string) ($order->distributor_name ?: $order->distributor_email),
                 (string) ($order->plan_name ?: '-'),
                 $this->yuan($order->total_amount),
@@ -67,6 +68,7 @@ class DistributorOrderExportService
             self::DISTRIBUTOR_HEADERS,
             fn (object $order): array => [
                 (string) $order->trade_no,
+                (string) ($order->customer_name ?: '-'),
                 (string) ($order->plan_name ?: '-'),
                 $this->periodLabel((string) $order->period),
                 $this->yuan($order->total_amount),
@@ -90,6 +92,7 @@ class DistributorOrderExportService
                 'v2_order.period',
                 'v2_order.total_amount',
                 'v2_order.created_at',
+                'v2_distributor_order.customer_name',
                 'distributor.email as distributor_email',
                 'distributor.distributor_name as distributor_name',
                 'v2_plan.name as plan_name',
@@ -122,9 +125,10 @@ class DistributorOrderExportService
             $sheet->setName('分销订单');
             $sheet->setSheetView((new SheetView())->setFreezeRow(2));
             $sheet->setColumnWidth(28, 1);
-            $sheet->setColumnWidth(28, 2);
-            $sheet->setColumnWidth(24, 3);
-            $sheet->setColumnWidth(14, 4, 5, 6);
+            $sheet->setColumnWidth(22, 2);
+            $sheet->setColumnWidth(28, 3);
+            $sheet->setColumnWidth(24, 4);
+            $sheet->setColumnWidth(14, 5, 6, 7);
 
             $headerStyle = (new Style())
                 ->setFontBold()
@@ -138,12 +142,12 @@ class DistributorOrderExportService
                 $writer->addRow(Row::fromValuesWithStyles(
                     $rowMapper($order),
                     null,
-                    [3 => $amountStyle]
+                    [4 => $amountStyle]
                 ));
                 ++$dataRows;
             }
 
-            $sheet->setAutoFilter(new AutoFilter(0, 1, 5, $dataRows + 1));
+            $sheet->setAutoFilter(new AutoFilter(0, 1, 6, $dataRows + 1));
             $writer->close();
         } catch (Throwable $exception) {
             $writer->close();
