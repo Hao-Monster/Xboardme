@@ -46,6 +46,18 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST"
           trap 'pkill -f "17001:127.0.0.1:7001" || true' EXIT
 
+          tunnel_ready=0
+          for attempt in $(seq 1 10); do
+            if curl --silent --show-error \
+              --output /dev/null --connect-timeout 2 --max-time 3 \
+              'http://127.0.0.1:17001/'; then
+              tunnel_ready=1
+              break
+            fi
+            sleep 2
+          done
+          test "$tunnel_ready" = '1'
+
           login_status=$(curl --silent --show-error \
             --output login.json --write-out '%{http_code}' \
             --request POST 'http://127.0.0.1:17001/api/v1/passport/auth/login' \
