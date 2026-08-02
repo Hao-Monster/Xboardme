@@ -242,11 +242,11 @@ class DistributorOrderTest extends TestCase
         $fetchUri = '/' . $this->adminRouteUri('fetch');
 
         foreach ([
-            substr($secondOrder->trade_no, -8) => $secondOrder->trade_no,
-            '链接查询' => $firstOrder->trade_no,
-            $subscribeUrl => $firstOrder->trade_no,
-            $firstDelivery->subscriber->token => $firstOrder->trade_no,
-        ] as $search => $expectedTradeNo) {
+            [substr($secondOrder->trade_no, -8), $secondOrder->trade_no],
+            ['链接查询', $firstOrder->trade_no],
+            [$subscribeUrl, $firstOrder->trade_no],
+            [$firstDelivery->subscriber->token, $firstOrder->trade_no],
+        ] as [$search, $expectedTradeNo]) {
             $this->postJson($fetchUri, [
                 'current' => 1,
                 'pageSize' => 20,
