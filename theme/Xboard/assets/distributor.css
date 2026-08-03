@@ -35,6 +35,7 @@ html.distributor-mode, html.distributor-mode body { margin:0; background:var(--d
 .dist-plan-filters button:hover,.dist-plan-filters button.active { border-color:var(--dist-primary); color:var(--dist-primary); background:var(--dist-primary-soft); }
 .dist-plan-filters button.active { font-weight:750; }
 .dist-plan-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(410px,1fr)); gap:22px; align-items:stretch; }
+@media (min-width:901px) { .dist-plan-grid>.dist-plan-card:only-child { width:min(680px,100%); justify-self:start; } }
 .dist-plan-card,.dist-panel,.dist-table-wrap,.dist-stat-card { background:var(--dist-panel); border:1px solid var(--dist-border); border-radius:13px; box-shadow:0 8px 28px rgba(15,23,42,.04); }
 .dist-plan-card { position:relative; overflow:hidden; display:flex; flex-direction:column; border-radius:16px; transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease; }
 .dist-plan-card:hover { transform:translateY(-2px); border-color:color-mix(in srgb,var(--dist-primary) 38%,var(--dist-border)); box-shadow:0 16px 38px rgba(15,23,42,.08); }

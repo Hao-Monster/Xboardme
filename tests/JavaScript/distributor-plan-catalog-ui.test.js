@@ -111,3 +111,8 @@ test('mobile catalog uses compact spacing without changing desktop defaults', ()
   assert.match(compact, /\.dist-topbar\.has-promo \{ height:64px; \}/);
   assert.match(styles, /\.dist-content \{ max-width:1420px; margin:0 auto; padding:36px; \}/);
 });
+
+test('a single desktop plan keeps a readable card width while mobile remains fluid', () => {
+  assert.match(styles, /@media \(min-width:901px\) \{ \.dist-plan-grid>\.dist-plan-card:only-child \{ width:min\(680px,100%\); justify-self:start; \} \}/);
+  assert.match(styles, /@media \(max-width:560px\) \{[^\n]*\.dist-plan-grid \{ grid-template-columns:1fr; \}/);
+});
