@@ -86,6 +86,13 @@ jobs:
             'http://127.0.0.1:17001/api/v1/user/order/fetch')
           test "$orders_status" = '200'
 
+          knowledge_status=$(curl --silent --show-error \
+            --output knowledge.json --write-out '%{http_code}' \
+            --header "Authorization: $auth_data" \
+            'http://127.0.0.1:17001/api/v1/user/knowledge/fetch?language=zh-CN')
+          test "$knowledge_status" = '200'
+          jq -e '.status == "success"' knowledge.json >/dev/null
+
           order_count=$(jq '.data | length' orders.json)
           export_status=$(curl --silent --show-error \
             --dump-header export.headers \

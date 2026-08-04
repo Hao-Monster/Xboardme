@@ -11,6 +11,7 @@ use App\Services\Plugin\HookManager;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 
 class KnowledgeController extends Controller
 {
@@ -27,6 +28,7 @@ class KnowledgeController extends Controller
             'id' => 'nullable|sometimes|integer|min:1',
             'language' => 'nullable|sometimes|string|max:10',
             'keyword' => 'nullable|sometimes|string|max:255',
+            'render' => 'nullable|sometimes|in:html',
         ]);
 
         return $request->input('id')
@@ -46,6 +48,12 @@ class KnowledgeController extends Controller
 
         $knowledge = $knowledge->toArray();
         $knowledge = $this->processKnowledgeContent($knowledge, $request->user());
+        if ($request->input('render') === 'html') {
+            $knowledge['body'] = Str::markdown($knowledge['body'] ?? '', [
+                'html_input' => 'allow',
+                'allow_unsafe_links' => false,
+            ]);
+        }
 
         return $this->success(KnowledgeResource::make($knowledge));
     }

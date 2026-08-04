@@ -20,6 +20,7 @@ class DistributorAccess
         'api/v1/user/plan/fetch',
         'api/v1/user/order/*',
         'api/v1/user/invite/*',
+        'api/v1/user/knowledge/*',
         'api/v1/user/notice/fetch',
         'api/v1/user/comm/config',
         'api/v1/user/distributor/*',

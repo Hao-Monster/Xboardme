@@ -7,6 +7,7 @@ use App\Http\Controllers\V2\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\V2\Admin\UserController as AdminUserController;
 use App\Models\DistributorOrder;
 use App\Models\DistributorHwidDevice;
+use App\Models\Knowledge;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Server;
@@ -372,6 +373,35 @@ class DistributorOrderTest extends TestCase
         $this->assertArrayNotHasKey('subscriber_user_id', $resource['subscription_entitlement']);
         $this->assertArrayNotHasKey('token', $resource['subscription_entitlement']);
         $this->assertArrayNotHasKey('uuid', $resource['subscription_entitlement']);
+    }
+
+    public function test_distributor_can_read_public_knowledge_without_unlocking_subscription_only_content(): void
+    {
+        $distributor = $this->makeUser('dealer-docs@example.com', true);
+        $knowledge = Knowledge::create([
+            'language' => 'zh-CN',
+            'category' => '使用文档',
+            'title' => '快速开始',
+            'body' => "# 快速开始\n\n公开内容\n\n<!--access start-->订阅用户专属内容<!--access end-->",
+            'sort' => 1,
+            'show' => true,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
+        Sanctum::actingAs($distributor);
+
+        $list = $this->getJson('/api/v1/user/knowledge/fetch?language=zh-CN');
+        $list->assertOk();
+        $this->assertSame('快速开始', $list->json('data.使用文档.0.title'));
+
+        $detail = $this->getJson('/api/v1/user/knowledge/fetch?id=' . $knowledge->id . '&language=zh-CN&render=html');
+        $detail->assertOk();
+        $body = (string) $detail->json('data.body');
+        $this->assertStringContainsString('<h1>快速开始</h1>', $body);
+        $this->assertStringContainsString('公开内容', $body);
+        $this->assertStringNotContainsString('订阅用户专属内容', $body);
+
+        $this->getJson('/api/v1/user/getSubscribe')->assertForbidden();
     }
 
     public function test_distributor_order_fetch_exposes_read_only_entitlement_without_credentials(): void

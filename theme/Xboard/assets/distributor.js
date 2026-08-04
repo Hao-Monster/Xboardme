@@ -17,7 +17,7 @@
   ];
   const COPY = {
     'zh-CN': {
-      buy: '购买订阅', orders: '我的订单', invite: '我的邀请', logout: '退出登录',
+      buy: '购买订阅', orders: '我的订单', invite: '我的邀请', knowledge: '使用文档', logout: '退出登录',
       title: '分销订阅中心', subtitle: '每个订单生成一份独立订阅，客户扫码领取后不可再次领取。',
       buyNow: '立即下单', original: '原价', free: '分销免支付', confirm: '确认下单', cancel: '取消',
       allPlans: '全部套餐', highTraffic: '大流量', unlimitedSpeed: '不限速', unlimitedDevices: '不限设备',
@@ -45,9 +45,11 @@
       success: '操作成功', language: '语言', dark: '深色模式', light: '浅色模式', account: '账号',
       settlementFilter: '结算状态', allSettlements: '全部', exportExcel: '导出 Excel', exportSuccess: 'Excel 导出成功',
       orderSearchPlaceholder: '输入订单号或用户名称查询', search: '查询', clear: '清空',
+      knowledgeSubtitle: '查看产品使用方法与常见问题。', knowledgeSearchPlaceholder: '搜索使用文档',
+      lastUpdated: '最后更新', noArticles: '暂无使用文档',
     },
     'en-US': {
-      buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', logout: 'Sign out',
+      buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', knowledge: 'Documentation', logout: 'Sign out',
       title: 'Distributor Center', subtitle: 'Each order creates an independent subscription that can be claimed once.',
       buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', confirm: 'Confirm', cancel: 'Cancel',
       allPlans: 'All plans', highTraffic: 'High traffic', unlimitedSpeed: 'Unlimited speed', unlimitedDevices: 'Unlimited devices',
@@ -76,6 +78,8 @@
       language: 'Language', dark: 'Dark mode', light: 'Light mode', account: 'Account',
       settlementFilter: 'Settlement', allSettlements: 'All', exportExcel: 'Export Excel', exportSuccess: 'Excel exported',
       orderSearchPlaceholder: 'Search by order or customer name', search: 'Search', clear: 'Clear',
+      knowledgeSubtitle: 'Browse product guides and frequently asked questions.', knowledgeSearchPlaceholder: 'Search documentation',
+      lastUpdated: 'Last updated', noArticles: 'No documentation available',
     },
   };
 
@@ -90,6 +94,7 @@
     poller: null,
     orderSettlementStatus: '',
     orderSearch: '',
+    knowledgeSearch: '',
     plans: [],
     planFilter: 'all',
     selectedPeriods: {},
@@ -269,7 +274,7 @@
 
   function currentPage() {
     const path = (window.location.hash || '#/plan').replace(/^#/, '').split('?')[0];
-    return ['/plan', '/order', '/invite'].includes(path) ? path : '/plan';
+    return ['/plan', '/order', '/invite', '/knowledge'].includes(path) ? path : '/plan';
   }
 
   function navigate(path) {
@@ -291,6 +296,7 @@
             <button data-nav="/plan" class="${page === '/plan' ? 'active' : ''}"><span>▣</span>${t('buy')}</button>
             <button data-nav="/order" class="${page === '/order' ? 'active' : ''}"><span>☷</span>${t('orders')}</button>
             <button data-nav="/invite" class="${page === '/invite' ? 'active' : ''}"><span>♧</span>${t('invite')}</button>
+            <button data-nav="/knowledge" class="${page === '/knowledge' ? 'active' : ''}"><span>▤</span>${t('knowledge')}</button>
           </nav>
         </aside>
         <section class="dist-main">
@@ -329,6 +335,7 @@
     try {
       if (page === '/order') await renderOrders();
       else if (page === '/invite') await renderInvite();
+      else if (page === '/knowledge') await renderKnowledge();
       else await renderPlans();
     } catch (error) {
       setContent(`<div class="dist-error"><h2>${escapeHtml(error.message)}</h2><button data-action="retry">${t('loading')}</button></div>`);
@@ -491,6 +498,29 @@
       <section class="dist-panel"><h2>${t('commissionHistory')}</h2><div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('amount')}</th><th>${t('validCommission')}</th><th>${t('created')}</th></tr></thead><tbody>${historyRows || `<tr><td colspan="4" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div></section>`);
   }
 
+  async function renderKnowledge() {
+    const params = new URLSearchParams({ language: state.locale });
+    if (state.knowledgeSearch) params.set('keyword', state.knowledgeSearch);
+    const grouped = dataOf(await api(`/user/knowledge/fetch?${params}`)) || {};
+    const categories = Object.entries(grouped).map(([category, articles]) => {
+      const items = (Array.isArray(articles) ? articles : []).map((article) => `<button type="button" class="dist-knowledge-item" data-knowledge-id="${escapeHtml(article.id)}">
+        <span><strong>${escapeHtml(article.title)}</strong><small>${t('lastUpdated')}：${formatTime(article.updated_at)}</small></span><b>›</b>
+      </button>`).join('');
+      return items ? `<section class="dist-knowledge-category"><h2>${escapeHtml(category)}</h2><div class="dist-knowledge-list">${items}</div></section>` : '';
+    }).join('');
+    setContent(`<section class="dist-page-head"><h1>${t('knowledge')}</h1><p>${t('knowledgeSubtitle')}</p></section>
+      <div class="dist-knowledge-toolbar"><input id="dist-knowledge-search" type="search" maxlength="255" value="${escapeHtml(state.knowledgeSearch)}" placeholder="${t('knowledgeSearchPlaceholder')}"><button data-action="search-knowledge">${t('search')}</button><button class="secondary" data-action="clear-knowledge-search" ${state.knowledgeSearch ? '' : 'disabled'}>${t('clear')}</button></div>
+      <div class="dist-knowledge-groups">${categories || `<div class="dist-panel dist-empty">${t('noArticles')}</div>`}</div>`);
+  }
+
+  async function openKnowledge(id) {
+    const params = new URLSearchParams({ id, language: state.locale, render: 'html' });
+    const article = dataOf(await api(`/user/knowledge/fetch?${params}`));
+    if (!article) throw new Error(t('noArticles'));
+    state.modal = { type: 'knowledge', article };
+    renderModal();
+  }
+
   async function openDelivery(tradeNo) {
     const delivery = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(tradeNo)}`));
     state.modal = { type: 'delivery', delivery };
@@ -523,6 +553,11 @@
         <dl><div><dt>${t('plan')}</dt><dd>${escapeHtml(m.planName)}</dd></div><div><dt>${t('period')}</dt><dd>${escapeHtml(m.periodLabel)}</dd></div><div><dt>${t('original')}</dt><dd>${money(m.price)}</dd></div><div><dt>${t('status')}</dt><dd class="dist-free">${t('free')}</dd></div></dl>
         <label class="dist-customer-name" for="dist-customer-name"><span>${t('customerName')} <b>*</b></span><input id="dist-customer-name" type="text" maxlength="64" autocomplete="off" value="${escapeHtml(m.customerName || '')}" placeholder="${t('customerNamePlaceholder')}"></label>
         <div class="dist-modal-actions"><button data-modal-action="cancel">${t('cancel')}</button><button class="primary" data-modal-action="confirm-purchase">${t('confirm')}</button></div></section></div>`;
+      return;
+    }
+    if (state.modal.type === 'knowledge') {
+      const article = state.modal.article;
+      root.innerHTML = `<div class="dist-modal-backdrop"><article class="dist-modal dist-knowledge-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${escapeHtml(article.title)}</h2><div class="dist-knowledge-updated">${t('lastUpdated')}：${formatTime(article.updated_at)}</div><div class="dist-knowledge-body">${article.body || ''}</div></article></div>`;
       return;
     }
     const delivery = state.modal.delivery;
@@ -624,6 +659,8 @@
     if (buy) { confirmPurchase(buy.dataset.buy, buy.dataset.name); return; }
     const delivery = target.closest('[data-delivery]');
     if (delivery) { try { await openDelivery(delivery.dataset.delivery); } catch (e) { toast(e.message, 'error'); } return; }
+    const knowledge = target.closest('[data-knowledge-id]');
+    if (knowledge) { try { await openKnowledge(knowledge.dataset.knowledgeId); } catch (e) { toast(e.message, 'error'); } return; }
     const copy = target.closest('[data-copy]');
     if (copy) { await navigator.clipboard.writeText(copy.dataset.copy); toast(t('success')); return; }
     const action = target.closest('[data-action]')?.dataset.action;
@@ -633,6 +670,7 @@
     } else if (action === 'language') {
       state.locale = state.locale === 'zh-CN' ? 'en-US' : 'zh-CN';
       localStorage.setItem('xboard_distributor_locale', state.locale);
+      if (state.modal?.type === 'knowledge') closeModal();
       await renderPage();
       if (state.modal) renderModal();
     } else if (action === 'theme') {
@@ -650,6 +688,12 @@
     } else if (action === 'clear-order-search') {
       state.orderSearch = '';
       try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'search-knowledge') {
+      state.knowledgeSearch = document.getElementById('dist-knowledge-search')?.value.trim() || '';
+      try { await renderKnowledge(); } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'clear-knowledge-search') {
+      state.knowledgeSearch = '';
+      try { await renderKnowledge(); } catch (e) { toast(e.message, 'error'); }
     } else if (action === 'generate-code') {
       try { await api('/user/invite/save'); toast(t('success')); await renderInvite(); } catch (e) { toast(e.message, 'error'); }
     } else if (action === 'transfer') {
@@ -679,7 +723,7 @@
       document.body.appendChild(root);
     }
     document.documentElement.classList.add('distributor-mode');
-    if (!['/plan', '/order', '/invite'].includes(currentPage())) navigate('/plan');
+    if (!['/plan', '/order', '/invite', '/knowledge'].includes(currentPage())) navigate('/plan');
     renderPage();
     recoverPendingDelivery();
   }
@@ -703,10 +747,16 @@
     renderPage();
   });
   document.addEventListener('keydown', (event) => {
-    if (!state.active || event.key !== 'Enter' || event.target.id !== 'dist-order-search') return;
-    event.preventDefault();
-    state.orderSearch = event.target.value.trim();
-    renderOrders().catch((error) => toast(error.message, 'error'));
+    if (!state.active || event.key !== 'Enter') return;
+    if (event.target.id === 'dist-order-search') {
+      event.preventDefault();
+      state.orderSearch = event.target.value.trim();
+      renderOrders().catch((error) => toast(error.message, 'error'));
+    } else if (event.target.id === 'dist-knowledge-search') {
+      event.preventDefault();
+      state.knowledgeSearch = event.target.value.trim();
+      renderKnowledge().catch((error) => toast(error.message, 'error'));
+    }
   });
   window.addEventListener('hashchange', () => { if (state.active) renderPage(); });
   window.addEventListener('beforeunload', (event) => {
