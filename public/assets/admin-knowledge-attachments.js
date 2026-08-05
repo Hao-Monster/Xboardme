@@ -213,7 +213,7 @@
       const state = activeState();
       const button = event.target.closest?.('button');
       const dialog = state?.editor.closest?.('[role="dialog"]');
-      if (!state || !button || !dialog?.contains(button) || state.popover.contains(button)) return;
+      if (!state || !button || !dialog?.contains(button)) return;
       const isSubmit = button.type === 'submit' || /^(提交|确认|保存|Submit|Save)$/i.test(button.textContent.trim());
       if (!isSubmit) return;
       const error = saveGuardError(state);
@@ -254,27 +254,15 @@
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'button knowledge-attachment-trigger';
-    button.dataset.knowledgeAttachment = 'toggle';
-    button.title = '附件';
-    button.setAttribute('aria-label', '管理文章附件');
-    button.setAttribute('aria-haspopup', 'dialog');
-    button.setAttribute('aria-expanded', 'false');
+    button.dataset.knowledgeAttachment = 'choose';
+    button.title = '添加附件';
+    button.setAttribute('aria-label', '添加附件');
     button.innerHTML = `
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M8.5 12.5 15 6a3.54 3.54 0 0 1 5 5l-8.5 8.5a5 5 0 0 1-7.07-7.07L13 3.86a2.5 2.5 0 0 1 3.54 3.54L8 15.93a1 1 0 0 1-1.41-1.42l7.78-7.78" />
       </svg>
       <span data-knowledge-attachment="badge" hidden>0</span>`;
     return button;
-  }
-
-  function popoverMarkup() {
-    return `
-      <div class="knowledge-attachment-popover-head">
-        <div><strong>文章附件</strong><span>上传后自动插入正文</span></div>
-        <button type="button" data-knowledge-attachment="choose">添加附件</button>
-      </div>
-      <input type="file" multiple hidden data-knowledge-attachment="input">
-      <div class="knowledge-attachment-list" data-knowledge-attachment="list"></div>`;
   }
 
   function mountEditor(editor) {
@@ -286,21 +274,18 @@
 
     const trigger = toolbarButton();
     toolbar.appendChild(trigger);
-    const popover = document.createElement('section');
-    popover.className = 'knowledge-attachment-popover';
-    popover.hidden = true;
-    popover.setAttribute('role', 'dialog');
-    popover.setAttribute('aria-label', '文章附件');
-    popover.innerHTML = popoverMarkup();
-    editor.appendChild(popover);
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.hidden = true;
+    input.setAttribute('aria-label', '选择文章附件');
+    editor.appendChild(input);
 
     const state = {
       editor,
       textarea,
       trigger,
-      popover,
-      input: popover.querySelector('[data-knowledge-attachment="input"]'),
-      list: popover.querySelector('[data-knowledge-attachment="list"]'),
+      input,
       badge: trigger.querySelector('[data-knowledge-attachment="badge"]'),
       draftToken: createDraftToken(),
       knowledgeId: null,
@@ -323,18 +308,7 @@
   function bindEditor(state) {
     state.trigger.addEventListener('click', (event) => {
       event.preventDefault();
-      event.stopPropagation();
-      setPopoverOpen(state, state.popover.hidden);
-    });
-    state.popover.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      const action = event.target.closest('[data-knowledge-attachment]')?.dataset.knowledgeAttachment;
-      const itemId = event.target.closest('[data-item-id]')?.dataset.itemId;
-      if (action === 'choose') state.input.click();
-      if (action === 'retry' && itemId) retryUpload(state, itemId);
-      if (action === 'cancel' && itemId) await cancelUpload(state, itemId);
-      if (action === 'delete' && itemId) await deleteAttachment(state, itemId);
-      if (action === 'undo' && itemId) undoDelete(state, itemId);
+      state.input.click();
     });
     state.input.addEventListener('change', () => {
       enqueueFiles(state, state.input.files);
@@ -375,18 +349,8 @@
       enqueueFiles(state, event.dataTransfer.files, state.textarea.selectionEnd);
     });
     state.editor.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !state.popover.hidden) setPopoverOpen(state, false);
+      if (event.key === 'Escape') state.input.value = '';
     });
-    document.addEventListener('click', (event) => {
-      if (!state.editor.isConnected || state.popover.hidden) return;
-      if (!state.popover.contains(event.target) && !state.trigger.contains(event.target)) setPopoverOpen(state, false);
-    });
-  }
-
-  function setPopoverOpen(state, open) {
-    state.popover.hidden = !open;
-    state.trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open) render(state);
   }
 
   function hasDraggedFiles(dataTransfer) {
@@ -433,7 +397,6 @@
     });
     items.forEach((item) => state.items.set(item.id, item));
     insertMarkers(state, items.map((item) => item.marker), insertionOffset);
-    setPopoverOpen(state, true);
     render(state);
     pumpQueue();
   }
@@ -551,6 +514,7 @@
     if (currentKey) state.items.delete(currentKey);
     state.items.set(attachment.uuid, item);
     render(state);
+    ensurePreviewVisible(state);
     schedulePreview(state);
     toast(`${attachment.original_name} 已上传并插入正文`);
   }
@@ -694,7 +658,7 @@
     item.undoIndex = removal.index;
     setEditorValue(state, removal.body);
     render(state);
-    toast('附件将在提交文章后删除，可在提交前撤销');
+    toast('附件已从正文移除，保存文章后删除；可用编辑器撤销操作恢复');
   }
 
   function undoDelete(state, itemId) {
@@ -758,6 +722,13 @@
   function installPreviewObserver(state) {
     state.previewObserver = new MutationObserver(() => patchPreview(state));
     state.previewObserver.observe(state.editor, { childList: true, subtree: true });
+    state.editor.addEventListener('click', (event) => {
+      const button = event.target.closest?.('[data-knowledge-attachment-delete]');
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+      deleteAttachment(state, button.dataset.knowledgeAttachmentDelete);
+    });
     schedulePreview(state);
   }
 
@@ -786,11 +757,40 @@
       element.dataset.knowledgeAttachmentUuid = attachment.uuid;
       if (element.getAttribute(attribute) !== attachment.url) element.setAttribute(attribute, attachment.url);
       if (attribute === 'href') element.setAttribute('rel', 'noopener noreferrer');
+      installPreviewDeleteButton(element, attachment);
     });
   }
 
+  function installPreviewDeleteButton(element, attachment) {
+    let wrapper = element.closest('.knowledge-attachment-preview');
+    if (!wrapper) {
+      wrapper = document.createElement('span');
+      wrapper.className = 'knowledge-attachment-preview';
+      element.parentNode?.insertBefore(wrapper, element);
+      wrapper.appendChild(element);
+    }
+    wrapper.dataset.knowledgeAttachmentUuid = attachment.uuid;
+    wrapper.dataset.knowledgeAttachmentPlaceholder = attachment.placeholder;
+    if (wrapper.querySelector('[data-knowledge-attachment-delete]')) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'knowledge-attachment-preview-delete';
+    button.dataset.knowledgeAttachmentDelete = attachment.uuid;
+    button.setAttribute('aria-label', `删除附件 ${attachment.original_name}`);
+    button.textContent = '删除';
+    wrapper.appendChild(button);
+  }
+
+  function ensurePreviewVisible(state) {
+    const preview = state.editor.querySelector('.sec-html');
+    if (!preview?.classList.contains('in-visible')) return;
+    const splitButton = [...state.editor.querySelectorAll('.rc-md-navigation .button')]
+      .find((button) => button.querySelector('.rmel-icon-view-split') || /预览|view/i.test(button.title || button.getAttribute('aria-label') || ''));
+    splitButton?.click();
+    setTimeout(() => patchPreview(state), 0);
+  }
+
   function render(state) {
-    if (!state.list) return;
     const referenced = [...state.items.values()].filter((item) => (
       item.attachment?.placeholder && state.textarea.value.includes(item.attachment.placeholder)
     )).length;
@@ -799,69 +799,11 @@
     state.badge.textContent = String(badgeValue);
     state.badge.hidden = badgeValue < 1;
     state.trigger.classList.toggle('has-active-upload', active > 0);
-
-    state.list.replaceChildren();
-    if (!state.items.size) {
-      const empty = document.createElement('div');
-      empty.className = 'knowledge-attachment-empty';
-      empty.textContent = '尚未添加附件，也可以直接拖入文件或粘贴图片';
-      state.list.appendChild(empty);
-      return;
-    }
-    state.items.forEach((item, itemId) => {
-      const row = document.createElement('div');
-      row.className = `knowledge-attachment-item is-${item.status}`;
-      row.dataset.itemId = itemId;
-      const info = document.createElement('div');
-      info.className = 'knowledge-attachment-info';
-      const name = document.createElement('strong');
-      name.textContent = item.name;
-      const meta = document.createElement('span');
-      meta.textContent = `${formatBytes(item.size)} · ${statusLabel(item, state)}`;
-      info.append(name, meta);
-      if (item.status === 'uploading') {
-        const progress = document.createElement('div');
-        progress.className = 'knowledge-attachment-progress';
-        const bar = document.createElement('i');
-        bar.style.width = `${item.progress}%`;
-        progress.appendChild(bar);
-        info.appendChild(progress);
-      }
-      if (item.error) {
-        const error = document.createElement('em');
-        error.textContent = item.error;
-        info.appendChild(error);
-      }
-      const actions = document.createElement('div');
-      actions.className = 'knowledge-attachment-actions';
-      if (item.status === 'failed' && item.file) actions.appendChild(actionButton('重试', 'retry'));
-      if (item.status === 'pending-delete') actions.appendChild(actionButton('撤销', 'undo'));
-      else if (['queued', 'uploading', 'failed', 'cancelling'].includes(item.status)) {
-        actions.appendChild(actionButton(item.status === 'cancelling' ? '取消中' : '取消', 'cancel', true, item.status === 'cancelling'));
-      } else actions.appendChild(actionButton('删除', 'delete', true));
-      row.append(info, actions);
-      state.list.appendChild(row);
-    });
-  }
-
-  function actionButton(label, action, danger = false, disabled = false) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.knowledgeAttachment = action;
-    button.textContent = label;
-    button.disabled = disabled;
-    if (danger) button.className = 'is-danger';
-    return button;
-  }
-
-  function statusLabel(item, state) {
-    if (item.status === 'queued') return '等待上传';
-    if (item.status === 'uploading') return `上传中 ${item.progress}%`;
-    if (item.status === 'cancelling') return '正在取消';
-    if (item.status === 'failed') return '上传失败';
-    if (item.status === 'pending-delete') return '待提交删除';
-    if (item.attachment && !state.textarea.value.includes(item.attachment.placeholder)) return '未在正文中引用';
-    return item.attachment?.mime_type || '已插入正文';
+    const failed = [...state.items.values()].filter((item) => item.status === 'failed').length;
+    state.trigger.title = failed
+      ? `${failed} 个附件上传失败，请重新选择文件上传`
+      : (active ? `${active} 个附件正在上传` : '添加附件');
+    state.trigger.setAttribute('aria-label', state.trigger.title);
   }
 
   function scan() {
@@ -874,7 +816,7 @@
       }
       const toolbar = state.editor.querySelector('.rc-md-navigation .button-wrap');
       if (toolbar && !state.trigger.isConnected) toolbar.appendChild(state.trigger);
-      if (!state.popover.isConnected) state.editor.appendChild(state.popover);
+      if (!state.input.isConnected) state.editor.appendChild(state.input);
     }
     if (!isKnowledgePage()) return;
     document.querySelectorAll(EDITOR_SELECTOR).forEach(mountEditor);
