@@ -391,6 +391,7 @@ class KnowledgeAttachmentUploadService
             'size' => $attachment->size,
             'sha256' => $attachment->sha256,
             'status' => $attachment->status,
+            'placeholder' => $attachment->placeholder(),
             'created_at' => (int) $attachment->getRawOriginal('created_at'),
         ];
     }

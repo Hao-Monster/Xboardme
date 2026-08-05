@@ -11,6 +11,7 @@ class KnowledgeAttachment extends Model
 {
     use SoftDeletes;
 
+    public const URI_PREFIX = 'knowledge-attachment://';
     public const STATUS_QUARANTINED = 'quarantined';
     public const STATUS_READY = 'ready';
     public const STATUS_REJECTED = 'rejected';
@@ -43,5 +44,10 @@ class KnowledgeAttachment extends Model
     public function uploader(): BelongsTo
     {
         return $this->belongsTo(User::class, 'uploader_user_id');
+    }
+
+    public function placeholder(): string
+    {
+        return self::URI_PREFIX . $this->uuid;
     }
 }

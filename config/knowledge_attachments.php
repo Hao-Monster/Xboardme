@@ -8,6 +8,7 @@ return [
     'signed_url_ttl_minutes' => (int) env('KNOWLEDGE_ATTACHMENT_SIGNED_URL_TTL', 120),
     'draft_ttl_hours' => (int) env('KNOWLEDGE_ATTACHMENT_DRAFT_TTL', 24),
     'trash_retention_days' => (int) env('KNOWLEDGE_ATTACHMENT_TRASH_RETENTION', 7),
+    'max_attachments_per_article' => (int) env('KNOWLEDGE_ATTACHMENT_MAX_PER_ARTICLE', 100),
     'directories' => [
         'files' => 'files',
         'temporary' => 'temporary',
@@ -26,4 +27,3 @@ return [
         'video/ogg',
     ],
 ];
-
