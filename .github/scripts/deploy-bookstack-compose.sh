@@ -16,6 +16,9 @@ MYSQL_ROOT_PASSWORD=$(openssl rand -hex 32)
 MYSQL_PASSWORD=$(openssl rand -hex 32)
 EOF
 fi
+if ! grep -q '^BOOKSTACK_APP_KEY=' "$ENV_FILE"; then
+  printf 'BOOKSTACK_APP_KEY=base64:%s\n' "$(openssl rand -base64 32 | tr -d '\n')" >> "$ENV_FILE"
+fi
 
 cat > "$COMPOSE_FILE" <<'EOF'
 services:
@@ -41,6 +44,7 @@ services:
       PGID: 1000
       TZ: Asia/Singapore
       APP_URL: https://docs.thinderbox.com
+      APP_KEY: ${BOOKSTACK_APP_KEY}
       DB_HOST: db
       DB_PORT: 3306
       DB_USERNAME: bookstack
