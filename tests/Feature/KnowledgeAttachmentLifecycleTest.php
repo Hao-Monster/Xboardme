@@ -45,7 +45,7 @@ class KnowledgeAttachmentLifecycleTest extends TestCase
             'body' => $body,
             'show' => true,
             'draft_token' => strtoupper($draftToken),
-        ])->assertOk()->assertJsonPath('data', true);
+        ])->assertOk()->assertJsonPath('data.id', 1);
 
         $knowledge = Knowledge::where('title', 'Attachment article')->firstOrFail();
         $this->assertSame($body, $knowledge->body);
