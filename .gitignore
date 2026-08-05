@@ -6,6 +6,7 @@
 /public/env.example.js
 *.user.ini
 /storage/*.key
+/storage/knowledge-attachments/
 /vendor
 .env
 .env.backup

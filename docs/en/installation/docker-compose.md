@@ -80,4 +80,5 @@ The container always runs `php artisan xboard:update` (migrate + plugin install 
 
 - If you need to use MySQL, please install it separately and redeploy
 - Code changes require service restart to take effect
-- You can configure Nginx reverse proxy to use port 80 
+- You can configure Nginx reverse proxy to use port 80
+- Knowledge-base files require private persistent storage. See [Knowledge attachment operations](knowledge-attachments.md) before enabling uploads in production.

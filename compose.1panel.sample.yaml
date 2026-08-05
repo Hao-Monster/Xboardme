@@ -23,11 +23,13 @@ services:
       - ./.docker/.data/:/www/.docker/.data
       - ./storage/logs:/www/storage/logs
       - ./storage/theme:/www/storage/theme
+      - ./storage/knowledge-attachments:/www/storage/app/knowledge-attachments
       - ./plugins:/www/plugins
       - redis-data:/data
     environment:
       - RESOURCE_PROFILE=balanced      # minimal | balanced | performance | auto
       - ENABLE_HORIZON=true
+      - KNOWLEDGE_ATTACHMENT_ROOT=${KNOWLEDGE_ATTACHMENT_ROOT:-/www/storage/app/knowledge-attachments}
       - docker=true
 
 networks:

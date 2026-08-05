@@ -45,6 +45,11 @@ jobs:
           node --check theme/Xboard/assets/distributor.js
           node --test tests/JavaScript/*.test.js
 
+      - name: Validate deployment scripts
+        run: |
+          sh -n .docker/entrypoint.sh
+          bash -n .github/scripts/deploy-xboard-compose.sh
+
   build:
     needs: verify
     runs-on: ubuntu-latest

@@ -30,12 +30,14 @@ services:
       - ./.docker/.data/:/www/.docker/.data
       - ./storage/logs:/www/storage/logs
       - ./storage/theme:/www/storage/theme
+      - ./storage/knowledge-attachments:/www/storage/app/knowledge-attachments
       - ./plugins:/www/plugins
     environment:
       docker: "true"
       ENABLE_CADDY: "false"
       ENABLE_HORIZON: "false"
       ENABLE_WS_SERVER: "false"
+      KNOWLEDGE_ATTACHMENT_ROOT: ${KNOWLEDGE_ATTACHMENT_ROOT:-/www/storage/app/knowledge-attachments}
 
   horizon:
     image: ghcr.io/cedar2025/xboard:latest
@@ -48,6 +50,7 @@ services:
       ENABLE_CADDY: "false"
       ENABLE_WEB: "false"
       ENABLE_WS_SERVER: "false"
+      KNOWLEDGE_ATTACHMENT_ROOT: ${KNOWLEDGE_ATTACHMENT_ROOT:-/www/storage/app/knowledge-attachments}
 
   ws-server:
     image: ghcr.io/cedar2025/xboard:latest
@@ -61,6 +64,7 @@ services:
       ENABLE_WEB: "false"
       ENABLE_HORIZON: "false"
       WS_HOST: "0.0.0.0"
+      KNOWLEDGE_ATTACHMENT_ROOT: ${KNOWLEDGE_ATTACHMENT_ROOT:-/www/storage/app/knowledge-attachments}
 
   redis:
     image: redis:7-alpine

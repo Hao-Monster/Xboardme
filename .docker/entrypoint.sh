@@ -25,6 +25,37 @@ fi
 export OCTANE_HOST OCTANE_PORT WS_HOST WS_PORT CADDY_LISTEN_PORT
 export OCTANE_INTERNAL_PORT="${OCTANE_PORT}"
 
+# Keep knowledge attachments on a private, writable filesystem. The directory
+# is mounted by the Compose templates and remains outside the public web root.
+: "${KNOWLEDGE_ATTACHMENT_ROOT:=/www/storage/app/knowledge-attachments}"
+case "${KNOWLEDGE_ATTACHMENT_ROOT}" in
+    /*) ;;
+    *) echo "[entrypoint] KNOWLEDGE_ATTACHMENT_ROOT must be an absolute path." >&2; exit 1 ;;
+esac
+case "${KNOWLEDGE_ATTACHMENT_ROOT}" in
+    /|/www|/www/storage|/www/storage/app)
+        echo "[entrypoint] Refusing unsafe KNOWLEDGE_ATTACHMENT_ROOT=${KNOWLEDGE_ATTACHMENT_ROOT}." >&2
+        exit 1
+        ;;
+esac
+mkdir -p "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
+         "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
+         "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
+chown www:www "${KNOWLEDGE_ATTACHMENT_ROOT}" \
+              "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
+              "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
+              "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
+chmod 0750 "${KNOWLEDGE_ATTACHMENT_ROOT}" \
+           "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
+           "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
+           "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
+if ! su-exec www test -r "${KNOWLEDGE_ATTACHMENT_ROOT}" || ! su-exec www test -w "${KNOWLEDGE_ATTACHMENT_ROOT}"; then
+    echo "[entrypoint] Knowledge attachment storage is not readable and writable by uid 1000." >&2
+    exit 1
+fi
+export KNOWLEDGE_ATTACHMENT_ROOT
+echo "[entrypoint] Knowledge attachment storage ready: ${KNOWLEDGE_ATTACHMENT_ROOT}"
+
 # ---------------------------------------------------------------------------
 # Auto-tune worker counts based on the host (CPU + memory).
 #
@@ -147,6 +178,9 @@ echo "[entrypoint] Starting services (caddy=${ENABLE_CADDY} web=${ENABLE_WEB} ho
 # Drop stale Octane/WorkerMan state files so the new master does not signal
 # PIDs left over from a previous container run (causes Swoole kill EPERM).
 rm -f /www/storage/logs/octane-server-state.json /www/storage/logs/xboard-ws-server.pid 2>/dev/null || true
-chown -R www:www /www 2>/dev/null || true
+for runtime_dir in /www/storage/logs /www/storage/framework /www/storage/theme /www/bootstrap/cache /www/plugins /www/.docker/.data; do
+    mkdir -p "$runtime_dir"
+    chown -R www:www "$runtime_dir" 2>/dev/null || true
+done
 chown redis:redis /data 2>/dev/null || true
 exec "$@"

@@ -116,6 +116,33 @@ if ((${#COMPOSE_FILES[@]} == 0)); then
   exit 1
 fi
 
+ATTACHMENT_DEST=/www/storage/app/knowledge-attachments
+ATTACHMENT_MOUNT=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/www/storage/app/knowledge-attachments"}}{{.Type}}|{{.Source}}|{{.Name}}{{end}}{{end}}' "$PRIMARY_CONTAINER")
+ATTACHMENT_NEEDS_REOWN=0
+if [[ -n "$ATTACHMENT_MOUNT" ]]; then
+  IFS='|' read -r attachment_mount_type attachment_mount_source attachment_mount_name <<< "$ATTACHMENT_MOUNT"
+  case "$attachment_mount_type" in
+    bind) ATTACHMENT_VOLUME_SOURCE=$attachment_mount_source ;;
+    volume) ATTACHMENT_VOLUME_SOURCE=$attachment_mount_name ;;
+    *) echo "Unsupported knowledge attachment mount type: $attachment_mount_type" >&2; exit 1 ;;
+  esac
+  echo "Reusing knowledge attachment storage: $attachment_mount_type $ATTACHMENT_VOLUME_SOURCE"
+else
+  ATTACHMENT_VOLUME_SOURCE="$WORKDIR/storage/knowledge-attachments"
+  mkdir -p "$ATTACHMENT_VOLUME_SOURCE"
+  chmod 750 "$ATTACHMENT_VOLUME_SOURCE"
+  if docker exec "$PRIMARY_CONTAINER" test -d "$ATTACHMENT_DEST"; then
+    echo "Migrating knowledge attachments from the current container into persistent storage..."
+    docker cp "$PRIMARY_CONTAINER:$ATTACHMENT_DEST/." "$ATTACHMENT_VOLUME_SOURCE/"
+  fi
+  ATTACHMENT_NEEDS_REOWN=1
+  echo "Created persistent knowledge attachment storage: $ATTACHMENT_VOLUME_SOURCE"
+fi
+if [[ -z "$ATTACHMENT_VOLUME_SOURCE" || "$ATTACHMENT_VOLUME_SOURCE" == *$'\n'* || "$ATTACHMENT_VOLUME_SOURCE" == *'"'* || "$ATTACHMENT_VOLUME_SOURCE" == *':'* || "$ATTACHMENT_VOLUME_SOURCE" == *'$'* ]]; then
+  echo "Unsafe knowledge attachment volume source: $ATTACHMENT_VOLUME_SOURCE" >&2
+  exit 1
+fi
+
 DEPLOY_DIR="$WORKDIR/.codex-deploy"
 BACKUP_DIR="$DEPLOY_DIR/backups"
 STATE_DIR="$DEPLOY_DIR/releases"
@@ -151,7 +178,7 @@ for service in "${SERVICES[@]}"; do
   rollback_images["$service"]=$rollback_tag
   printf 'SERVICE_%s=%q\n' "${service//[^A-Za-z0-9]/_}" "$rollback_tag" >> "$STATE_FILE"
 done
-printf 'DATABASE_BACKUP=%q\nDEPLOY_IMAGE=%q\n' "$BACKUP_TARGET" "$DEPLOY_IMAGE" >> "$STATE_FILE"
+printf 'DATABASE_BACKUP=%q\nDEPLOY_IMAGE=%q\nKNOWLEDGE_ATTACHMENT_VOLUME=%q\n' "$BACKUP_TARGET" "$DEPLOY_IMAGE" "$ATTACHMENT_VOLUME_SOURCE" >> "$STATE_FILE"
 
 write_override() {
   local mode=$1
@@ -164,6 +191,8 @@ write_override() {
       else
         echo "    image: $DEPLOY_IMAGE"
       fi
+      echo '    volumes:'
+      echo "      - \"$ATTACHMENT_VOLUME_SOURCE:$ATTACHMENT_DEST\""
     done
   } > "$OVERRIDE_FILE"
   chmod 600 "$OVERRIDE_FILE"
@@ -184,6 +213,11 @@ trap rollback_on_error EXIT
 
 echo "Pulling immutable image: $DEPLOY_IMAGE"
 docker pull "$DEPLOY_IMAGE"
+if ((ATTACHMENT_NEEDS_REOWN == 1)); then
+  echo "Normalizing migrated knowledge attachment ownership and permissions..."
+  docker run --rm --entrypoint sh -v "$ATTACHMENT_VOLUME_SOURCE:$ATTACHMENT_DEST" "$DEPLOY_IMAGE" -lc \
+    "mkdir -p '$ATTACHMENT_DEST/files' '$ATTACHMENT_DEST/temporary' '$ATTACHMENT_DEST/quarantine' && chown -R 1000:1000 '$ATTACHMENT_DEST' && find '$ATTACHMENT_DEST' -type d -exec chmod 0750 {} + && find '$ATTACHMENT_DEST' -type f -exec chmod 0640 {} +"
+fi
 write_override deploy
 deployment_started=1
 
