@@ -42,6 +42,7 @@ jobs:
         run: |
           node --check public/assets/admin-distributor.js
           node --check public/assets/admin-knowledge-attachments.js
+          node --check public/assets/admin-bookstack.js
           node --check theme/Xboard/assets/distributor.js
           node --test tests/JavaScript/*.test.js
 
@@ -213,9 +214,28 @@ jobs:
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker logout ghcr.io >/dev/null 2>&1 || true"
 
-  smoke-distributor:
+  deploy-bookstack:
     if: ${{ github.ref == 'refs/heads/codex/distributor' }}
     needs: deploy-distributor
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install BookStack companion service
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+          sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' < .github/scripts/deploy-bookstack-compose.sh
+
+  smoke-distributor:
+    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
+    needs: [deploy-distributor, deploy-bookstack]
     uses: ./.github/workflows/distributor-smoke.yml
     secrets: inherit
 

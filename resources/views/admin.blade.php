@@ -16,8 +16,10 @@
   </script>
   <link rel="stylesheet" href="/assets/admin-distributor.css?v={{ $version }}" />
   <link rel="stylesheet" href="/assets/admin-knowledge-attachments.css?v={{ $version }}" />
+  <link rel="stylesheet" href="/assets/admin-bookstack.css?v={{ $version }}" />
   <script defer src="/assets/admin-distributor.js?v={{ $version }}"></script>
   <script defer src="/assets/admin-knowledge-attachments.js?v={{ $version }}"></script>
+  <script defer src="/assets/admin-bookstack.js?v={{ $version }}"></script>
   @php
     $manifestPath = public_path('assets/admin/manifest.json');
     $manifest = file_exists($manifestPath) ? json_decode(file_get_contents($manifestPath), true) : null;

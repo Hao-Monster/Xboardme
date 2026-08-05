@@ -12,6 +12,11 @@ Route::get('/knowledge-attachments/{attachmentUuid}', [\App\Http\Controllers\Kno
     ->whereUuid('attachmentUuid')
     ->name('knowledge.attachments.read');
 
+Route::get('/knowledge/share/{token}', [\App\Http\Controllers\PublicKnowledgeShareController::class, 'show'])
+    ->where('token', '[A-Za-z0-9]{64}')
+    ->middleware('throttle:120,1')
+    ->name('knowledge.share');
+
 /*
 |--------------------------------------------------------------------------
 | Web Routes
