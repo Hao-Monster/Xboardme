@@ -5,6 +5,7 @@
 
   const tokenKey = 'XBOARD_ACCESS_TOKEN';
   let currentKnowledgeId = null;
+  let openAfterSave = false;
 
   function securePath() { return String(window.settings?.secure_path || '').replace(/^\/+|\/+$/g, ''); }
   function endpoint(path) { return `/api/v2/${securePath()}${path}`; }
@@ -26,6 +27,17 @@
       if (/\/knowledge\/fetch\?[^#]*\bid=\d+/.test(this.__bookStackUrl || '')) this.addEventListener('load', () => {
         try { const data = JSON.parse(this.responseText)?.data; if (data?.id) currentKnowledgeId = Number(data.id); } catch (_) {}
       });
+      if (/\/knowledge\/save(?:\?|$)/.test(this.__bookStackUrl || '')) this.addEventListener('load', async () => {
+        if (!openAfterSave || this.status < 200 || this.status >= 300) return;
+        openAfterSave = false;
+        try {
+          const id = Number(JSON.parse(this.responseText)?.data?.id);
+          if (!id) throw new Error('文章保存成功，但未取得文章标识');
+          currentKnowledgeId = id;
+          const page = await ensurePage(id);
+          window.open(page.edit_url, '_blank', 'noopener');
+        } catch (error) { toast(error.message || '无法打开 BookStack 编辑器', true); }
+      });
       return send.call(this, body);
     };
   }
@@ -35,19 +47,33 @@
       if (dialog.dataset.bookstackEnhanced) return;
       const editor = dialog.querySelector('.rc-md-editor');
       if (!editor) return;
+      if (/添加知识/.test(dialog.textContent || '')) currentKnowledgeId = null;
       dialog.dataset.bookstackEnhanced = '1';
       editor.style.display = 'none';
       const panel = document.createElement('section');
       panel.className = 'bookstack-editor-panel';
-      panel.innerHTML = '<strong>正文编辑</strong><p>正文、图片、视频和附件均由 BookStack 管理，支持直接拖入与粘贴。</p><button type="button" class="button bookstack-open-editor">打开 BookStack 编辑器</button><small>新文章请先提交分类、标题、语言等信息，再重新打开此窗口编辑正文。</small>';
+      panel.innerHTML = '<strong>正文编辑</strong><p>正文、图片、视频和附件均由 BookStack 管理，支持直接拖入与粘贴。</p><small>点击右下角“打开 BookStack 编辑器”即可保存基础信息并进入正文编辑。</small>';
       editor.parentNode.insertBefore(panel, editor);
-      panel.querySelector('button').addEventListener('click', async () => {
-        if (!currentKnowledgeId) { toast('请先提交文章基础信息，然后重新打开文章编辑正文。', true); return; }
-        const button = panel.querySelector('button'); button.disabled = true;
+      const submit = [...dialog.querySelectorAll('button')].find((button) => /^(提交|保存|Submit|Save)$/i.test(button.textContent.trim()));
+      if (!submit) return;
+      submit.textContent = '打开 BookStack 编辑器';
+      submit.addEventListener('click', async (event) => {
+        if (!currentKnowledgeId) {
+          openAfterSave = true;
+          const textarea = editor.querySelector('textarea');
+          if (textarea && !textarea.value.trim()) {
+            textarea.value = '<p>BookStack 正文由 BookStack 管理。</p>';
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          return;
+        }
+        event.preventDefault(); event.stopImmediatePropagation();
+        submit.disabled = true;
         try { const page = await ensurePage(currentKnowledgeId); window.open(page.edit_url, '_blank', 'noopener'); }
         catch (error) { toast(error.message || '打开 BookStack 失败', true); }
-        finally { button.disabled = false; }
-      });
+        finally { submit.disabled = false; }
+      }, true);
     });
   }
   installRequestObserver();

@@ -47,13 +47,15 @@ class KnowledgeController extends Controller
         $draftToken = $params['draft_token'] ?? null;
         $knowledgeData = Arr::except($params, ['id', 'draft_token']);
         $knowledgeData['body'] = trim((string) ($knowledgeData['body'] ?? '')) ?: '<p>BookStack 正文由 BookStack 管理。</p>';
+        $savedKnowledgeId = null;
 
         try {
             DB::transaction(function () use (
                 $knowledgeId,
                 $knowledgeData,
                 $draftToken,
-                $request
+                $request,
+                &$savedKnowledgeId
             ): void {
                 if ($knowledgeId) {
                     $knowledge = Knowledge::where('id', $knowledgeId)->lockForUpdate()->first();
@@ -72,6 +74,7 @@ class KnowledgeController extends Controller
                     (int) $request->user()->id,
                     $draftToken
                 );
+                $savedKnowledgeId = (int) $knowledge->id;
             }, 3);
         } catch (ApiException $exception) {
             throw $exception;
@@ -84,7 +87,7 @@ class KnowledgeController extends Controller
             throw new ApiException('知识文章保存失败，请稍后重试。', 500);
         }
 
-        return $this->success(true);
+        return $this->success(['id' => $savedKnowledgeId]);
     }
 
     public function show(Request $request)
