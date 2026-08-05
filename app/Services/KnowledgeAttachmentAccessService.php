@@ -215,7 +215,8 @@ class KnowledgeAttachmentAccessService
 
     private function safeOriginalName(string $name): string
     {
-        $name = preg_replace('/[\x00-\x1F\x7F\\\/]+/u', '_', trim($name)) ?? 'attachment';
+        $name = preg_replace('/[\x00-\x1F\x7F]/u', '_', trim($name)) ?? 'attachment';
+        $name = str_replace(['\\', '/'], '_', $name);
         $name = trim($name, ". \t\n\r\0\x0B");
         if ($name === '') {
             return 'attachment';
