@@ -53,4 +53,5 @@ chmod 600 "$ENV_FILE" "$COMPOSE_FILE"
 docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d
 for _ in $(seq 1 60); do curl -fsS --max-time 3 http://127.0.0.1:6875/login >/dev/null && exit 0; sleep 3; done
 echo 'BookStack did not become ready on 127.0.0.1:6875' >&2
+dump_logs
 exit 1
