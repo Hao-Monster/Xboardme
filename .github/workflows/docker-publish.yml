@@ -41,6 +41,7 @@ jobs:
       - name: Validate companion JavaScript
         run: |
           node --check public/assets/admin-distributor.js
+          node --check public/assets/admin-knowledge-attachments.js
           node --check theme/Xboard/assets/distributor.js
           node --test tests/JavaScript/*.test.js
 
