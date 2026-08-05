@@ -356,17 +356,97 @@ class KnowledgeAttachmentUploadService
         ];
     }
 
-    public function delete(string $attachmentUuid): void
-    {
-        $attachment = KnowledgeAttachment::where('uuid', $attachmentUuid)->first();
-        if (!$attachment) {
-            throw new ApiException('附件不存在。', 404);
-        }
-        if ($attachment->knowledge_id !== null) {
-            throw new ApiException('附件仍绑定知识文章，请先从文章中移除。', 409);
-        }
+    public function cancel(
+        int $uploaderUserId,
+        string $uploadUuid,
+        string $draftToken
+    ): void {
+        try {
+            Cache::lock($this->uploadLockKey($uploadUuid), 60)->block(5, function () use (
+                $uploaderUserId,
+                $uploadUuid,
+                $draftToken
+            ): void {
+                $upload = $this->ownedUpload($uploaderUserId, $uploadUuid);
+                $this->assertDraftToken($upload->draft_token, $draftToken);
+                if ($upload->status === KnowledgeAttachmentUpload::STATUS_COMPLETED) {
+                    throw new ApiException('附件已经上传完成，请使用删除附件操作。', 409);
+                }
 
-        $attachment->delete();
+                $disk = $this->disk();
+                $disk->deleteDirectory($upload->temporary_path);
+                if ($disk->directoryExists($upload->temporary_path)) {
+                    throw new ApiException('上传临时文件清理失败，请稍后重试。', 500);
+                }
+                $upload->delete();
+            });
+        } catch (LockTimeoutException) {
+            throw new ApiException('上传任务正在处理，请稍后重试。', 423);
+        } catch (ApiException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            Log::error('Knowledge attachment upload cancellation failed', [
+                'upload_uuid' => $uploadUuid,
+                'uploader_user_id' => $uploaderUserId,
+                'error' => $exception->getMessage(),
+            ]);
+            throw new ApiException('无法取消附件上传，请稍后重试。', 500);
+        }
+    }
+
+    public function discardDraft(
+        int $uploaderUserId,
+        string $attachmentUuid,
+        string $draftToken
+    ): void {
+        try {
+            Cache::lock($this->uploadLockKey($attachmentUuid), 60)->block(5, function () use (
+                $uploaderUserId,
+                $attachmentUuid,
+                $draftToken
+            ): void {
+                $attachment = KnowledgeAttachment::where('uuid', $attachmentUuid)->first();
+                if (!$attachment) {
+                    throw new ApiException('附件不存在。', 404);
+                }
+                if ($attachment->knowledge_id !== null) {
+                    throw new ApiException('附件仍绑定知识文章，请先从文章中移除并保存文章。', 409);
+                }
+                if ((int) $attachment->uploader_user_id !== $uploaderUserId) {
+                    throw new ApiException('附件不存在。', 404);
+                }
+                $this->assertDraftToken($attachment->draft_token, $draftToken);
+
+                $upload = KnowledgeAttachmentUpload::where('uuid', $attachmentUuid)->first();
+                $disk = $this->disk();
+                $disk->delete($attachment->storage_path);
+                if ($disk->exists($attachment->storage_path)) {
+                    throw new ApiException('附件文件删除失败，请稍后重试。', 500);
+                }
+                if ($upload) {
+                    $disk->deleteDirectory($upload->temporary_path);
+                    if ($disk->directoryExists($upload->temporary_path)) {
+                        throw new ApiException('上传临时文件清理失败，请稍后重试。', 500);
+                    }
+                }
+
+                DB::transaction(function () use ($attachment, $attachmentUuid): void {
+                    $attachment->forceDelete();
+                    KnowledgeAttachmentUpload::where('uuid', $attachmentUuid)->delete();
+                }, 3);
+            });
+        } catch (LockTimeoutException) {
+            throw new ApiException('附件正在处理，请稍后重试。', 423);
+        } catch (ApiException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            Log::error('Knowledge attachment draft discard failed', [
+                'attachment_uuid' => $attachmentUuid,
+                'uploader_user_id' => $uploaderUserId,
+                'error' => $exception->getMessage(),
+            ]);
+            throw new ApiException('无法删除附件，请稍后重试。', 500);
+        }
     }
 
     public function uploadPayload(KnowledgeAttachmentUpload $upload): array
@@ -432,6 +512,16 @@ class KnowledgeAttachmentUploadService
         }
 
         return $upload;
+    }
+
+    private function assertDraftToken(?string $expected, string $actual): void
+    {
+        if (
+            !is_string($expected) ||
+            !hash_equals(strtolower($expected), strtolower($actual))
+        ) {
+            throw new ApiException('附件不存在。', 404);
+        }
     }
 
     private function assertUploadAcceptsChunks(KnowledgeAttachmentUpload $upload): void

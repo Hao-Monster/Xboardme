@@ -217,7 +217,34 @@ class KnowledgeAttachmentUploadApiTest extends TestCase
         );
     }
 
-    public function test_list_never_exposes_private_paths_and_drop_is_a_safe_soft_delete(): void
+    public function test_active_upload_can_only_be_cancelled_by_its_owner_and_releases_temporary_storage(): void
+    {
+        $admin = $this->makeAdmin('cancel-admin@example.com');
+        Sanctum::actingAs($admin);
+        $upload = $this->initializeUpload('wrong-video.mp4', 'abcdefgh');
+        $this->uploadChunk($upload['upload_uuid'], 0, 'abcd')->assertOk();
+        $session = KnowledgeAttachmentUpload::where('uuid', $upload['upload_uuid'])->firstOrFail();
+        Storage::disk('knowledge_attachments')->assertExists($session->temporary_path . '/chunks/0.part');
+
+        Sanctum::actingAs($this->makeAdmin('other-cancel-admin@example.com'));
+        $this->postJson($this->endpoint(
+            'admin.knowledge.attachments.upload.cancel',
+            ['uploadUuid' => $upload['upload_uuid']]
+        ), ['draft_token' => str_repeat('1', 64)])->assertNotFound();
+
+        Sanctum::actingAs($admin);
+        $this->postJson($this->endpoint(
+            'admin.knowledge.attachments.upload.cancel',
+            ['uploadUuid' => $upload['upload_uuid']]
+        ), ['draft_token' => strtoupper(str_repeat('1', 64))])
+            ->assertOk()
+            ->assertJsonPath('data', true);
+
+        $this->assertNull(KnowledgeAttachmentUpload::where('uuid', $upload['upload_uuid'])->first());
+        Storage::disk('knowledge_attachments')->assertMissing($session->temporary_path . '/chunks/0.part');
+    }
+
+    public function test_list_never_exposes_private_paths_and_draft_discard_is_private_and_permanent(): void
     {
         $admin = $this->makeAdmin('list-admin@example.com');
         Sanctum::actingAs($admin);
@@ -248,10 +275,16 @@ class KnowledgeAttachmentUploadApiTest extends TestCase
 
         $this->postJson($this->endpoint('admin.knowledge.attachments.drop'), [
             'uuid' => $attachment->uuid,
+            'draft_token' => str_repeat('a', 64),
+        ])->assertNotFound();
+
+        $this->postJson($this->endpoint('admin.knowledge.attachments.drop'), [
+            'uuid' => $attachment->uuid,
+            'draft_token' => strtoupper($draftToken),
         ])->assertOk();
 
-        $this->assertTrue(KnowledgeAttachment::withTrashed()->where('uuid', $attachment->uuid)->firstOrFail()->trashed());
-        Storage::disk('knowledge_attachments')->assertExists($attachment->storage_path);
+        $this->assertNull(KnowledgeAttachment::withTrashed()->where('uuid', $attachment->uuid)->first());
+        Storage::disk('knowledge_attachments')->assertMissing($attachment->storage_path);
 
         $knowledge = Knowledge::create([
             'language' => 'zh-CN',
@@ -275,6 +308,7 @@ class KnowledgeAttachmentUploadApiTest extends TestCase
 
         $this->postJson($this->endpoint('admin.knowledge.attachments.drop'), [
             'uuid' => $bound->uuid,
+            'draft_token' => $draftToken,
         ])->assertStatus(409);
         $this->assertFalse($bound->fresh()->trashed());
     }

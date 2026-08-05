@@ -7,6 +7,7 @@
   const EDITOR_SELECTOR = '.rc-md-editor';
   const MAX_PARALLEL_UPLOADS = 2;
   const CHUNK_RETRIES = 3;
+  const MARKER_PREFIX = 'xboard-knowledge-upload:';
   const states = new Set();
   let pendingKnowledgeId = null;
   let activeWorkers = 0;
@@ -95,6 +96,10 @@
     return `[${name}](${placeholder})`;
   }
 
+  function uploadMarker(id) {
+    return `<!-- ${MARKER_PREFIX}${id} -->`;
+  }
+
   function appendDraftToken(body, draftToken) {
     if (!draftToken || !body) return body;
     if (body instanceof FormData || body instanceof URLSearchParams) {
@@ -124,7 +129,7 @@
   }
 
   function activeState() {
-    return [...states].reverse().find((state) => isVisible(state.panel)) || null;
+    return [...states].reverse().find((state) => isVisible(state.editor)) || null;
   }
 
   function toast(message, type = 'ok') {
@@ -141,6 +146,23 @@
     setTimeout(() => item.remove(), 4000);
   }
 
+  function blockingItems(state) {
+    if (!state) return [];
+    return [...state.items.values()].filter((item) => (
+      ['queued', 'uploading', 'cancelling', 'failed'].includes(item.status) &&
+      (!item.marker || state.textarea.value.includes(item.marker))
+    ));
+  }
+
+  function saveGuardError(state) {
+    const blocked = blockingItems(state);
+    if (!blocked.length) return null;
+    const hasFailure = blocked.some((item) => item.status === 'failed');
+    return new Error(hasFailure
+      ? '存在上传失败的附件，请重试或取消后再提交。'
+      : '附件仍在上传，请等待上传完成后再提交。');
+  }
+
   function installRequestBridge() {
     const originalOpen = XMLHttpRequest.prototype.open;
     const originalSend = XMLHttpRequest.prototype.send;
@@ -151,7 +173,13 @@
     XMLHttpRequest.prototype.send = function (body) {
       const url = this.__knowledgeAttachmentUrl || '';
       if (/\/knowledge\/save(?:\?|$)/.test(url)) {
-        body = appendDraftToken(body, activeState()?.draftToken);
+        const current = activeState();
+        const guardError = saveGuardError(current);
+        if (guardError) {
+          toast(guardError.message, 'error');
+          throw guardError;
+        }
+        body = appendDraftToken(body, current?.draftToken);
       }
       if (/\/knowledge\/fetch\?[^#]*\bid=\d+/.test(url)) {
         this.addEventListener('load', () => rememberKnowledgeDetail(url, this.responseText));
@@ -163,7 +191,13 @@
     window.fetch = function (input, init = {}) {
       const url = typeof input === 'string' ? input : input?.url || '';
       if (/\/knowledge\/save(?:\?|$)/.test(url) && init.body) {
-        init = { ...init, body: appendDraftToken(init.body, activeState()?.draftToken) };
+        const current = activeState();
+        const guardError = saveGuardError(current);
+        if (guardError) {
+          toast(guardError.message, 'error');
+          return Promise.reject(guardError);
+        }
+        init = { ...init, body: appendDraftToken(init.body, current?.draftToken) };
       }
       return originalFetch(input, init).then((response) => {
         if (/\/knowledge\/fetch\?[^#]*\bid=\d+/.test(url)) {
@@ -172,6 +206,28 @@
         return response;
       });
     };
+  }
+
+  function installGlobalGuards() {
+    document.addEventListener('click', (event) => {
+      const state = activeState();
+      const button = event.target.closest?.('button');
+      const dialog = state?.editor.closest?.('[role="dialog"]');
+      if (!state || !button || !dialog?.contains(button) || state.popover.contains(button)) return;
+      const isSubmit = button.type === 'submit' || /^(提交|确认|保存|Submit|Save)$/i.test(button.textContent.trim());
+      if (!isSubmit) return;
+      const error = saveGuardError(state);
+      if (!error) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      toast(error.message, 'error');
+    }, true);
+
+    window.addEventListener('beforeunload', (event) => {
+      if (![...states].some((state) => blockingItems(state).length)) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
   }
 
   function rememberKnowledgeDetail(url, responseText) {
@@ -194,17 +250,28 @@
     loadAttachments(state).catch((error) => toast(error.message, 'error'));
   }
 
-  function panelMarkup() {
+  function toolbarButton() {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'button knowledge-attachment-trigger';
+    button.dataset.knowledgeAttachment = 'toggle';
+    button.title = '附件';
+    button.setAttribute('aria-label', '管理文章附件');
+    button.setAttribute('aria-haspopup', 'dialog');
+    button.setAttribute('aria-expanded', 'false');
+    button.innerHTML = `
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8.5 12.5 15 6a3.54 3.54 0 0 1 5 5l-8.5 8.5a5 5 0 0 1-7.07-7.07L13 3.86a2.5 2.5 0 0 1 3.54 3.54L8 15.93a1 1 0 0 1-1.41-1.42l7.78-7.78" />
+      </svg>
+      <span data-knowledge-attachment="badge" hidden>0</span>`;
+    return button;
+  }
+
+  function popoverMarkup() {
     return `
-      <div class="knowledge-attachment-heading">
-        <div>
-          <strong>文章附件</strong>
-          <span>支持图片、视频、压缩包及其他文件；文件保存在服务器私有目录。</span>
-        </div>
-        <button type="button" data-knowledge-attachment="choose">选择文件</button>
-      </div>
-      <div class="knowledge-attachment-dropzone" data-knowledge-attachment="dropzone">
-        拖放文件到这里，或点击“选择文件”（支持多选）
+      <div class="knowledge-attachment-popover-head">
+        <div><strong>文章附件</strong><span>上传后自动插入正文</span></div>
+        <button type="button" data-knowledge-attachment="choose">添加附件</button>
       </div>
       <input type="file" multiple hidden data-knowledge-attachment="input">
       <div class="knowledge-attachment-list" data-knowledge-attachment="list"></div>`;
@@ -212,27 +279,39 @@
 
   function mountEditor(editor) {
     if (editor.dataset.knowledgeAttachmentsMounted === '1') return;
-    editor.dataset.knowledgeAttachmentsMounted = '1';
     const textarea = editor.querySelector('textarea');
-    if (!textarea) return;
+    const toolbar = editor.querySelector('.rc-md-navigation .button-wrap');
+    if (!textarea || !toolbar) return;
+    editor.dataset.knowledgeAttachmentsMounted = '1';
 
-    const panel = document.createElement('section');
-    panel.className = 'knowledge-attachment-panel';
-    panel.innerHTML = panelMarkup();
-    editor.parentElement.insertBefore(panel, editor);
+    const trigger = toolbarButton();
+    toolbar.appendChild(trigger);
+    const popover = document.createElement('section');
+    popover.className = 'knowledge-attachment-popover';
+    popover.hidden = true;
+    popover.setAttribute('role', 'dialog');
+    popover.setAttribute('aria-label', '文章附件');
+    popover.innerHTML = popoverMarkup();
+    editor.appendChild(popover);
 
     const state = {
       editor,
       textarea,
-      panel,
-      input: panel.querySelector('[data-knowledge-attachment="input"]'),
-      list: panel.querySelector('[data-knowledge-attachment="list"]'),
+      trigger,
+      popover,
+      input: popover.querySelector('[data-knowledge-attachment="input"]'),
+      list: popover.querySelector('[data-knowledge-attachment="list"]'),
+      badge: trigger.querySelector('[data-knowledge-attachment="badge"]'),
       draftToken: createDraftToken(),
       knowledgeId: null,
       items: new Map(),
+      internalEdit: false,
+      dragDepth: 0,
+      previewObserver: null,
     };
     states.add(state);
-    bindPanel(state);
+    bindEditor(state);
+    installPreviewObserver(state);
     render(state);
 
     if (pendingKnowledgeId && Date.now() - pendingKnowledgeId.at < 3000) {
@@ -241,68 +320,143 @@
     }
   }
 
-  function bindPanel(state) {
-    const dropzone = state.panel.querySelector('[data-knowledge-attachment="dropzone"]');
-    state.panel.addEventListener('click', async (event) => {
+  function bindEditor(state) {
+    state.trigger.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setPopoverOpen(state, state.popover.hidden);
+    });
+    state.popover.addEventListener('click', async (event) => {
+      event.stopPropagation();
       const action = event.target.closest('[data-knowledge-attachment]')?.dataset.knowledgeAttachment;
       const itemId = event.target.closest('[data-item-id]')?.dataset.itemId;
       if (action === 'choose') state.input.click();
-      if (action === 'insert' && itemId) insertAttachment(state, itemId);
       if (action === 'retry' && itemId) retryUpload(state, itemId);
+      if (action === 'cancel' && itemId) await cancelUpload(state, itemId);
       if (action === 'delete' && itemId) await deleteAttachment(state, itemId);
+      if (action === 'undo' && itemId) undoDelete(state, itemId);
     });
     state.input.addEventListener('change', () => {
       enqueueFiles(state, state.input.files);
       state.input.value = '';
     });
-    ['dragenter', 'dragover'].forEach((name) => dropzone.addEventListener(name, (event) => {
+    state.textarea.addEventListener('paste', (event) => {
+      const files = clipboardImages(event.clipboardData);
+      if (!files.length) return;
       event.preventDefault();
-      dropzone.classList.add('is-dragging');
-    }));
-    ['dragleave', 'drop'].forEach((name) => dropzone.addEventListener(name, (event) => {
-      event.preventDefault();
-      dropzone.classList.remove('is-dragging');
-    }));
-    dropzone.addEventListener('drop', (event) => enqueueFiles(state, event.dataTransfer?.files));
-    editorDropTarget(state.editor, state);
-  }
-
-  function editorDropTarget(editor, state) {
-    editor.addEventListener('dragover', (event) => {
-      if (event.dataTransfer?.types?.includes('Files')) event.preventDefault();
+      enqueueFiles(state, files, state.textarea.selectionEnd);
+      toast(files.length > 1 ? `已粘贴 ${files.length} 张图片` : '图片已粘贴并开始上传');
     });
-    editor.addEventListener('drop', (event) => {
+    state.textarea.addEventListener('input', () => {
+      if (!state.internalEdit) synchronizeManualChanges(state);
+      render(state);
+      schedulePreview(state);
+    });
+    state.editor.addEventListener('dragenter', (event) => {
+      if (!hasDraggedFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      state.dragDepth += 1;
+      state.editor.classList.add('is-attachment-dragging');
+    });
+    state.editor.addEventListener('dragover', (event) => {
+      if (!hasDraggedFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    });
+    state.editor.addEventListener('dragleave', () => {
+      state.dragDepth = Math.max(0, state.dragDepth - 1);
+      if (!state.dragDepth) state.editor.classList.remove('is-attachment-dragging');
+    });
+    state.editor.addEventListener('drop', (event) => {
       if (!event.dataTransfer?.files?.length) return;
       event.preventDefault();
-      enqueueFiles(state, event.dataTransfer.files);
+      state.dragDepth = 0;
+      state.editor.classList.remove('is-attachment-dragging');
+      enqueueFiles(state, event.dataTransfer.files, state.textarea.selectionEnd);
+    });
+    state.editor.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !state.popover.hidden) setPopoverOpen(state, false);
+    });
+    document.addEventListener('click', (event) => {
+      if (!state.editor.isConnected || state.popover.hidden) return;
+      if (!state.popover.contains(event.target) && !state.trigger.contains(event.target)) setPopoverOpen(state, false);
     });
   }
 
-  function enqueueFiles(state, fileList) {
+  function setPopoverOpen(state, open) {
+    state.popover.hidden = !open;
+    state.trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) render(state);
+  }
+
+  function hasDraggedFiles(dataTransfer) {
+    return Boolean(dataTransfer?.types && Array.from(dataTransfer.types).includes('Files'));
+  }
+
+  function clipboardImages(clipboardData) {
+    const images = [];
+    for (const item of Array.from(clipboardData?.items || [])) {
+      if (item.kind !== 'file' || !String(item.type || '').startsWith('image/')) continue;
+      const file = item.getAsFile?.();
+      if (!file) continue;
+      if (file.name && !/^image\.(png|jpe?g|gif|webp|bmp)$/i.test(file.name)) {
+        images.push(file);
+        continue;
+      }
+      const subtype = String(file.type).split('/')[1]?.replace('jpeg', 'jpg') || 'png';
+      const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+      images.push(new File([file], `粘贴图片-${stamp}.${subtype}`, { type: file.type, lastModified: Date.now() }));
+    }
+    return images;
+  }
+
+  function enqueueFiles(state, fileList, insertionOffset = null) {
     const files = Array.from(fileList || []);
     if (!files.length) return;
-    files.forEach((file) => {
-      const id = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-      state.items.set(id, {
+    const items = files.map((file, index) => {
+      const id = `local-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;
+      return {
         id,
         file,
-        name: file.name,
+        name: file.name || `附件-${index + 1}`,
         size: file.size,
         status: file.size > 0 ? 'queued' : 'failed',
         progress: 0,
         error: file.size > 0 ? '' : '不能上传空文件。',
         uploadUuid: null,
         attachment: null,
-      });
+        marker: uploadMarker(id),
+        controller: null,
+        cancelled: false,
+        undoIndex: null,
+      };
     });
+    items.forEach((item) => state.items.set(item.id, item));
+    insertMarkers(state, items.map((item) => item.marker), insertionOffset);
+    setPopoverOpen(state, true);
     render(state);
     pumpQueue();
+  }
+
+  function insertMarkers(state, markers, insertionOffset = null) {
+    const textarea = state.textarea;
+    const value = textarea.value;
+    const offset = Number.isInteger(insertionOffset)
+      ? Math.max(0, Math.min(insertionOffset, value.length))
+      : (Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : value.length);
+    const prefix = offset > 0 && value[offset - 1] !== '\n' ? '\n' : '';
+    const suffix = offset < value.length && value[offset] !== '\n' ? '\n' : '';
+    const inserted = `${prefix}${markers.join('\n')}${suffix}`;
+    setEditorValue(state, value.slice(0, offset) + inserted + value.slice(offset));
+    const caret = offset + inserted.length;
+    textarea.focus();
+    textarea.setSelectionRange(caret, caret);
   }
 
   function nextQueuedItem() {
     for (const state of states) {
       for (const item of state.items.values()) {
-        if (item.status === 'queued') return { state, item };
+        if (item.status === 'queued' && !item.cancelled) return { state, item };
       }
     }
     return null;
@@ -314,14 +468,17 @@
       if (!next) return;
       activeWorkers += 1;
       next.item.status = 'uploading';
+      next.item.controller = new AbortController();
       render(next.state);
       uploadItem(next.state, next.item)
         .catch((error) => {
+          if (next.item.cancelled || error?.name === 'AbortError') return;
           next.item.status = 'failed';
           next.item.error = error.message || '上传失败。';
           render(next.state);
         })
         .finally(() => {
+          next.item.controller = null;
           activeWorkers -= 1;
           pumpQueue();
         });
@@ -329,12 +486,14 @@
   }
 
   async function uploadItem(state, item) {
+    const signal = item.controller?.signal;
     let session;
     if (item.uploadUuid) {
       try {
-        session = await request(`/knowledge/attachment/upload/${item.uploadUuid}`);
+        session = await request(`/knowledge/attachment/upload/${item.uploadUuid}`, { signal });
         if (session.attachment) return finishItem(state, item, session.attachment);
       } catch (error) {
+        if (error?.name === 'AbortError') throw error;
         if (![404, 410].includes(error.status)) throw error;
         item.uploadUuid = null;
       }
@@ -343,6 +502,7 @@
       session = await request('/knowledge/attachment/upload/initialize', {
         method: 'POST',
         json: { original_name: item.name, size: item.size, draft_token: state.draftToken },
+        signal,
       });
       item.uploadUuid = session.upload_uuid;
     }
@@ -359,7 +519,7 @@
         form.set('sha256', hash);
         form.set('file', chunk, `${item.name}.part`);
         await retry(() => request(`/knowledge/attachment/upload/${item.uploadUuid}/chunk`, {
-          method: 'POST', body: form,
+          method: 'POST', body: form, signal,
         }), CHUNK_RETRIES);
       }
       item.progress = Math.round(((index + 1) / totalChunks) * 95);
@@ -367,22 +527,32 @@
     }
 
     const attachment = await request(`/knowledge/attachment/upload/${item.uploadUuid}/complete`, {
-      method: 'POST', json: {},
+      method: 'POST', json: {}, signal,
     });
-    finishItem(state, item, attachment);
+    return finishItem(state, item, attachment);
   }
 
-  function finishItem(state, item, attachment) {
+  async function finishItem(state, item, attachment) {
+    if (item.cancelled || !state.textarea.value.includes(item.marker)) {
+      await discardDraft(state, attachment).catch(() => {});
+      state.items.delete(item.id);
+      render(state);
+      return;
+    }
     const currentKey = [...state.items.entries()].find(([, value]) => value === item)?.[0];
+    const marker = item.marker;
     item.status = 'ready';
     item.progress = 100;
     item.error = '';
     item.attachment = attachment;
     item.id = attachment.uuid;
+    item.marker = null;
+    replaceText(state, marker, markdownFor(attachment));
     if (currentKey) state.items.delete(currentKey);
     state.items.set(attachment.uuid, item);
     render(state);
-    toast(`${attachment.original_name} 上传完成`);
+    schedulePreview(state);
+    toast(`${attachment.original_name} 已上传并插入正文`);
   }
 
   async function sha256(blob) {
@@ -398,6 +568,7 @@
         return await operation();
       } catch (error) {
         lastError = error;
+        if (error?.name === 'AbortError') throw error;
         if (attempt + 1 < attempts) await new Promise((resolve) => setTimeout(resolve, 500 * (2 ** attempt)));
       }
     }
@@ -406,61 +577,155 @@
 
   function retryUpload(state, itemId) {
     const item = state.items.get(itemId);
-    if (!item || item.status !== 'failed' || !item.file) return;
+    if (!item || item.status !== 'failed' || !item.file || item.cancelled) return;
+    if (item.marker && !state.textarea.value.includes(item.marker)) insertMarkers(state, [item.marker]);
     item.status = 'queued';
     item.error = '';
     render(state);
     pumpQueue();
   }
 
-  function setTextareaValue(textarea, value) {
+  function setEditorValue(state, value) {
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-    if (setter) setter.call(textarea, value);
-    else textarea.value = value;
-    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    state.internalEdit = true;
+    if (setter) setter.call(state.textarea, value);
+    else state.textarea.value = value;
+    state.textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    state.textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    state.internalEdit = false;
   }
 
-  function insertAttachment(state, itemId) {
-    const attachment = state.items.get(itemId)?.attachment;
-    if (!attachment) return;
-    const snippet = markdownFor(attachment);
-    const textarea = state.textarea;
-    const start = Number.isInteger(textarea.selectionStart) ? textarea.selectionStart : textarea.value.length;
-    const end = Number.isInteger(textarea.selectionEnd) ? textarea.selectionEnd : start;
-    const prefix = start > 0 && textarea.value[start - 1] !== '\n' ? '\n' : '';
-    const suffix = end < textarea.value.length && textarea.value[end] !== '\n' ? '\n' : '';
-    const inserted = `${prefix}${snippet}${suffix}`;
-    setTextareaValue(textarea, textarea.value.slice(0, start) + inserted + textarea.value.slice(end));
-    textarea.focus();
-    textarea.setSelectionRange(start + inserted.length, start + inserted.length);
-    toast('附件已插入正文');
+  function replaceText(state, search, replacement) {
+    const index = state.textarea.value.indexOf(search);
+    if (index < 0) return false;
+    const value = state.textarea.value.slice(0, index) + replacement + state.textarea.value.slice(index + search.length);
+    setEditorValue(state, value);
+    const caret = index + replacement.length;
+    state.textarea.focus();
+    state.textarea.setSelectionRange(caret, caret);
+    return true;
   }
 
-  function removePlaceholder(state, placeholder) {
-    if (!placeholder || !state.textarea.value.includes(placeholder)) return;
-    const attachment = [...state.items.values()].find((item) => item.attachment?.placeholder === placeholder)?.attachment;
-    let body = state.textarea.value;
-    if (attachment) body = body.split(markdownFor(attachment)).join('');
-    body = body.split(placeholder).join('').replace(/\n{3,}/g, '\n\n');
-    setTextareaValue(state.textarea, body);
+  function normalizeBody(body) {
+    return body.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trimEnd();
+  }
+
+  function removeAttachmentMarkup(body, attachment) {
+    const placeholder = attachment?.placeholder;
+    if (!placeholder || !body.includes(placeholder)) return { body, count: 0, index: body.length };
+    const count = body.split(placeholder).length - 1;
+    const index = body.indexOf(placeholder);
+    let next = body.split(markdownFor(attachment)).join('');
+    next = next.split(placeholder).join('');
+    return { body: normalizeBody(next), count, index };
+  }
+
+  async function cancelUpload(state, itemId, ask = true) {
+    const item = state.items.get(itemId);
+    if (!item || item.cancelled) return;
+    if (ask && !window.confirm(`确认取消附件“${item.name}”吗？`)) return;
+    item.cancelled = true;
+    item.status = 'cancelling';
+    item.controller?.abort();
+    render(state);
+    try {
+      if (item.uploadUuid) {
+        try {
+          await request(`/knowledge/attachment/upload/${item.uploadUuid}/cancel`, {
+            method: 'POST', json: { draft_token: state.draftToken },
+          });
+        } catch (error) {
+          if (error.status === 409) {
+            await request('/knowledge/attachment/drop', {
+              method: 'POST', json: { uuid: item.uploadUuid, draft_token: state.draftToken },
+            }).catch((dropError) => {
+              if (dropError.status !== 404) throw dropError;
+            });
+          } else if (error.status !== 404) throw error;
+        }
+      }
+      if (item.marker && state.textarea.value.includes(item.marker)) replaceText(state, item.marker, '');
+      state.items.delete(itemId);
+      render(state);
+      toast('附件上传已取消');
+    } catch (error) {
+      item.cancelled = false;
+      item.status = 'failed';
+      item.error = error.message || '取消上传失败。';
+      render(state);
+      toast(item.error, 'error');
+    }
+  }
+
+  async function discardDraft(state, attachment) {
+    return request('/knowledge/attachment/drop', {
+      method: 'POST',
+      json: { uuid: attachment.uuid, draft_token: state.draftToken },
+    });
   }
 
   async function deleteAttachment(state, itemId) {
     const item = state.items.get(itemId);
-    if (!item || item.status === 'uploading') return;
-    if (!window.confirm(`确认移除附件“${item.name}”吗？`)) return;
-    if (item.attachment) removePlaceholder(state, item.attachment.placeholder);
-    if (item.attachment && !item.attachment.knowledge_id) {
+    if (!item) return;
+    if (['queued', 'uploading', 'failed', 'cancelling'].includes(item.status)) {
+      await cancelUpload(state, itemId);
+      return;
+    }
+    const attachment = item.attachment;
+    if (!attachment) return;
+    const removal = removeAttachmentMarkup(state.textarea.value, attachment);
+    const referenceText = removal.count > 1 ? `（正文中共有 ${removal.count} 处引用）` : '';
+    if (!window.confirm(`确认删除附件“${item.name}”吗？${referenceText}`)) return;
+
+    if (!attachment.knowledge_id) {
       try {
-        await request('/knowledge/attachment/drop', { method: 'POST', json: { uuid: item.attachment.uuid } });
+        await discardDraft(state, attachment);
+        setEditorValue(state, removal.body);
+        state.items.delete(itemId);
+        render(state);
+        toast('错误附件已永久删除');
       } catch (error) {
         toast(error.message, 'error');
-        return;
+      }
+      return;
+    }
+
+    item.status = 'pending-delete';
+    item.undoIndex = removal.index;
+    setEditorValue(state, removal.body);
+    render(state);
+    toast('附件将在提交文章后删除，可在提交前撤销');
+  }
+
+  function undoDelete(state, itemId) {
+    const item = state.items.get(itemId);
+    if (!item?.attachment || item.status !== 'pending-delete') return;
+    const value = state.textarea.value;
+    const index = Math.max(0, Math.min(Number(item.undoIndex) || value.length, value.length));
+    insertMarkers(state, [markdownFor(item.attachment)], index);
+    item.status = 'ready';
+    item.undoIndex = null;
+    render(state);
+    schedulePreview(state);
+    toast('已撤销删除');
+  }
+
+  function synchronizeManualChanges(state) {
+    for (const [itemId, item] of state.items.entries()) {
+      if (item.marker && !state.textarea.value.includes(item.marker) && !item.cancelled) {
+        cancelUpload(state, itemId, false);
+        continue;
+      }
+      if (!item.attachment?.knowledge_id) continue;
+      const referenced = state.textarea.value.includes(item.attachment.placeholder);
+      if (!referenced && item.status === 'ready') {
+        item.status = 'pending-delete';
+        item.undoIndex = state.textarea.value.length;
+      } else if (referenced && item.status === 'pending-delete') {
+        item.status = 'ready';
+        item.undoIndex = null;
       }
     }
-    state.items.delete(itemId);
-    render(state);
   }
 
   async function loadAttachments(state) {
@@ -469,28 +734,77 @@
       : `draft_token=${state.draftToken}`;
     const result = await request(`/knowledge/attachment/fetch?${query}&per_page=100`);
     for (const attachment of result.items || []) {
+      const referenced = state.textarea.value.includes(attachment.placeholder);
       state.items.set(attachment.uuid, {
         id: attachment.uuid,
         name: attachment.original_name,
         size: attachment.size,
-        status: 'ready',
+        status: attachment.knowledge_id && !referenced ? 'pending-delete' : 'ready',
         progress: 100,
         error: '',
         file: null,
         uploadUuid: attachment.uuid,
         attachment,
+        marker: null,
+        controller: null,
+        cancelled: false,
+        undoIndex: null,
       });
     }
     render(state);
+    schedulePreview(state);
+  }
+
+  function installPreviewObserver(state) {
+    state.previewObserver = new MutationObserver(() => patchPreview(state));
+    state.previewObserver.observe(state.editor, { childList: true, subtree: true });
+    schedulePreview(state);
+  }
+
+  function schedulePreview(state) {
+    setTimeout(() => patchPreview(state), 0);
+  }
+
+  function patchPreview(state) {
+    if (!state.editor.isConnected) return;
+    const attachments = new Map();
+    for (const item of state.items.values()) {
+      if (item.attachment?.placeholder && item.attachment?.url) {
+        attachments.set(item.attachment.placeholder, item.attachment);
+      }
+    }
+    const preview = state.editor.querySelector('.sec-html');
+    if (!preview || !attachments.size) return;
+    preview.querySelectorAll('[src], [href], [data-knowledge-attachment-placeholder]').forEach((element) => {
+      const original = element.dataset.knowledgeAttachmentPlaceholder
+        || element.getAttribute('src')
+        || element.getAttribute('href');
+      const attachment = attachments.get(original);
+      if (!attachment) return;
+      const attribute = element.hasAttribute('src') ? 'src' : 'href';
+      element.dataset.knowledgeAttachmentPlaceholder = attachment.placeholder;
+      element.dataset.knowledgeAttachmentUuid = attachment.uuid;
+      if (element.getAttribute(attribute) !== attachment.url) element.setAttribute(attribute, attachment.url);
+      if (attribute === 'href') element.setAttribute('rel', 'noopener noreferrer');
+    });
   }
 
   function render(state) {
     if (!state.list) return;
+    const referenced = [...state.items.values()].filter((item) => (
+      item.attachment?.placeholder && state.textarea.value.includes(item.attachment.placeholder)
+    )).length;
+    const active = [...state.items.values()].filter((item) => ['queued', 'uploading', 'failed', 'cancelling'].includes(item.status)).length;
+    const badgeValue = referenced + active;
+    state.badge.textContent = String(badgeValue);
+    state.badge.hidden = badgeValue < 1;
+    state.trigger.classList.toggle('has-active-upload', active > 0);
+
     state.list.replaceChildren();
     if (!state.items.size) {
       const empty = document.createElement('div');
       empty.className = 'knowledge-attachment-empty';
-      empty.textContent = '尚未添加附件';
+      empty.textContent = '尚未添加附件，也可以直接拖入文件或粘贴图片';
       state.list.appendChild(empty);
       return;
     }
@@ -503,7 +817,7 @@
       const name = document.createElement('strong');
       name.textContent = item.name;
       const meta = document.createElement('span');
-      meta.textContent = `${formatBytes(item.size)} · ${statusLabel(item)}`;
+      meta.textContent = `${formatBytes(item.size)} · ${statusLabel(item, state)}`;
       info.append(name, meta);
       if (item.status === 'uploading') {
         const progress = document.createElement('div');
@@ -520,33 +834,47 @@
       }
       const actions = document.createElement('div');
       actions.className = 'knowledge-attachment-actions';
-      if (item.status === 'ready') actions.appendChild(actionButton('插入正文', 'insert'));
       if (item.status === 'failed' && item.file) actions.appendChild(actionButton('重试', 'retry'));
-      if (!['uploading'].includes(item.status)) actions.appendChild(actionButton('删除', 'delete', true));
+      if (item.status === 'pending-delete') actions.appendChild(actionButton('撤销', 'undo'));
+      else if (['queued', 'uploading', 'failed', 'cancelling'].includes(item.status)) {
+        actions.appendChild(actionButton(item.status === 'cancelling' ? '取消中' : '取消', 'cancel', true, item.status === 'cancelling'));
+      } else actions.appendChild(actionButton('删除', 'delete', true));
       row.append(info, actions);
       state.list.appendChild(row);
     });
   }
 
-  function actionButton(label, action, danger = false) {
+  function actionButton(label, action, danger = false, disabled = false) {
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.knowledgeAttachment = action;
     button.textContent = label;
+    button.disabled = disabled;
     if (danger) button.className = 'is-danger';
     return button;
   }
 
-  function statusLabel(item) {
+  function statusLabel(item, state) {
     if (item.status === 'queued') return '等待上传';
     if (item.status === 'uploading') return `上传中 ${item.progress}%`;
+    if (item.status === 'cancelling') return '正在取消';
     if (item.status === 'failed') return '上传失败';
-    return item.attachment?.mime_type || '已上传';
+    if (item.status === 'pending-delete') return '待提交删除';
+    if (item.attachment && !state.textarea.value.includes(item.attachment.placeholder)) return '未在正文中引用';
+    return item.attachment?.mime_type || '已插入正文';
   }
 
   function scan() {
     for (const state of [...states]) {
-      if (!state.editor.isConnected) states.delete(state);
+      if (!state.editor.isConnected) {
+        state.previewObserver?.disconnect();
+        for (const item of state.items.values()) item.controller?.abort();
+        states.delete(state);
+        continue;
+      }
+      const toolbar = state.editor.querySelector('.rc-md-navigation .button-wrap');
+      if (toolbar && !state.trigger.isConnected) toolbar.appendChild(state.trigger);
+      if (!state.popover.isConnected) state.editor.appendChild(state.popover);
     }
     if (!isKnowledgePage()) return;
     document.querySelectorAll(EDITOR_SELECTOR).forEach(mountEditor);
@@ -554,13 +882,18 @@
 
   window.__xboardKnowledgeAttachments = {
     appendDraftToken,
+    blockingItems,
+    clipboardImages,
     createDraftToken,
     formatBytes,
     markdownFor,
+    removeAttachmentMarkup,
     scan,
+    uploadMarker,
   };
 
   installRequestBridge();
+  installGlobalGuards();
   const observer = new MutationObserver(scan);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener('hashchange', scan);

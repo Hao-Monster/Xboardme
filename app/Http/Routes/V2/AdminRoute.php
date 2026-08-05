@@ -242,6 +242,9 @@ class AdminRoute
                 $router->post('/attachment/upload/{uploadUuid}/complete', [KnowledgeAttachmentController::class, 'complete'])
                     ->middleware('throttle:20,1')
                     ->name('admin.knowledge.attachments.upload.complete');
+                $router->post('/attachment/upload/{uploadUuid}/cancel', [KnowledgeAttachmentController::class, 'cancel'])
+                    ->middleware('throttle:60,1')
+                    ->name('admin.knowledge.attachments.upload.cancel');
                 $router->get('/attachment/fetch', [KnowledgeAttachmentController::class, 'fetch'])
                     ->middleware('throttle:120,1')
                     ->name('admin.knowledge.attachments.fetch');

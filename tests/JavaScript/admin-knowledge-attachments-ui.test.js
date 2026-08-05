@@ -67,6 +67,43 @@ test('knowledge attachment helper emits safe snippets by disposition and MIME', 
   assert.doesNotMatch(helpers.markdownFor({ ...base, mime_type: 'image/svg+xml', disposition: 'attachment' }), /^!\[/);
 });
 
+test('knowledge attachment helper keeps upload order markers and removes generated markup', () => {
+  const helpers = loadHelpers();
+  assert.equal(
+    helpers.uploadMarker('local-1'),
+    '<!-- xboard-knowledge-upload:local-1 -->',
+  );
+
+  const attachment = {
+    uuid: '11111111-1111-4111-8111-111111111111',
+    original_name: 'guide.png',
+    mime_type: 'image/png',
+    placeholder: 'knowledge-attachment://11111111-1111-4111-8111-111111111111',
+    disposition: 'inline',
+  };
+  const snippet = helpers.markdownFor(attachment);
+  const removed = helpers.removeAttachmentMarkup(`# Guide\n\n${snippet}\n\nEnd`, attachment);
+  assert.equal(removed.count, 1);
+  assert.doesNotMatch(removed.body, /knowledge-attachment:\/\//);
+  assert.match(removed.body, /# Guide/);
+  assert.match(removed.body, /End/);
+});
+
+test('knowledge attachment helper only accepts pasted clipboard images', () => {
+  const helpers = loadHelpers();
+  const image = { name: 'capture.png', type: 'image/png', size: 4 };
+  const archive = { name: 'files.zip', type: 'application/zip', size: 20 };
+  const files = helpers.clipboardImages({
+    items: [
+      { kind: 'string', type: 'text/plain', getAsFile: () => null },
+      { kind: 'file', type: archive.type, getAsFile: () => archive },
+      { kind: 'file', type: image.type, getAsFile: () => image },
+    ],
+  });
+  assert.equal(files.length, 1);
+  assert.equal(files[0], image);
+});
+
 test('knowledge attachment assets are mounted independently from the compiled admin bundle', () => {
   const blade = fs.readFileSync('resources/views/admin.blade.php', 'utf8');
   const styles = fs.readFileSync('public/assets/admin-knowledge-attachments.css', 'utf8');
@@ -76,7 +113,14 @@ test('knowledge attachment assets are mounted independently from the compiled ad
   assert.match(source, /\.rc-md-editor/);
   assert.match(source, /\/knowledge\/attachment\/upload\/initialize/);
   assert.match(source, /\/knowledge\/attachment\/upload\/\$\{item\.uploadUuid\}\/chunk/);
+  assert.match(source, /\/knowledge\/attachment\/upload\/\$\{item\.uploadUuid\}\/cancel/);
   assert.match(source, /dataTransfer\?\.files/);
-  assert.match(styles, /\.knowledge-attachment-dropzone\.is-dragging/);
+  assert.match(source, /addEventListener\('paste'/);
+  assert.match(source, /已上传并插入正文/);
+  assert.match(source, /\.rc-md-navigation \.button-wrap/);
+  assert.doesNotMatch(styles, /\.knowledge-attachment-panel/);
+  assert.match(styles, /\.knowledge-attachment-trigger/);
+  assert.match(styles, /\.knowledge-attachment-popover/);
+  assert.match(styles, /\.rc-md-editor\.is-attachment-dragging/);
   assert.match(styles, /\.knowledge-attachment-progress/);
 });

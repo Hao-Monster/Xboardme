@@ -1,41 +1,103 @@
-.knowledge-attachment-panel {
-  margin-bottom: 10px;
-  padding: 12px;
-  border: 1px solid hsl(var(--border, 214 32% 91%));
-  border-radius: 8px;
-  background: hsl(var(--muted, 210 40% 96%) / .35);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+.knowledge-attachment-trigger {
+  position: relative !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  padding: 0 !important;
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.knowledge-attachment-trigger svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.knowledge-attachment-trigger [data-knowledge-attachment="badge"] {
+  position: absolute;
+  top: -4px;
+  right: -7px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border: 2px solid hsl(var(--muted, 210 40% 96%));
+  border-radius: 999px;
+  background: hsl(var(--primary, 173 58% 39%));
+  color: #fff;
+  font-family: Inter, system-ui, sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 11px;
+}
+
+.knowledge-attachment-trigger.has-active-upload svg {
+  animation: knowledge-attachment-pulse 1.2s ease-in-out infinite;
+  color: hsl(var(--primary, 173 58% 39%));
+}
+
+.knowledge-attachment-popover {
+  position: absolute;
+  z-index: 30;
+  top: 39px;
+  right: 8px;
+  width: min(430px, calc(100% - 16px));
+  max-height: min(420px, calc(100% - 50px));
+  overflow: auto;
+  padding: 11px;
+  border: 1px solid hsl(var(--border, 214 32% 88%));
+  border-radius: 9px;
+  background: hsl(var(--background, 0 0% 100%));
+  box-shadow: 0 14px 36px rgba(15, 23, 42, .2);
+  color: hsl(var(--foreground, 222 47% 11%));
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 12px;
 }
 
-.knowledge-attachment-heading,
+.knowledge-attachment-popover[hidden] {
+  display: none !important;
+}
+
+.knowledge-attachment-popover-head,
 .knowledge-attachment-item,
 .knowledge-attachment-actions {
   display: flex;
   align-items: center;
 }
 
-.knowledge-attachment-heading {
+.knowledge-attachment-popover-head {
   justify-content: space-between;
   gap: 12px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid hsl(var(--border, 214 32% 91%));
 }
 
-.knowledge-attachment-heading > div {
+.knowledge-attachment-popover-head > div {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.knowledge-attachment-heading span,
+.knowledge-attachment-popover-head strong {
+  font-size: 13px;
+}
+
+.knowledge-attachment-popover-head span,
 .knowledge-attachment-info span {
   color: hsl(var(--muted-foreground, 215 16% 47%));
   font-size: 11px;
 }
 
-.knowledge-attachment-panel button {
-  min-height: 30px;
-  padding: 5px 10px;
-  border: 1px solid hsl(var(--border, 214 32% 91%));
+.knowledge-attachment-popover button {
+  min-height: 29px;
+  padding: 4px 9px;
+  border: 1px solid hsl(var(--border, 214 32% 88%));
   border-radius: 6px;
   background: hsl(var(--background, 0 0% 100%));
   color: hsl(var(--foreground, 222 47% 11%));
@@ -43,49 +105,61 @@
   font: inherit;
 }
 
-.knowledge-attachment-panel button:hover {
-  border-color: hsl(var(--primary, 222 47% 11%));
-}
-
-.knowledge-attachment-panel button.is-danger {
-  color: #dc2626;
-}
-
-.knowledge-attachment-dropzone {
-  margin-top: 10px;
-  padding: 13px;
-  border: 1px dashed hsl(var(--border, 214 32% 80%));
-  border-radius: 7px;
-  color: hsl(var(--muted-foreground, 215 16% 47%));
-  text-align: center;
-  transition: .15s ease;
-}
-
-.knowledge-attachment-dropzone.is-dragging {
+.knowledge-attachment-popover-head button {
   border-color: hsl(var(--primary, 173 58% 39%));
-  background: hsl(var(--primary, 173 58% 39%) / .08);
-  color: hsl(var(--primary, 173 58% 30%));
+  background: hsl(var(--primary, 173 58% 39%));
+  color: #fff;
+}
+
+.knowledge-attachment-popover button:hover:not(:disabled) {
+  filter: brightness(.96);
+}
+
+.knowledge-attachment-popover button:focus-visible,
+.knowledge-attachment-trigger:focus-visible {
+  outline: 2px solid hsl(var(--primary, 173 58% 39%));
+  outline-offset: 2px;
+}
+
+.knowledge-attachment-popover button:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.knowledge-attachment-popover button.is-danger {
+  color: #dc2626;
 }
 
 .knowledge-attachment-list {
   display: grid;
   gap: 7px;
-  margin-top: 9px;
+  padding-top: 9px;
 }
 
 .knowledge-attachment-empty {
-  padding: 5px 0 1px;
+  padding: 13px 6px;
   color: hsl(var(--muted-foreground, 215 16% 47%));
   text-align: center;
 }
 
 .knowledge-attachment-item {
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   padding: 8px 9px;
   border: 1px solid hsl(var(--border, 214 32% 91%));
   border-radius: 7px;
-  background: hsl(var(--background, 0 0% 100%));
+  background: hsl(var(--muted, 210 40% 96%) / .24);
+}
+
+.knowledge-attachment-item.is-pending-delete {
+  border-style: dashed;
+  background: #fff7ed;
+  opacity: .82;
+}
+
+.knowledge-attachment-item.is-failed {
+  border-color: #fecaca;
+  background: #fef2f2;
 }
 
 .knowledge-attachment-info {
@@ -116,11 +190,11 @@
 }
 
 .knowledge-attachment-progress {
-  width: min(340px, 100%);
+  width: min(250px, 100%);
   height: 4px;
   overflow: hidden;
   border-radius: 999px;
-  background: hsl(var(--muted, 210 40% 93%));
+  background: hsl(var(--muted, 210 40% 90%));
 }
 
 .knowledge-attachment-progress i {
@@ -129,6 +203,22 @@
   border-radius: inherit;
   background: hsl(var(--primary, 173 58% 39%));
   transition: width .15s ease;
+}
+
+.rc-md-editor.is-attachment-dragging::after {
+  content: "松开即可上传并自动插入正文";
+  position: absolute;
+  z-index: 40;
+  inset: 38px 0 0;
+  display: grid;
+  place-items: center;
+  border: 2px dashed hsl(var(--primary, 173 58% 39%));
+  background: hsl(var(--primary, 173 58% 39%) / .12);
+  color: hsl(var(--primary, 173 58% 28%));
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  pointer-events: none;
 }
 
 #knowledge-attachment-toasts {
@@ -154,8 +244,21 @@
   background: #b91c1c;
 }
 
+@keyframes knowledge-attachment-pulse {
+  50% { opacity: .45; }
+}
+
 @media (max-width: 640px) {
-  .knowledge-attachment-heading,
+  .knowledge-attachment-popover {
+    position: fixed;
+    top: auto;
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    width: auto;
+    max-height: min(55vh, 430px);
+  }
+
   .knowledge-attachment-item {
     align-items: stretch;
     flex-direction: column;

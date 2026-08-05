@@ -59,6 +59,20 @@ class KnowledgeAttachmentController extends Controller
         return $this->success($this->uploadService->attachmentPayload($attachment));
     }
 
+    public function cancel(Request $request, string $uploadUuid)
+    {
+        $data = $request->validate([
+            'draft_token' => ['required', 'string', 'size:64', 'regex:/^[a-f0-9]{64}$/i'],
+        ]);
+        $this->uploadService->cancel(
+            (int) $request->user()->id,
+            $uploadUuid,
+            $data['draft_token']
+        );
+
+        return $this->success(true);
+    }
+
     public function fetch(Request $request)
     {
         $filters = $request->validate([
@@ -73,8 +87,15 @@ class KnowledgeAttachmentController extends Controller
 
     public function drop(Request $request)
     {
-        $data = $request->validate(['uuid' => ['required', 'uuid']]);
-        $this->uploadService->delete($data['uuid']);
+        $data = $request->validate([
+            'uuid' => ['required', 'uuid'],
+            'draft_token' => ['required', 'string', 'size:64', 'regex:/^[a-f0-9]{64}$/i'],
+        ]);
+        $this->uploadService->discardDraft(
+            (int) $request->user()->id,
+            $data['uuid'],
+            $data['draft_token']
+        );
 
         return $this->success(true);
     }
