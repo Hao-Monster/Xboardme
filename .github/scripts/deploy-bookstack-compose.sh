@@ -41,8 +41,8 @@ services:
       APP_URL: https://docs.thinderbox.com
       DB_HOST: db
       DB_PORT: 3306
-      DB_USER: bookstack
-      DB_PASS: ${MYSQL_PASSWORD}
+      DB_USERNAME: bookstack
+      DB_PASSWORD: ${MYSQL_PASSWORD}
       DB_DATABASE: bookstack
     volumes:
       - ./app:/config
