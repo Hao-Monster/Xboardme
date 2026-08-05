@@ -97,6 +97,10 @@ class KnowledgeAttachmentOperationsTest extends TestCase
         $deployment = file_get_contents(base_path('.github/scripts/deploy-xboard-compose.sh'));
         $this->assertStringContainsString('ATTACHMENT_DEST=/www/storage/app/knowledge-attachments', $deployment);
         $this->assertStringContainsString('Migrating knowledge attachments from the current container', $deployment);
+        $this->assertStringContainsString(
+            'docker exec -u 1000:1000 "$PRIMARY_CONTAINER" php /www/artisan knowledge-attachments:status --json',
+            $deployment
+        );
 
         $phpIni = file_get_contents(base_path('.docker/php/zz-xboard.ini'));
         $this->assertMatchesRegularExpression('/upload_max_filesize\s*=\s*16M/', $phpIni);

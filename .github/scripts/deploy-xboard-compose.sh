@@ -250,6 +250,7 @@ docker exec \
   -e QUEUE_CONNECTION=sync \
   -e SESSION_DRIVER=array \
   "$PRIMARY_CONTAINER" php /www/artisan optimize:clear
+docker exec -u 1000:1000 "$PRIMARY_CONTAINER" php /www/artisan knowledge-attachments:status --json
 
 if [[ "$PRIMARY_SERVICE" == xboard || "$PRIMARY_SERVICE" == web ]]; then
   docker exec "$PRIMARY_CONTAINER" sh -lc '
