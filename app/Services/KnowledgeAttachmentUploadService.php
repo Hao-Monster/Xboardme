@@ -20,6 +20,10 @@ class KnowledgeAttachmentUploadService
 {
     private const QUOTA_LOCK = 'knowledge-attachments:quota';
 
+    public function __construct(private KnowledgeAttachmentAccessService $accessService)
+    {
+    }
+
     public function initialize(
         int $uploaderUserId,
         string $originalName,
@@ -392,6 +396,8 @@ class KnowledgeAttachmentUploadService
             'sha256' => $attachment->sha256,
             'status' => $attachment->status,
             'placeholder' => $attachment->placeholder(),
+            'url' => $this->accessService->signedUrl($attachment),
+            'disposition' => $this->accessService->resolveDisposition($attachment),
             'created_at' => (int) $attachment->getRawOriginal('created_at'),
         ];
     }

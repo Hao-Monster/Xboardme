@@ -8,6 +8,7 @@ use App\Http\Resources\KnowledgeResource;
 use App\Models\Knowledge;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
+use App\Services\KnowledgeAttachmentAccessService;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -17,7 +18,10 @@ class KnowledgeController extends Controller
 {
     private UserService $userService;
 
-    public function __construct(UserService $userService)
+    public function __construct(
+        UserService $userService,
+        private KnowledgeAttachmentAccessService $attachmentAccessService
+    )
     {
         $this->userService = $userService;
     }
@@ -99,6 +103,10 @@ class KnowledgeController extends Controller
         }
         $subscribeUrl = Helper::getSubscribeUrl($user['token']);
         $knowledge['body'] = $this->replacePlaceholders($knowledge['body'], $subscribeUrl);
+        $knowledge['body'] = $this->attachmentAccessService->replacePlaceholders(
+            $knowledge['body'],
+            (int) $knowledge['id']
+        );
 
         return $knowledge;
     }

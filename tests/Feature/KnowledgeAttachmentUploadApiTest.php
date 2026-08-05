@@ -128,7 +128,9 @@ class KnowledgeAttachmentUploadApiTest extends TestCase
             ->assertJsonPath('data.original_name', 'guide.txt')
             ->assertJsonPath('data.size', strlen($content))
             ->assertJsonPath('data.sha256', hash('sha256', $content))
-            ->assertJsonPath('data.status', KnowledgeAttachment::STATUS_READY);
+            ->assertJsonPath('data.status', KnowledgeAttachment::STATUS_READY)
+            ->assertJsonPath('data.disposition', 'attachment');
+        $this->assertStringContainsString('/knowledge-attachments/' . $upload['upload_uuid'], $response->json('data.url'));
 
         $attachment = KnowledgeAttachment::where('uuid', $upload['upload_uuid'])->firstOrFail();
         $this->assertSame('txt', $attachment->extension);

@@ -71,8 +71,7 @@ class KnowledgeAttachmentBindingService
 
     public function extractUuids(string $body): array
     {
-        $pattern = '~' . preg_quote(KnowledgeAttachment::URI_PREFIX, '~')
-            . '(' . self::UUID_PATTERN . ')(?=$|[\s)\]}>"\'])~i';
+        $pattern = $this->placeholderPattern();
         preg_match_all($pattern, $body, $matches);
 
         $bodyWithoutValidPlaceholders = preg_replace($pattern, '', $body);
@@ -94,6 +93,12 @@ class KnowledgeAttachmentBindingService
         }
 
         return $uuids;
+    }
+
+    public function placeholderPattern(): string
+    {
+        return '~' . preg_quote(KnowledgeAttachment::URI_PREFIX, '~')
+            . '(' . self::UUID_PATTERN . ')(?=$|[\s)\]}>"\'])~i';
     }
 
     private function assertCanBind(

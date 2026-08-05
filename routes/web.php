@@ -7,6 +7,11 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\File;
 
+Route::get('/knowledge-attachments/{attachmentUuid}', [\App\Http\Controllers\KnowledgeAttachmentController::class, 'read'])
+    ->middleware(['signed', 'throttle:600,1'])
+    ->whereUuid('attachmentUuid')
+    ->name('knowledge.attachments.read');
+
 /*
 |--------------------------------------------------------------------------
 | Web Routes
