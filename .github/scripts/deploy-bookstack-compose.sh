@@ -6,6 +6,8 @@ ENV_FILE="$ROOT/.env"
 COMPOSE_FILE="$ROOT/compose.yml"
 mkdir -p "$ROOT"
 chmod 700 "$ROOT"
+dump_logs() { docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" logs --tail=160 bookstack db >&2 || true; }
+trap dump_logs ERR
 
 if [[ ! -f "$ENV_FILE" ]]; then
   umask 077

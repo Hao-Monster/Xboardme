@@ -20,6 +20,21 @@
     if (!response.ok || payload?.status === 'fail') throw new Error(payload?.message || '无法创建 BookStack 正文页面');
     return payload.data || payload;
   }
+  function articlePayload(dialog) {
+    const inputs = [...dialog.querySelectorAll('input')].filter((input) => input.type !== 'hidden' && input.type !== 'checkbox');
+    const title = String(inputs[0]?.value || '').trim();
+    const category = String(inputs[1]?.value || '').trim();
+    const language = dialog.querySelector('select')?.value || dialog.querySelector('input[role="combobox"]')?.value || 'zh-CN';
+    const toggle = dialog.querySelector('input[type="checkbox"]');
+    if (!title || !category) throw new Error('请填写标题和分类');
+    return { id: currentKnowledgeId || undefined, title, category, language, show: Boolean(toggle?.checked), body: '<p>BookStack 正文由 BookStack 管理。</p>' };
+  }
+  async function saveArticle(dialog) {
+    const response = await fetch(endpoint('/knowledge/save'), { method: 'POST', credentials: 'same-origin', headers: { Authorization: token(), 'Content-Type': 'application/json' }, body: JSON.stringify(articlePayload(dialog)) });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.status === 'fail') throw new Error(payload?.message || '文章基础信息保存失败');
+    return Number((payload.data || payload)?.id);
+  }
   function installRequestObserver() {
     const open = XMLHttpRequest.prototype.open, send = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.open = function (method, url) { this.__bookStackUrl = String(url || ''); return open.apply(this, arguments); };
@@ -56,21 +71,18 @@
       editor.parentNode.insertBefore(panel, editor);
       const submit = [...dialog.querySelectorAll('button')].find((button) => /^(提交|保存|Submit|Save)$/i.test(button.textContent.trim()));
       if (!submit) return;
+      submit.type = 'button';
       submit.textContent = '打开 BookStack 编辑器';
       submit.addEventListener('click', async (event) => {
-        if (!currentKnowledgeId) {
-          openAfterSave = true;
-          const textarea = editor.querySelector('textarea');
-          if (textarea && !textarea.value.trim()) {
-            textarea.value = '<p>BookStack 正文由 BookStack 管理。</p>';
-            textarea.dispatchEvent(new Event('input', { bubbles: true }));
-            textarea.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-          return;
-        }
         event.preventDefault(); event.stopImmediatePropagation();
         submit.disabled = true;
-        try { const page = await ensurePage(currentKnowledgeId); window.open(page.edit_url, '_blank', 'noopener'); }
+        try {
+          const id = await saveArticle(dialog);
+          if (!id) throw new Error('文章保存成功，但未取得文章标识');
+          currentKnowledgeId = id;
+          const page = await ensurePage(id);
+          window.open(page.edit_url, '_blank', 'noopener');
+        }
         catch (error) { toast(error.message || '打开 BookStack 失败', true); }
         finally { submit.disabled = false; }
       }, true);
