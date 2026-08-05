@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\KnowledgeAttachment;
 use App\Models\KnowledgeAttachmentUpload;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -42,12 +43,12 @@ class KnowledgeAttachmentOperationsTest extends TestCase
             'expires_at' => time() + 3600,
         ]);
 
-        $this->artisan('knowledge-attachments:status', ['--json' => true])
-            ->expectsOutputToContain('"healthy":true')
-            ->expectsOutputToContain('"used_bytes":300')
-            ->expectsOutputToContain('"reserved_bytes":200')
-            ->expectsOutputToContain('"quota_available_bytes":500')
-            ->assertExitCode(0);
+        $this->assertSame(0, Artisan::call('knowledge-attachments:status', ['--json' => true]));
+        $output = Artisan::output();
+        $this->assertStringContainsString('"healthy":true', $output);
+        $this->assertStringContainsString('"used_bytes":300', $output);
+        $this->assertStringContainsString('"reserved_bytes":200', $output);
+        $this->assertStringContainsString('"quota_available_bytes":500', $output);
     }
 
     public function test_status_command_fails_when_application_quota_is_exceeded(): void
@@ -69,9 +70,8 @@ class KnowledgeAttachmentOperationsTest extends TestCase
             'status' => KnowledgeAttachment::STATUS_READY,
         ]);
 
-        $this->artisan('knowledge-attachments:status', ['--json' => true])
-            ->expectsOutputToContain('"healthy":false')
-            ->assertExitCode(1);
+        $this->assertSame(1, Artisan::call('knowledge-attachments:status', ['--json' => true]));
+        $this->assertStringContainsString('"healthy":false', Artisan::output());
     }
 
     public function test_docker_templates_and_deployment_keep_private_attachments_persistent(): void
