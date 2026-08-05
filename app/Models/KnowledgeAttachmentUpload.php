@@ -18,7 +18,7 @@ class KnowledgeAttachmentUpload extends Model
     protected $table = 'v2_knowledge_attachment_upload';
     protected $dateFormat = 'U';
     protected $guarded = ['id'];
-    protected $hidden = ['temporary_path', 'draft_token'];
+    protected $hidden = ['temporary_path', 'draft_token', 'expected_sha256'];
     protected $casts = [
         'declared_size' => 'integer',
         'chunk_size' => 'integer',
@@ -43,4 +43,3 @@ class KnowledgeAttachmentUpload extends Model
         return $this->belongsTo(User::class, 'uploader_user_id');
     }
 }
-

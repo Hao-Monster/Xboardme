@@ -32,6 +32,7 @@ return new class extends Migration {
             $table->char('draft_token', 64)->index();
             $table->string('original_name', 255);
             $table->unsignedBigInteger('declared_size');
+            $table->char('expected_sha256', 64)->nullable();
             $table->unsignedInteger('chunk_size');
             $table->unsignedInteger('total_chunks');
             $table->unsignedInteger('received_chunks')->default(0);
@@ -49,4 +50,3 @@ return new class extends Migration {
         Schema::dropIfExists('v2_knowledge_attachment');
     }
 };
-

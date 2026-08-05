@@ -36,6 +36,7 @@ class KnowledgeAttachmentFoundationTest extends TestCase
             'uploader_user_id',
             'draft_token',
             'declared_size',
+            'expected_sha256',
             'chunk_size',
             'total_chunks',
             'received_chunks',
@@ -114,4 +115,3 @@ class KnowledgeAttachmentFoundationTest extends TestCase
         Storage::disk('knowledge_attachments')->assertExists('temporary/probe');
     }
 }
-

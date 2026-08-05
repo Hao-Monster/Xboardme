@@ -16,6 +16,7 @@ use App\Http\Controllers\V2\Admin\TicketController;
 use App\Http\Controllers\V2\Admin\CouponController;
 use App\Http\Controllers\V2\Admin\GiftCardController;
 use App\Http\Controllers\V2\Admin\KnowledgeController;
+use App\Http\Controllers\V2\Admin\KnowledgeAttachmentController;
 use App\Http\Controllers\V2\Admin\PaymentController;
 use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
@@ -229,6 +230,24 @@ class AdminRoute
                 $router->post('/show', [KnowledgeController::class, 'show']);
                 $router->post('/drop', [KnowledgeController::class, 'drop']);
                 $router->post('/sort', [KnowledgeController::class, 'sort']);
+                $router->post('/attachment/upload/initialize', [KnowledgeAttachmentController::class, 'initialize'])
+                    ->middleware('throttle:20,1')
+                    ->name('admin.knowledge.attachments.upload.initialize');
+                $router->post('/attachment/upload/{uploadUuid}/chunk', [KnowledgeAttachmentController::class, 'chunk'])
+                    ->middleware('throttle:240,1')
+                    ->name('admin.knowledge.attachments.upload.chunk');
+                $router->get('/attachment/upload/{uploadUuid}', [KnowledgeAttachmentController::class, 'status'])
+                    ->middleware('throttle:120,1')
+                    ->name('admin.knowledge.attachments.upload.status');
+                $router->post('/attachment/upload/{uploadUuid}/complete', [KnowledgeAttachmentController::class, 'complete'])
+                    ->middleware('throttle:20,1')
+                    ->name('admin.knowledge.attachments.upload.complete');
+                $router->get('/attachment/fetch', [KnowledgeAttachmentController::class, 'fetch'])
+                    ->middleware('throttle:120,1')
+                    ->name('admin.knowledge.attachments.fetch');
+                $router->post('/attachment/drop', [KnowledgeAttachmentController::class, 'drop'])
+                    ->middleware('throttle:60,1')
+                    ->name('admin.knowledge.attachments.drop');
             });
 
             // Payment  

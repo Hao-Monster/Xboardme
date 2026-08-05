@@ -45,4 +45,3 @@ class KnowledgeAttachment extends Model
         return $this->belongsTo(User::class, 'uploader_user_id');
     }
 }
-
