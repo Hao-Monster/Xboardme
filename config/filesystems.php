@@ -55,6 +55,16 @@ return [
             'visibility' => 'public',
         ],
 
+        'knowledge_attachments' => [
+            'driver' => 'local',
+            'root' => env(
+                'KNOWLEDGE_ATTACHMENT_ROOT',
+                storage_path('app/knowledge-attachments')
+            ),
+            'visibility' => 'private',
+            'throw' => true,
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),

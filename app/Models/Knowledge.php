@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Knowledge extends Model
 {
@@ -14,4 +15,9 @@ class Knowledge extends Model
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
     ];
+
+    public function attachments(): HasMany
+    {
+        return $this->hasMany(KnowledgeAttachment::class, 'knowledge_id');
+    }
 }
