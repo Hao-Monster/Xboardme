@@ -1,0 +1,28 @@
+name: Knowledge Article Recovery
+
+on:
+  push:
+    branches: ["codex/distributor"]
+    paths:
+      - ".github/scripts/audit-android-knowledge-recovery.sh"
+      - ".github/workflows/knowledge-recovery.yml"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    environment: distributor-server
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SSH helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - name: Audit Android knowledge article and recovery snapshot
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' < .github/scripts/audit-android-knowledge-recovery.sh
