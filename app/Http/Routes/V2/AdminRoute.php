@@ -251,6 +251,9 @@ class AdminRoute
                 $router->post('/attachment/drop', [KnowledgeAttachmentController::class, 'drop'])
                     ->middleware('throttle:60,1')
                     ->name('admin.knowledge.attachments.drop');
+                $router->post('/attachment/clone', [KnowledgeAttachmentController::class, 'clone'])
+                    ->middleware('throttle:30,1')
+                    ->name('admin.knowledge.attachments.clone');
             });
 
             // Payment  

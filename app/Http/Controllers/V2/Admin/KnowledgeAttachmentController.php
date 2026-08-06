@@ -5,13 +5,33 @@ namespace App\Http\Controllers\V2\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\KnowledgeAttachmentUploadChunk;
 use App\Http\Requests\Admin\KnowledgeAttachmentUploadInit;
+use App\Http\Requests\Admin\KnowledgeAttachmentClone;
+use App\Services\KnowledgeAttachmentCloneService;
 use App\Services\KnowledgeAttachmentUploadService;
 use Illuminate\Http\Request;
 
 class KnowledgeAttachmentController extends Controller
 {
-    public function __construct(private KnowledgeAttachmentUploadService $uploadService)
+    public function __construct(
+        private KnowledgeAttachmentUploadService $uploadService,
+        private KnowledgeAttachmentCloneService $cloneService
+    ) {
+    }
+
+    public function clone(KnowledgeAttachmentClone $request)
     {
+        $data = $request->validated();
+        $items = $this->cloneService->cloneForDraft(
+            (int) $request->user()->id,
+            (int) $data['source_knowledge_id'],
+            $data['source_uuids'],
+            $data['draft_token']
+        )->map(fn(array $item) => [
+            'source_uuid' => $item['source_uuid'],
+            'attachment' => $this->uploadService->attachmentPayload($item['attachment']),
+        ])->values()->all();
+
+        return $this->success(['items' => $items]);
     }
 
     public function initialize(KnowledgeAttachmentUploadInit $request)
