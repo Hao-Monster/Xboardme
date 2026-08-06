@@ -18,7 +18,7 @@ class KnowledgeAttachmentController extends Controller
     ) {
     }
 
-    public function clone(KnowledgeAttachmentClone $request)
+    public function cloneAttachments(KnowledgeAttachmentClone $request)
     {
         $data = $request->validated();
         $items = $this->cloneService->cloneForDraft(

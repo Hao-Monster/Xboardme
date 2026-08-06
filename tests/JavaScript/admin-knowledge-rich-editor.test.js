@@ -64,7 +64,39 @@ test('rich editor rejects executable URLs and malformed attachment placeholders'
   assert.equal(helpers.safeUrl('https://cloud.thinderbox.com/file'), 'https://cloud.thinderbox.com/file');
 });
 
+test('rich editor serializes signed attachment previews back to private placeholders', () => {
+  const helpers = loadHelpers();
+  const placeholder = 'knowledge-attachment://33333333-3333-4333-8333-333333333333';
+  const root = element('DIV', {}, [
+    element('IMG', {
+      src: 'https://example.test/knowledge-attachments/signed-token',
+      'data-knowledge-attachment-placeholder': placeholder,
+      alt: '预览图',
+    }),
+  ]);
+  const markdown = helpers.domToMarkdown(root);
+  assert.match(markdown, new RegExp(placeholder.replaceAll('/', '\\/')));
+  assert.doesNotMatch(markdown, /signed-token/);
+});
+
 test('rich editor normalizes legacy whitespace without changing content', () => {
   const helpers = loadHelpers();
   assert.equal(helpers.normalizeMarkdown('标题  \n\n\n\n正文\u00a0内容  '), '标题\n\n正文 内容');
+});
+
+test('rich editor source mounts one WYSIWYG surface and the approved minimal toolbar', () => {
+  const source = fs.readFileSync('public/assets/admin-knowledge-rich-editor.js', 'utf8');
+  const styles = fs.readFileSync('public/assets/admin-knowledge-rich-editor.css', 'utf8');
+  assert.match(source, /contentEditable = 'true'/);
+  assert.match(source, /\['P', '正文'\]/);
+  assert.match(source, /上传图片/);
+  assert.match(source, /上传视频/);
+  assert.match(source, /上传任意附件/);
+  assert.match(source, /application\/x-xboard-knowledge/);
+  assert.match(source, /cloneAttachments/);
+  assert.match(source, /sanitizeFragment/);
+  assert.match(source, /'SCRIPT', 'STYLE', 'SVG'/);
+  assert.match(styles, /\.knowledge-rich-surface/);
+  assert.match(styles, /\.knowledge-rich-attachment:hover \.knowledge-rich-delete/);
+  assert.match(styles, /\.knowledge-rich-mounted \.editor-container/);
 });

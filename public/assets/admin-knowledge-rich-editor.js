@@ -9,6 +9,7 @@
     'H4', 'H5', 'H6', 'IMG', 'LI', 'OL', 'P', 'PRE', 'SPAN', 'STRONG',
     'UL', 'VIDEO',
   ]);
+  const BLOCKED_TAGS = new Set(['EMBED', 'IFRAME', 'OBJECT', 'SCRIPT', 'STYLE', 'SVG']);
 
   function textOf(node) {
     return String(node?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -17,6 +18,11 @@
   function attribute(node, name) {
     if (typeof node?.getAttribute === 'function') return node.getAttribute(name);
     return node?.attributes?.[name] ?? null;
+  }
+
+  function attachmentUrl(node, name) {
+    const placeholder = attribute(node, 'data-knowledge-attachment-placeholder');
+    return safeUrl(placeholder) || safeUrl(attribute(node, name));
   }
 
   function safeUrl(value) {
@@ -63,6 +69,9 @@
     if (node.nodeType !== 1) return '';
 
     const tag = String(node.tagName || node.nodeName || '').toUpperCase();
+    if (attribute(node, 'data-rich-editor-ui') === '1') return '';
+    const uploadMarker = attribute(node, 'data-knowledge-upload-marker');
+    if (uploadMarker) return `<!-- ${uploadMarker} -->`;
     const content = () => serializeChildren(node, context);
     if (!SAFE_TAGS.has(tag)) return content();
 
@@ -79,17 +88,17 @@
       return `${quote}\n\n`;
     }
     if (tag === 'A') {
-      const href = safeUrl(attribute(node, 'href'));
+      const href = attachmentUrl(node, 'href');
       const label = escapeInline(textOf(node) || attribute(node, 'download') || href);
       return href ? `[${label}](${href})` : label;
     }
     if (tag === 'IMG') {
-      const src = safeUrl(attribute(node, 'src'));
+      const src = attachmentUrl(node, 'src');
       const alt = escapeInline(attribute(node, 'alt') || '图片');
       return src ? `![${alt}](${src})` : '';
     }
     if (tag === 'VIDEO') {
-      const src = safeUrl(attribute(node, 'src'));
+      const src = attachmentUrl(node, 'src');
       return src ? `<video controls preload="metadata" src="${src}"></video>\n\n` : '';
     }
     if (tag === 'UL' || tag === 'OL') {
@@ -107,6 +116,8 @@
   }
 
   function copySafeAttributes(source, target, tag) {
+    const placeholder = safeUrl(source.getAttribute('data-knowledge-attachment-placeholder'));
+    if (placeholder) target.setAttribute('data-knowledge-attachment-placeholder', placeholder);
     if (tag === 'A') {
       const href = safeUrl(source.getAttribute('href'));
       if (href) target.setAttribute('href', href);
@@ -125,12 +136,17 @@
     }
     const uuid = source.getAttribute('data-knowledge-attachment-uuid');
     if (/^[0-9a-f-]{36}$/i.test(uuid || '')) target.setAttribute('data-knowledge-attachment-uuid', uuid);
+    const marker = source.getAttribute('data-knowledge-upload-marker');
+    if (/^xboard-knowledge-upload:local-[a-z0-9-]+$/i.test(marker || '')) {
+      target.setAttribute('data-knowledge-upload-marker', marker);
+    }
   }
 
   function sanitizeNode(source, documentRef) {
     if (source.nodeType === 3) return documentRef.createTextNode(source.nodeValue || '');
     if (source.nodeType !== 1) return null;
     const tag = String(source.tagName || '').toUpperCase();
+    if (BLOCKED_TAGS.has(tag)) return null;
     const container = SAFE_TAGS.has(tag)
       ? documentRef.createElement(tag.toLowerCase())
       : documentRef.createDocumentFragment();
@@ -165,4 +181,426 @@
     sanitizeFragment,
     serializeNode,
   };
+
+  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return;
+
+  const EDITOR_SELECTOR = '.rc-md-editor';
+  const CLIPBOARD_TYPE = 'application/x-xboard-knowledge';
+  const mounted = new Set();
+
+  function attachmentApi() {
+    return window.__xboardKnowledgeAttachments || null;
+  }
+
+  function nativeSet(textarea, value) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (setter) setter.call(textarea, value);
+    else textarea.value = value;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function sync(state) {
+    if (state.syncing) return;
+    state.syncing = true;
+    nativeSet(state.textarea, domToMarkdown(state.surface));
+    state.syncing = false;
+  }
+
+  function button(label, title, action, className = '') {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = `knowledge-rich-tool ${className}`.trim();
+    item.textContent = label;
+    item.title = title;
+    item.setAttribute('aria-label', title);
+    item.addEventListener('mousedown', (event) => event.preventDefault());
+    item.addEventListener('click', action);
+    return item;
+  }
+
+  function headingControl(state) {
+    const select = document.createElement('select');
+    select.className = 'knowledge-rich-heading';
+    select.setAttribute('aria-label', '标题级别');
+    [['P', '正文'], ['H1', '标题 1'], ['H2', '标题 2'], ['H3', '标题 3']]
+      .forEach(([value, label]) => select.add(new Option(label, value)));
+    select.addEventListener('change', () => {
+      state.surface.focus();
+      document.execCommand('formatBlock', false, select.value);
+      select.value = 'P';
+      sync(state);
+    });
+    return select;
+  }
+
+  function createToolbar(state) {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'knowledge-rich-toolbar';
+    toolbar.appendChild(headingControl(state));
+    toolbar.appendChild(button('链接', '插入链接', () => {
+      const href = window.prompt('请输入链接地址（https://）');
+      const url = safeUrl(href);
+      if (!url) return;
+      state.surface.focus();
+      document.execCommand('createLink', false, url);
+      sync(state);
+    }));
+    toolbar.appendChild(button('图片', '上传图片', () => attachmentApi()?.chooseFiles?.('image')));
+    toolbar.appendChild(button('视频', '上传视频', () => attachmentApi()?.chooseFiles?.('video')));
+    toolbar.appendChild(button('📎', '上传任意附件', () => attachmentApi()?.chooseFiles?.('file'), 'knowledge-rich-paperclip'));
+    return toolbar;
+  }
+
+  function rangeInside(state) {
+    const selection = window.getSelection?.();
+    if (!selection?.rangeCount) return null;
+    const range = selection.getRangeAt(0);
+    return state.surface.contains(range.commonAncestorContainer) ? range.cloneRange() : null;
+  }
+
+  function insertNodeAt(state, node, range = null) {
+    const target = range || rangeInside(state);
+    if (!target) {
+      state.surface.appendChild(node);
+      return;
+    }
+    target.deleteContents();
+    const lastInserted = node.nodeType === 11 ? node.lastChild : node;
+    target.insertNode(node);
+    if (lastInserted?.parentNode) target.setStartAfter(lastInserted);
+    else target.selectNodeContents(state.surface);
+    target.collapse(true);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(target);
+  }
+
+  function attachmentElement(attachment) {
+    let media;
+    if (attachment.disposition === 'inline' && String(attachment.mime_type).startsWith('image/')) {
+      media = document.createElement('img');
+      media.alt = attachment.original_name || '图片';
+      media.src = attachment.url;
+    } else if (attachment.disposition === 'inline' && String(attachment.mime_type).startsWith('video/')) {
+      media = document.createElement('video');
+      media.controls = true;
+      media.preload = 'metadata';
+      media.src = attachment.url;
+    } else {
+      media = document.createElement('a');
+      media.href = attachment.url;
+      media.textContent = attachment.original_name || '下载附件';
+      media.rel = 'noopener noreferrer';
+    }
+    media.dataset.knowledgeAttachmentUuid = attachment.uuid;
+    media.dataset.knowledgeAttachmentPlaceholder = attachment.placeholder;
+    return media;
+  }
+
+  function applyAttachment(state, attachment) {
+    const selector = `[data-knowledge-attachment-placeholder="${CSS.escape(attachment.placeholder)}"],`
+      + `[src="${CSS.escape(attachment.placeholder)}"],[href="${CSS.escape(attachment.placeholder)}"]`;
+    state.surface.querySelectorAll(selector).forEach((media) => {
+      media.dataset.knowledgeAttachmentUuid = attachment.uuid;
+      media.dataset.knowledgeAttachmentPlaceholder = attachment.placeholder;
+      if (media.hasAttribute('src')) media.setAttribute('src', attachment.url);
+      if (media.hasAttribute('href')) media.setAttribute('href', attachment.url);
+      decorateAttachment(state, media);
+    });
+  }
+
+  function hydratePlaceholders(state) {
+    state.surface.querySelectorAll('[src], [href]').forEach((media) => {
+      const value = media.getAttribute(media.hasAttribute('src') ? 'src' : 'href');
+      if (!ATTACHMENT_PATTERN.test(value || '')) return;
+      media.dataset.knowledgeAttachmentPlaceholder = value;
+      media.dataset.knowledgeAttachmentUuid = value.slice('knowledge-attachment://'.length);
+    });
+    (attachmentApi()?.attachments?.() || []).forEach((attachment) => applyAttachment(state, attachment));
+  }
+
+  function decorateAttachment(state, media) {
+    if (!media?.dataset?.knowledgeAttachmentUuid) return;
+    let wrapper = media.closest('.knowledge-rich-attachment');
+    if (!wrapper) {
+      wrapper = document.createElement('span');
+      wrapper.className = 'knowledge-rich-attachment';
+      wrapper.contentEditable = 'false';
+      media.parentNode?.insertBefore(wrapper, media);
+      wrapper.appendChild(media);
+    }
+    if (wrapper.querySelector('[data-rich-editor-ui="1"]')) return;
+    const remove = button('删除', `删除附件 ${media.getAttribute('alt') || media.textContent || ''}`, async () => {
+      const removed = await attachmentApi()?.deleteAttachment?.(media.dataset.knowledgeAttachmentUuid);
+      if (removed === false) return;
+      wrapper.remove();
+      sync(state);
+    }, 'knowledge-rich-delete');
+    remove.dataset.richEditorUi = '1';
+    wrapper.appendChild(remove);
+  }
+
+  function decorateAll(state) {
+    state.surface.querySelectorAll('[data-knowledge-attachment-uuid]').forEach((media) => decorateAttachment(state, media));
+  }
+
+  function insertHtml(state, html, range = null) {
+    const template = document.createElement('template');
+    template.innerHTML = String(html || '');
+    const fragment = sanitizeFragment(template.content, document);
+    const marker = document.createElement('span');
+    marker.dataset.richEditorUi = '1';
+    insertNodeAt(state, marker, range);
+    marker.replaceWith(fragment);
+    decorateAll(state);
+    sync(state);
+  }
+
+  function insertUploadMarkers(state, items, range) {
+    const fragment = document.createDocumentFragment();
+    items.forEach((item) => {
+      const marker = document.createElement('span');
+      marker.className = 'knowledge-rich-uploading';
+      marker.dataset.knowledgeUploadMarker = item.marker.replace(/^<!--\s*|\s*-->$/g, '').trim();
+      marker.textContent = `正在上传 ${item.name}…`;
+      marker.contentEditable = 'false';
+      fragment.appendChild(marker);
+    });
+    insertNodeAt(state, fragment, range);
+    sync(state);
+  }
+
+  function uploadFiles(state, files) {
+    const list = Array.from(files || []);
+    if (!list.length) return;
+    const range = rangeInside(state);
+    const items = attachmentApi()?.enqueueFiles?.(list) || [];
+    if (items.length) insertUploadMarkers(state, items, range);
+  }
+
+  function selectedHtml(state) {
+    const range = rangeInside(state);
+    if (!range || range.collapsed) return '';
+    const container = document.createElement('div');
+    container.appendChild(range.cloneContents());
+    container.querySelectorAll('[data-rich-editor-ui="1"]').forEach((node) => node.remove());
+    return container.innerHTML;
+  }
+
+  function attachmentUuids(root) {
+    return [...new Set(Array.from(root.querySelectorAll?.('[data-knowledge-attachment-uuid]') || [])
+      .map((node) => node.dataset.knowledgeAttachmentUuid)
+      .filter(Boolean))];
+  }
+
+  function bindClipboard(state) {
+    state.surface.addEventListener('copy', (event) => {
+      const html = selectedHtml(state);
+      if (!html || !event.clipboardData) return;
+      const holder = document.createElement('div');
+      holder.innerHTML = html;
+      const context = attachmentApi()?.context?.() || {};
+      const transport = document.createElement('div');
+      if (context.knowledgeId) transport.dataset.xboardKnowledgeSourceId = String(context.knowledgeId);
+      transport.innerHTML = html;
+      event.preventDefault();
+      event.clipboardData.setData('text/html', transport.outerHTML);
+      event.clipboardData.setData('text/plain', window.getSelection()?.toString() || '');
+      event.clipboardData.setData(CLIPBOARD_TYPE, JSON.stringify({
+        sourceKnowledgeId: context.knowledgeId || null,
+        attachmentUuids: attachmentUuids(holder),
+        html,
+      }));
+    });
+
+    state.surface.addEventListener('paste', async (event) => {
+      const imageFiles = attachmentApi()?.clipboardImages?.(event.clipboardData) || [];
+      if (imageFiles.length) {
+        event.preventDefault();
+        event.stopPropagation();
+        uploadFiles(state, imageFiles);
+        return;
+      }
+      const encoded = event.clipboardData?.getData(CLIPBOARD_TYPE);
+      const range = rangeInside(state);
+      if (encoded) {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const payload = JSON.parse(encoded);
+          const context = attachmentApi()?.context?.() || {};
+          let html = payload.html || '';
+          if (
+            payload.attachmentUuids?.length
+            && payload.sourceKnowledgeId
+            && Number(payload.sourceKnowledgeId) !== Number(context.knowledgeId)
+          ) {
+            const clones = await attachmentApi().cloneAttachments(
+              payload.sourceKnowledgeId,
+              payload.attachmentUuids
+            );
+            const map = new Map(clones.map((item) => [item.source_uuid, item.attachment]));
+            const holder = document.createElement('div');
+            holder.innerHTML = html;
+            holder.querySelectorAll('[data-knowledge-attachment-uuid]').forEach((node) => {
+              const clone = map.get(node.dataset.knowledgeAttachmentUuid);
+              if (!clone) return;
+              const replacement = attachmentElement(clone);
+              node.replaceWith(replacement);
+            });
+            html = holder.innerHTML;
+          }
+          insertHtml(state, html, range);
+        } catch (error) {
+          attachmentApi()?.toast?.(error.message || '粘贴附件失败。', 'error');
+        }
+        return;
+      }
+      const html = event.clipboardData?.getData('text/html');
+      if (html) {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          const holder = document.createElement('div');
+          holder.innerHTML = html;
+          const transport = holder.querySelector('[data-xboard-knowledge-source-id]');
+          const sourceKnowledgeId = Number(transport?.dataset.xboardKnowledgeSourceId || 0);
+          const context = attachmentApi()?.context?.() || {};
+          const uuids = attachmentUuids(holder);
+          if (sourceKnowledgeId && uuids.length && sourceKnowledgeId !== Number(context.knowledgeId)) {
+            const clones = await attachmentApi().cloneAttachments(sourceKnowledgeId, uuids);
+            const map = new Map(clones.map((item) => [item.source_uuid, item.attachment]));
+            holder.querySelectorAll('[data-knowledge-attachment-uuid]').forEach((node) => {
+              const clone = map.get(node.dataset.knowledgeAttachmentUuid);
+              if (clone) node.replaceWith(attachmentElement(clone));
+            });
+          }
+          const cleanHtml = transport ? transport.innerHTML : holder.innerHTML;
+          insertHtml(state, cleanHtml, range);
+        } catch (error) {
+          attachmentApi()?.toast?.(error.message || '粘贴内容失败。', 'error');
+        }
+      }
+    });
+  }
+
+  function bindUploads(state) {
+    ['dragenter', 'dragover'].forEach((name) => state.surface.addEventListener(name, (event) => {
+      if (!event.dataTransfer?.types?.includes('Files')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      state.shell.classList.add('is-dragging');
+    }));
+    state.surface.addEventListener('dragleave', () => state.shell.classList.remove('is-dragging'));
+    state.surface.addEventListener('drop', (event) => {
+      if (!event.dataTransfer?.files?.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      state.shell.classList.remove('is-dragging');
+      uploadFiles(state, event.dataTransfer.files);
+    });
+  }
+
+  function mount(editor) {
+    if (editor.dataset.knowledgeRichMounted === '1') return;
+    const textarea = editor.querySelector('textarea');
+    const preview = editor.querySelector('.sec-html');
+    if (!textarea || !preview) return;
+    if (textarea.value.trim() && !preview.innerHTML.trim()) return;
+
+    editor.dataset.knowledgeRichMounted = '1';
+    editor.classList.add('knowledge-rich-mounted');
+    const shell = document.createElement('div');
+    shell.className = 'knowledge-rich-shell';
+    const surface = document.createElement('div');
+    surface.className = 'knowledge-rich-surface';
+    surface.contentEditable = 'true';
+    surface.setAttribute('role', 'textbox');
+    surface.setAttribute('aria-multiline', 'true');
+    surface.setAttribute('aria-label', '知识文章正文');
+    surface.innerHTML = preview.innerHTML || '<p><br></p>';
+    surface.querySelectorAll('[data-knowledge-attachment-delete], [data-rich-editor-ui="1"]').forEach((node) => node.remove());
+    const state = { editor, textarea, preview, shell, surface, syncing: false };
+    shell.appendChild(createToolbar(state));
+    shell.appendChild(surface);
+    editor.appendChild(shell);
+    mounted.add(state);
+    hydratePlaceholders(state);
+    decorateAll(state);
+    surface.addEventListener('input', () => sync(state));
+    bindUploads(state);
+    bindClipboard(state);
+  }
+
+  function stateFor(editor) {
+    return [...mounted].find((state) => state.editor === editor) || null;
+  }
+
+  function scan() {
+    for (const state of [...mounted]) {
+      if (!state.editor.isConnected) mounted.delete(state);
+    }
+    if (!/^#\/config\/knowledge(?:[/?]|$)/.test(location.hash || '')) return;
+    document.querySelectorAll(EDITOR_SELECTOR).forEach(mount);
+  }
+
+  window.__xboardKnowledgeRichEditor = {
+    attachmentAvailable(editor, attachment) {
+      const state = stateFor(editor);
+      if (!state) return false;
+      applyAttachment(state, attachment);
+      return true;
+    },
+    attachmentReady(editor, attachment, marker) {
+      const state = stateFor(editor);
+      if (!state) return false;
+      const key = String(marker || '').replace(/^<!--\s*|\s*-->$/g, '').trim();
+      const target = state.surface.querySelector(`[data-knowledge-upload-marker="${CSS.escape(key)}"]`);
+      const media = attachmentElement(attachment);
+      if (target) target.replaceWith(media);
+      else state.surface.appendChild(media);
+      decorateAttachment(state, media);
+      sync(state);
+      return true;
+    },
+    attachmentFailed(editor, marker, itemId, message) {
+      const state = stateFor(editor);
+      if (!state) return false;
+      const key = String(marker || '').replace(/^<!--\s*|\s*-->$/g, '').trim();
+      const target = state.surface.querySelector(`[data-knowledge-upload-marker="${CSS.escape(key)}"]`);
+      if (!target) return false;
+      target.classList.add('is-failed');
+      target.textContent = `上传失败：${message}（点击重试）`;
+      target.tabIndex = 0;
+      target.setAttribute('role', 'button');
+      const retry = () => {
+        target.classList.remove('is-failed');
+        target.textContent = '正在重试上传…';
+        target.removeAttribute('role');
+        target.removeAttribute('tabindex');
+        attachmentApi()?.retryUpload?.(itemId);
+      };
+      target.onclick = retry;
+      target.onkeydown = (event) => {
+        if (event.key === 'Enter' || event.key === ' ') retry();
+      };
+      return true;
+    },
+    attachmentCancelled(editor, marker) {
+      const state = stateFor(editor);
+      if (!state) return false;
+      const key = String(marker || '').replace(/^<!--\s*|\s*-->$/g, '').trim();
+      state.surface.querySelector(`[data-knowledge-upload-marker="${CSS.escape(key)}"]`)?.remove();
+      sync(state);
+      return true;
+    },
+    scan,
+  };
+
+  const observer = new MutationObserver(scan);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener('hashchange', scan);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan);
+  else scan();
 }());

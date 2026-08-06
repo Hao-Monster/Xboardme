@@ -313,6 +313,7 @@
     state.input.addEventListener('change', () => {
       enqueueFiles(state, state.input.files);
       state.input.value = '';
+      state.input.accept = '';
     });
     state.textarea.addEventListener('paste', (event) => {
       const files = clipboardImages(event.clipboardData);
@@ -376,7 +377,7 @@
 
   function enqueueFiles(state, fileList, insertionOffset = null) {
     const files = Array.from(fileList || []);
-    if (!files.length) return;
+    if (!files.length) return [];
     const items = files.map((file, index) => {
       const id = `local-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;
       return {
@@ -399,6 +400,7 @@
     insertMarkers(state, items.map((item) => item.marker), insertionOffset);
     render(state);
     pumpQueue();
+    return items;
   }
 
   function insertMarkers(state, markers, insertionOffset = null) {
@@ -439,6 +441,13 @@
           next.item.status = 'failed';
           next.item.error = error.message || '上传失败。';
           render(next.state);
+          window.__xboardKnowledgeRichEditor?.attachmentFailed?.(
+            next.state.editor,
+            next.item.marker,
+            next.item.id,
+            next.item.error
+          );
+          toast(next.item.error, 'error');
         })
         .finally(() => {
           next.item.controller = null;
@@ -514,6 +523,7 @@
     if (currentKey) state.items.delete(currentKey);
     state.items.set(attachment.uuid, item);
     render(state);
+    window.__xboardKnowledgeRichEditor?.attachmentReady?.(state.editor, attachment, marker);
     ensurePreviewVisible(state);
     schedulePreview(state);
     toast(`${attachment.original_name} 已上传并插入正文`);
@@ -609,6 +619,7 @@
         }
       }
       if (item.marker && state.textarea.value.includes(item.marker)) replaceText(state, item.marker, '');
+      window.__xboardKnowledgeRichEditor?.attachmentCancelled?.(state.editor, item.marker);
       state.items.delete(itemId);
       render(state);
       toast('附件上传已取消');
@@ -630,16 +641,16 @@
 
   async function deleteAttachment(state, itemId) {
     const item = state.items.get(itemId);
-    if (!item) return;
+    if (!item) return false;
     if (['queued', 'uploading', 'failed', 'cancelling'].includes(item.status)) {
       await cancelUpload(state, itemId);
-      return;
+      return true;
     }
     const attachment = item.attachment;
-    if (!attachment) return;
+    if (!attachment) return false;
     const removal = removeAttachmentMarkup(state.textarea.value, attachment);
     const referenceText = removal.count > 1 ? `（正文中共有 ${removal.count} 处引用）` : '';
-    if (!window.confirm(`确认删除附件“${item.name}”吗？${referenceText}`)) return;
+    if (!window.confirm(`确认删除附件“${item.name}”吗？${referenceText}`)) return false;
 
     if (!attachment.knowledge_id) {
       try {
@@ -648,10 +659,11 @@
         state.items.delete(itemId);
         render(state);
         toast('错误附件已永久删除');
+        return true;
       } catch (error) {
         toast(error.message, 'error');
+        return false;
       }
-      return;
     }
 
     item.status = 'pending-delete';
@@ -659,6 +671,7 @@
     setEditorValue(state, removal.body);
     render(state);
     toast('附件已从正文移除，保存文章后删除；可用编辑器撤销操作恢复');
+    return true;
   }
 
   function undoDelete(state, itemId) {
@@ -714,6 +727,7 @@
         cancelled: false,
         undoIndex: null,
       });
+      window.__xboardKnowledgeRichEditor?.attachmentAvailable?.(state.editor, attachment);
     }
     render(state);
     schedulePreview(state);
@@ -830,6 +844,71 @@
     formatBytes,
     markdownFor,
     removeAttachmentMarkup,
+    chooseFiles(kind = 'file') {
+      const state = activeState();
+      if (!state) return false;
+      state.input.accept = kind === 'image' ? 'image/*' : (kind === 'video' ? 'video/*' : '');
+      state.input.click();
+      return true;
+    },
+    enqueueFiles(files) {
+      const state = activeState();
+      return state ? enqueueFiles(state, files) : [];
+    },
+    async deleteAttachment(uuid) {
+      const state = activeState();
+      if (!state) return false;
+      return deleteAttachment(state, uuid);
+    },
+    async cloneAttachments(sourceKnowledgeId, sourceUuids) {
+      const state = activeState();
+      if (!state) throw new Error('知识文章编辑器尚未准备完成。');
+      const result = await request('/knowledge/attachment/clone', {
+        method: 'POST',
+        json: {
+          source_knowledge_id: Number(sourceKnowledgeId),
+          source_uuids: [...new Set(sourceUuids)],
+          draft_token: state.draftToken,
+        },
+      });
+      for (const item of result.items || []) {
+        const attachment = item.attachment;
+        state.items.set(attachment.uuid, {
+          id: attachment.uuid,
+          name: attachment.original_name,
+          size: attachment.size,
+          status: 'ready',
+          progress: 100,
+          error: '',
+          file: null,
+          uploadUuid: attachment.uuid,
+          attachment,
+          marker: null,
+          controller: null,
+          cancelled: false,
+          undoIndex: null,
+        });
+      }
+      render(state);
+      return result.items || [];
+    },
+    retryUpload(itemId) {
+      const state = activeState();
+      if (!state) return false;
+      retryUpload(state, itemId);
+      return true;
+    },
+    context() {
+      const state = activeState();
+      return state ? { knowledgeId: state.knowledgeId, draftToken: state.draftToken } : {};
+    },
+    attachments() {
+      const state = activeState();
+      return state
+        ? [...state.items.values()].map((item) => item.attachment).filter(Boolean)
+        : [];
+    },
+    toast,
     scan,
     uploadMarker,
   };
