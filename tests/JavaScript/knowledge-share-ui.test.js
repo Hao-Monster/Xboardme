@@ -67,6 +67,9 @@ test('public page includes non-blocking login and register card', () => {
   assert.match(blade, /public-knowledge-toc/);
   assert.match(blade, /data-content-url/);
   assert.match(blade, /data-toc-level/);
+  assert.match(blade, /public-knowledge\.css\?v=/);
+  assert.match(blade, /public-knowledge\.js\?v=/);
+  assert.match(blade, /hash_file\('sha256'/);
   assert.match(source, /async function loadArticle/);
   assert.match(source, /fetch\(link\.dataset\.contentUrl/);
   assert.match(source, /history\.pushState/);

@@ -6,7 +6,7 @@
   <meta name="robots" content="index,follow">
   <meta name="description" content="{{ \Illuminate\Support\Str::limit(strip_tags($article->body), 150) }}">
   <link rel="canonical" href="{{ $canonicalUrl }}" data-public-canonical>
-  <link rel="stylesheet" href="/assets/public-knowledge.css">
+  <link rel="stylesheet" href="/assets/public-knowledge.css?v={{ substr(hash_file('sha256', public_path('assets/public-knowledge.css')), 0, 12) }}">
   <title>{{ $article->title }} - {{ $appName }}</title>
 </head>
 <body>
@@ -67,6 +67,6 @@
     <div><a href="/#/login">登录</a><a class="primary" href="/#/register">注册</a></div>
   </aside>
   <div class="public-knowledge-toast" role="status" aria-live="polite"></div>
-  <script defer src="/assets/public-knowledge.js"></script>
+  <script defer src="/assets/public-knowledge.js?v={{ substr(hash_file('sha256', public_path('assets/public-knowledge.js')), 0, 12) }}"></script>
 </body>
 </html>
