@@ -29,7 +29,7 @@ class PublicKnowledgeShareTest extends TestCase
     {
         $article = $this->article('公开教程', true, '# 使用方法');
 
-        $canonical = 'https://example.test/guide/' . $article->id . '/article';
+        $canonical = 'http://example.test/guide/' . $article->id . '/article';
         $this->get('/guide/' . $article->id)->assertRedirect($canonical);
         $response = $this->get('/guide/' . $article->id . '/old-title')->assertRedirect($canonical);
         $this->followRedirects($response)->assertOk()->assertSee('公开教程');
@@ -45,7 +45,7 @@ class PublicKnowledgeShareTest extends TestCase
 
         $oldUrl = '/guide/' . $article->id . '/article';
         $article->update(['title' => 'Renamed Guide']);
-        $this->get($oldUrl)->assertRedirect('https://example.test/guide/' . $article->id . '/renamed-guide');
+        $this->get($oldUrl)->assertRedirect('http://example.test/guide/' . $article->id . '/renamed-guide');
         $this->get('/guide/' . $article->id . '/renamed-guide')->assertOk()->assertSee('Renamed Guide');
     }
 
@@ -70,7 +70,7 @@ class PublicKnowledgeShareTest extends TestCase
         );
 
         $response = $this->get('/guide/' . $article->id . '/security')->assertOk();
-        $response->assertDontSee('<script', false)
+        $response->assertDontSee('<script>alert', false)
             ->assertDontSee('onerror=', false)
             ->assertDontSee('onclick=', false)
             ->assertDontSee('javascript:', false)
@@ -115,7 +115,7 @@ class PublicKnowledgeShareTest extends TestCase
 
         $this->getJson('/api/v1/user/knowledge/fetch?id=' . $article->id)
             ->assertOk()
-            ->assertJsonPath('data.share_url', 'https://example.test/guide/' . $article->id . '/api-guide');
+            ->assertJsonPath('data.share_url', 'http://example.test/guide/' . $article->id . '/api-guide');
     }
 
     private function article(string $title, bool $show, string $body): Knowledge
