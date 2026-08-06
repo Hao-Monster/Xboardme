@@ -50,6 +50,8 @@ jobs:
         run: |
           sh -n .docker/entrypoint.sh
           bash -n .github/scripts/deploy-xboard-compose.sh
+          bash -n .github/scripts/deploy-bookstack-compose.sh
+          bash -n .github/scripts/diagnose-bookstack-origin.sh
 
   build:
     needs: verify
