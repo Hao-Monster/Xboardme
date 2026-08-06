@@ -465,6 +465,18 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.bound_devices.1', 'device-primary-001')
             ->assertJsonPath('data.0.can_view_subscription_qr', true);
 
+        $deliveryResponse = $this->getJson('/api/v1/user/distributor/delivery?' . http_build_query([
+            'trade_no' => $order->trade_no,
+        ]))->assertOk()
+            ->assertJsonPath('data.trade_no', $order->trade_no)
+            ->assertJsonPath('data.customer_name', '测试客户')
+            ->assertJsonPath('data.hwid_devices.0', 'device-secondary-02')
+            ->assertJsonPath('data.hwid_devices.1', 'device-primary-001');
+
+        $this->assertStringStartsWith('data:image/svg+xml;base64,', $deliveryResponse->json('data.qr_code'));
+        $this->assertArrayNotHasKey('subscribe_url', $deliveryResponse->json('data'));
+        $this->assertStringNotContainsString($delivery->subscriber->token, $deliveryResponse->getContent());
+
         $response = $this->getJson('/api/v1/user/distributor/subscription-qr?' . http_build_query([
             'trade_no' => $order->trade_no,
         ]))->assertOk()

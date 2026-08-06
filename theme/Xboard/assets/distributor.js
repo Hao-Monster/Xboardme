@@ -644,9 +644,16 @@
     renderModal();
   }
 
+  async function makeDeliveryModal(delivery) {
+    const png = delivery.delivery_status === 0 && delivery.qr_code
+      ? await composeSubscriptionQrPng(delivery)
+      : {};
+    return { type: 'delivery', delivery, ...png, copied: false };
+  }
+
   async function openDelivery(tradeNo) {
     const delivery = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(tradeNo)}`));
-    state.modal = { type: 'delivery', delivery };
+    state.modal = await makeDeliveryModal(delivery);
     state.closeArmed = false;
     renderModal();
     startPolling();
@@ -698,7 +705,8 @@
       </section></div>`;
       return;
     }
-    const delivery = state.modal.delivery;
+    const modal = state.modal;
+    const delivery = modal.delivery;
     const claimed = delivery.delivery_status === 1;
     const pending = delivery.delivery_status === 0;
     const issued = Boolean(delivery.config_issued_at);
@@ -708,8 +716,7 @@
       : issued ? t('waitingConnection') : '';
     root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-qr-modal"><button class="dist-modal-x" data-modal-action="done">×</button><h2>${t('qrTitle')}</h2>
       <p>${pending ? t('qrHint') : claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p>
-      ${pending && delivery.qr_code ? `<div class="dist-qr"><img src="${escapeHtml(delivery.qr_code)}" alt="Subscription QR"></div>` : `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong>${claimed && issued ? `<small class="dist-network-status">${escapeHtml(connectionText)}</small>` : ''}</div>`}
-      <div class="dist-order-ref">${t('orderNo')}：${escapeHtml(delivery.trade_no)}</div>
+      ${pending && modal.imageUrl ? `<img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}"><div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>` : `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong>${claimed && issued ? `<small class="dist-network-status">${escapeHtml(connectionText)}</small>` : ''}</div>`}
       ${state.closeArmed && !issued && delivery.delivery_status !== 2 ? `<div class="dist-warning">${t('closeWarning')}</div>` : ''}
       <div class="dist-modal-actions"><button class="primary" data-modal-action="done">${state.closeArmed && !issued && delivery.delivery_status !== 2 ? t('closeAgain') : t('done')}</button></div>
       </section></div>`;
@@ -750,9 +757,13 @@
     state.poller = setInterval(async () => {
       if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.delivery_status === 2 || state.modal.delivery.connected_at) return;
       try {
-        const updated = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(state.modal.delivery.trade_no)}`));
-        if (updated.delivery_status !== state.modal.delivery.delivery_status || updated.config_issued_at !== state.modal.delivery.config_issued_at || updated.connected_at !== state.modal.delivery.connected_at) {
-          state.modal.delivery = updated;
+        const currentTradeNo = state.modal.delivery.trade_no;
+        const updated = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(currentTradeNo)}`));
+        const devicesChanged = JSON.stringify(updated.hwid_devices || []) !== JSON.stringify(state.modal.delivery.hwid_devices || []);
+        if (updated.delivery_status !== state.modal.delivery.delivery_status || updated.config_issued_at !== state.modal.delivery.config_issued_at || updated.connected_at !== state.modal.delivery.connected_at || devicesChanged) {
+          const nextModal = await makeDeliveryModal(updated);
+          if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.trade_no !== currentTradeNo) return;
+          state.modal = nextModal;
           state.closeArmed = false;
           renderModal();
         }
@@ -769,7 +780,7 @@
     try {
       const delivery = dataOf(await api('/user/distributor/delivery'));
       if (delivery?.delivery_status === 0) {
-        state.modal = { type: 'delivery', delivery };
+        state.modal = await makeDeliveryModal(delivery);
         renderModal();
         startPolling();
       }
@@ -870,7 +881,7 @@
     if (action === 'confirm-purchase') await submitPurchase();
     else if (action === 'done') await handleDone();
     else if (action === 'copy-subscription-qr') {
-      if (!state.modal || state.modal.type !== 'subscriptionQr') return;
+      if (!state.modal || !['subscriptionQr', 'delivery'].includes(state.modal.type) || !state.modal.blob) return;
       if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined' || !window.isSecureContext) {
         toast(t('copyImageUnsupported'), 'error');
         return;
@@ -880,18 +891,18 @@
         state.modal.copied = true;
         renderModal();
         window.setTimeout(() => {
-          if (!state.modal || state.modal.type !== 'subscriptionQr') return;
+          if (!state.modal || !['subscriptionQr', 'delivery'].includes(state.modal.type)) return;
           state.modal.copied = false;
           renderModal();
         }, 1800);
       } catch (_) { toast(t('copyImageUnsupported'), 'error'); }
     }
     else if (action === 'download-subscription-qr') {
-      if (!state.modal || state.modal.type !== 'subscriptionQr') return;
+      if (!state.modal || !['subscriptionQr', 'delivery'].includes(state.modal.type) || !state.modal.blob) return;
       const url = URL.createObjectURL(state.modal.blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `订阅二维码-${state.modal.payload.trade_no}.png`;
+      link.download = `订阅二维码-${state.modal.payload?.trade_no || state.modal.delivery?.trade_no}.png`;
       document.body.appendChild(link);
       link.click();
       link.remove();

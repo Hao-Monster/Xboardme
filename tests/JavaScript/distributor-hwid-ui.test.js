@@ -19,7 +19,7 @@ test('distributor delivery waits for first positive traffic and reports the conn
 test('distributor checkout keeps the pre-HWID interaction copy and state transitions', () => {
   assert.match(distributor, /每个订单生成一份独立订阅，客户扫码领取后不可再次领取。/);
   assert.match(distributor, /请让终端客户使用订阅客户端扫描。二维码只能成功领取一次。/);
-  assert.match(distributor, /pending && delivery\.qr_code/);
+  assert.match(distributor, /delivery\.delivery_status === 0 && delivery\.qr_code/);
   assert.match(distributor, /claimed && issued \? '✓'/);
   assert.match(distributor, /delivery\?\.delivery_status === 0/);
   assert.doesNotMatch(distributor, /默认通过 HWID 限制 1 台设备/);

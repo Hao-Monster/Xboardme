@@ -104,8 +104,15 @@ class DistributorOrderService
 
     public function deliveryData(DistributorOrder $delivery, bool $includeClaimUrl = true): array
     {
+        $delivery->loadMissing([
+            'order:id,trade_no',
+            'subscriber:id,token',
+            'hwidDevices:id,distributor_order_id,hwid,last_seen_at',
+        ]);
+
         $data = [
             'trade_no' => $delivery->order->trade_no,
+            'customer_name' => trim((string) $delivery->customer_name),
             'delivery_status' => $delivery->delivery_status,
             'settlement_status' => $delivery->settlement_status,
             'config_issued_at' => $delivery->config_issued_at,
@@ -116,6 +123,12 @@ class DistributorOrderService
             'closed_at' => $delivery->closed_at,
             'hwid_enabled' => (bool) $delivery->hwid_enabled,
             'hwid_limit' => (int) $delivery->hwid_limit,
+            'hwid_devices' => $delivery->hwidDevices
+                ->sortByDesc('last_seen_at')
+                ->pluck('hwid')
+                ->filter()
+                ->values()
+                ->all(),
             'can_open' => $delivery->delivery_status === DistributorOrder::DELIVERY_PENDING,
         ];
 

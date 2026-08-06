@@ -39,7 +39,18 @@ test('composited PNG supports image clipboard copy, feedback, download, and unsu
   assert.match(source, /new ClipboardItem\(\{ 'image\/png': state\.modal\.blob \}\)/);
   assert.match(source, /state\.modal\.copied = true/);
   assert.match(source, /modal\.copied \? t\('copySuccess'\) : t\('copyImage'\)/);
-  assert.match(source, /订阅二维码-\$\{state\.modal\.payload\.trade_no\}\.png/);
+  assert.match(source, /state\.modal\.payload\?\.trade_no \|\| state\.modal\.delivery\?\.trade_no/);
   assert.match(source, /URL\.createObjectURL\(state\.modal\.blob\)/);
   assert.match(source, /当前浏览器不支持复制图片，请使用下载图片/);
+});
+
+test('checkout delivery reuses the personalized PNG with devices, copy, and download while polling remains active', () => {
+  assert.match(source, /async function makeDeliveryModal\(delivery\)/);
+  assert.match(source, /await composeSubscriptionQrPng\(delivery\)/);
+  assert.match(source, /state\.modal = await makeDeliveryModal\(delivery\)/);
+  assert.match(source, /pending && modal\.imageUrl/);
+  assert.match(source, /\['subscriptionQr', 'delivery'\]\.includes\(state\.modal\.type\)/);
+  assert.match(source, /updated\.hwid_devices/);
+  assert.match(source, /state\.modal = nextModal/);
+  assert.match(styles, /\.dist-qr-modal \{ width:min\(620px,100%\); text-align:center; \}/);
 });
