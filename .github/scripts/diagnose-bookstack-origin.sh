@@ -27,7 +27,10 @@ for path in /etc/nginx /etc/openresty /etc/caddy /opt/1panel/apps/openresty /www
 done
 
 echo '== certificate metadata =='
-find /etc/letsencrypt /opt/1panel /www/server/panel -type f \( -name 'fullchain.pem' -o -name '*.crt' -o -name 'cert.pem' \) -print 2>/dev/null | head -n 80 | while IFS= read -r cert; do
+for root in /etc/letsencrypt /opt/1panel /www/server/panel; do
+  [[ -d "$root" ]] || continue
+  find "$root" -type f \( -name 'fullchain.pem' -o -name '*.crt' -o -name 'cert.pem' \) -print 2>/dev/null
+done | head -n 80 | while IFS= read -r cert; do
   if openssl x509 -in "$cert" -noout >/dev/null 2>&1; then
     printf '%s\t' "$cert"
     openssl x509 -in "$cert" -noout -subject -issuer -dates -ext subjectAltName 2>/dev/null | tr '\n' ' '
