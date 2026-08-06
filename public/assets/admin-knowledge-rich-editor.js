@@ -48,6 +48,16 @@
       .trim();
   }
 
+  function documentSourceReady(textareaValue, previewHtml, body, previewHtmlBefore = '', sourceWasReady = false) {
+    const expected = String(body || '');
+    const current = String(textareaValue || '');
+    const preview = String(previewHtml || '');
+    if (current !== expected) return false;
+    if (!expected.trim()) return true;
+    if (!preview.trim()) return false;
+    return sourceWasReady || preview !== String(previewHtmlBefore || '');
+  }
+
   function childNodes(node) {
     return Array.from(node?.childNodes || []);
   }
@@ -175,6 +185,7 @@
 
   window.__xboardKnowledgeRichText = {
     attachmentPattern: ATTACHMENT_PATTERN,
+    documentSourceReady,
     domToMarkdown,
     normalizeMarkdown,
     safeUrl,
@@ -187,6 +198,7 @@
   const EDITOR_SELECTOR = '.rc-md-editor';
   const CLIPBOARD_TYPE = 'application/x-xboard-knowledge';
   const mounted = new Set();
+  const pendingDocuments = new WeakMap();
 
   function attachmentApi() {
     return window.__xboardKnowledgeAttachments || null;
@@ -205,6 +217,67 @@
     state.syncing = true;
     nativeSet(state.textarea, domToMarkdown(state.surface));
     state.syncing = false;
+  }
+
+  function replaceSurfaceFromPreview(state) {
+    state.surface.innerHTML = state.preview.innerHTML || '<p><br></p>';
+    state.surface.querySelectorAll('[data-knowledge-attachment-delete], [data-rich-editor-ui="1"]')
+      .forEach((node) => node.remove());
+    hydratePlaceholders(state);
+    decorateAll(state);
+  }
+
+  function applyPendingDocument(state) {
+    const pending = state.pendingDocument;
+    if (!pending) return true;
+    if (!documentSourceReady(
+      state.textarea.value,
+      state.preview.innerHTML,
+      pending.body,
+      pending.previewHtmlBefore,
+      pending.sourceWasReady
+    )) return false;
+
+    replaceSurfaceFromPreview(state);
+    state.documentId = pending.id;
+    state.sourceBody = pending.body;
+    state.pendingDocument = null;
+    return true;
+  }
+
+  function scheduleDocumentApply(state) {
+    const token = state.documentToken;
+    clearTimeout(state.documentTimer);
+    const attempt = () => {
+      if (!state.editor.isConnected || token !== state.documentToken || !state.pendingDocument) return;
+      if (applyPendingDocument(state)) return;
+      state.documentAttempts += 1;
+      if (state.documentAttempts >= 100) {
+        state.pendingDocument = null;
+        attachmentApi()?.toast?.('文章正文加载超时，请关闭编辑窗口后重试。', 'error');
+        return;
+      }
+      state.documentTimer = setTimeout(attempt, state.documentAttempts < 10 ? 16 : 50);
+    };
+    state.documentTimer = setTimeout(attempt, 0);
+  }
+
+  function stageDocument(state, detail) {
+    const body = String(detail?.body || '');
+    const previewHtmlBefore = state.preview.innerHTML;
+    const sourceWasReady = state.textarea.value === body;
+    state.documentToken += 1;
+    state.documentAttempts = 0;
+    state.pendingDocument = {
+      id: Number(detail?.id) || null,
+      body,
+      previewHtmlBefore,
+      sourceWasReady,
+    };
+    if (!applyPendingDocument(state)) {
+      state.surface.innerHTML = '<p><br></p>';
+      scheduleDocumentApply(state);
+    }
   }
 
   function button(label, title, action, className = '') {
@@ -507,7 +580,6 @@
     const textarea = editor.querySelector('textarea');
     const preview = editor.querySelector('.sec-html');
     if (!textarea || !preview) return;
-    if (textarea.value.trim() && !preview.innerHTML.trim()) return;
 
     editor.dataset.knowledgeRichMounted = '1';
     editor.classList.add('knowledge-rich-mounted');
@@ -521,7 +593,21 @@
     surface.setAttribute('aria-label', '知识文章正文');
     surface.innerHTML = preview.innerHTML || '<p><br></p>';
     surface.querySelectorAll('[data-knowledge-attachment-delete], [data-rich-editor-ui="1"]').forEach((node) => node.remove());
-    const state = { editor, textarea, preview, shell, surface, syncing: false };
+    const state = {
+      editor,
+      textarea,
+      preview,
+      shell,
+      surface,
+      syncing: false,
+      documentId: null,
+      sourceBody: '',
+      pendingDocument: null,
+      documentToken: 0,
+      documentAttempts: 0,
+      documentTimer: null,
+      sourceObserver: null,
+    };
     shell.appendChild(createToolbar(state));
     shell.appendChild(surface);
     editor.appendChild(shell);
@@ -531,6 +617,16 @@
     surface.addEventListener('input', () => sync(state));
     bindUploads(state);
     bindClipboard(state);
+    state.sourceObserver = new MutationObserver(() => {
+      if (state.pendingDocument && applyPendingDocument(state)) clearTimeout(state.documentTimer);
+    });
+    state.sourceObserver.observe(editor, { childList: true, subtree: true, characterData: true });
+
+    const pending = pendingDocuments.get(editor);
+    if (pending) {
+      pendingDocuments.delete(editor);
+      stageDocument(state, pending);
+    }
   }
 
   function stateFor(editor) {
@@ -539,13 +635,36 @@
 
   function scan() {
     for (const state of [...mounted]) {
-      if (!state.editor.isConnected) mounted.delete(state);
+      const textarea = state.editor.querySelector('textarea');
+      const preview = state.editor.querySelector('.sec-html');
+      const replaced = state.editor.isConnected && (textarea !== state.textarea || preview !== state.preview);
+      if (!state.editor.isConnected || replaced) {
+        const detail = state.pendingDocument || (state.documentId ? {
+          id: state.documentId,
+          body: state.sourceBody,
+        } : null);
+        if (replaced && detail) pendingDocuments.set(state.editor, detail);
+        clearTimeout(state.documentTimer);
+        state.sourceObserver?.disconnect();
+        state.shell.remove();
+        delete state.editor.dataset.knowledgeRichMounted;
+        mounted.delete(state);
+      }
     }
     if (!/^#\/config\/knowledge(?:[/?]|$)/.test(location.hash || '')) return;
     document.querySelectorAll(EDITOR_SELECTOR).forEach(mount);
   }
 
   window.__xboardKnowledgeRichEditor = {
+    documentAvailable(editor, detail) {
+      const state = stateFor(editor);
+      if (!state) {
+        pendingDocuments.set(editor, detail);
+        return false;
+      }
+      stageDocument(state, detail);
+      return true;
+    },
     attachmentAvailable(editor, attachment) {
       const state = stateFor(editor);
       if (!state) return false;

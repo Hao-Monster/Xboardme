@@ -84,6 +84,19 @@ test('rich editor normalizes legacy whitespace without changing content', () => 
   assert.equal(helpers.normalizeMarkdown('标题  \n\n\n\n正文\u00a0内容  '), '标题\n\n正文 内容');
 });
 
+test('rich editor waits for the requested article body and its rendered preview', () => {
+  const helpers = loadHelpers();
+  const body = '# Android guide';
+  const oldPreview = '<p>Previous article</p>';
+  const newPreview = '<h1>Android guide</h1>';
+
+  assert.equal(helpers.documentSourceReady('', oldPreview, body, oldPreview, false), false);
+  assert.equal(helpers.documentSourceReady(body, oldPreview, body, oldPreview, false), false);
+  assert.equal(helpers.documentSourceReady(body, newPreview, body, oldPreview, false), true);
+  assert.equal(helpers.documentSourceReady(body, newPreview, body, newPreview, true), true);
+  assert.equal(helpers.documentSourceReady('', '', '', '', false), true);
+});
+
 test('rich editor source mounts one WYSIWYG surface and the approved minimal toolbar', () => {
   const source = fs.readFileSync('public/assets/admin-knowledge-rich-editor.js', 'utf8');
   const styles = fs.readFileSync('public/assets/admin-knowledge-rich-editor.css', 'utf8');
@@ -95,6 +108,9 @@ test('rich editor source mounts one WYSIWYG surface and the approved minimal too
   assert.match(source, /application\/x-xboard-knowledge/);
   assert.match(source, /cloneAttachments/);
   assert.match(source, /sanitizeFragment/);
+  assert.match(source, /documentAvailable\(editor, detail\)/);
+  assert.match(source, /pendingDocuments/);
+  assert.match(source, /documentSourceReady/);
   assert.match(source, /'SCRIPT', 'STYLE', 'SVG'/);
   assert.match(styles, /\.knowledge-rich-surface/);
   assert.match(styles, /\.knowledge-rich-attachment:hover \.knowledge-rich-delete/);

@@ -104,6 +104,25 @@ test('knowledge attachment helper only accepts pasted clipboard images', () => {
   assert.equal(files[0], image);
 });
 
+test('knowledge attachment helper rejects responses from a previous article switch', () => {
+  const helpers = loadHelpers();
+  const state = {
+    editor: { isConnected: true },
+    loadVersion: 4,
+    knowledgeId: 21,
+  };
+
+  assert.equal(helpers.isCurrentAttachmentLoad(state, 4, 21), true);
+  assert.equal(helpers.isCurrentAttachmentLoad(state, 3, 21), false);
+  assert.equal(helpers.isCurrentAttachmentLoad(state, 4, 20), false);
+  state.editor.isConnected = false;
+  assert.equal(helpers.isCurrentAttachmentLoad(state, 4, 21), false);
+
+  assert.equal(helpers.isLatestKnowledgeRequest(8, 8), true);
+  assert.equal(helpers.isLatestKnowledgeRequest(7, 8), false);
+  assert.equal(helpers.isLatestKnowledgeRequest(undefined, 8), false);
+});
+
 test('knowledge attachment assets are mounted independently from the compiled admin bundle', () => {
   const blade = fs.readFileSync('resources/views/admin.blade.php', 'utf8');
   const styles = fs.readFileSync('public/assets/admin-knowledge-attachments.css', 'utf8');
@@ -117,6 +136,9 @@ test('knowledge attachment assets are mounted independently from the compiled ad
   assert.match(source, /dataTransfer\?\.files/);
   assert.match(source, /addEventListener\('paste'/);
   assert.match(source, /ensurePreviewVisible/);
+  assert.match(source, /knowledgeRequestVersion/);
+  assert.match(source, /documentAvailable/);
+  assert.match(source, /loadVersion/);
   assert.match(source, /knowledge-attachment-preview-delete/);
   assert.match(source, /state\.input\.click\(\)/);
   assert.match(source, /\.rc-md-navigation \.button-wrap/);

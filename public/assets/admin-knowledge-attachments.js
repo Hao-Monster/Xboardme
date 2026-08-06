@@ -9,8 +9,9 @@
   const CHUNK_RETRIES = 3;
   const MARKER_PREFIX = 'xboard-knowledge-upload:';
   const states = new Set();
-  let pendingKnowledgeId = null;
+  let pendingKnowledgeDetail = null;
   let activeWorkers = 0;
+  let knowledgeRequestVersion = 0;
 
   function securePath() {
     return String(window.settings?.secure_path || '').replace(/^\/+|\/+$/g, '');
@@ -182,7 +183,8 @@
         body = appendDraftToken(body, current?.draftToken);
       }
       if (/\/knowledge\/fetch\?[^#]*\bid=\d+/.test(url)) {
-        this.addEventListener('load', () => rememberKnowledgeDetail(url, this.responseText));
+        const requestVersion = ++knowledgeRequestVersion;
+        this.addEventListener('load', () => rememberKnowledgeDetail(url, this.responseText, requestVersion));
       }
       return originalSend.call(this, body);
     };
@@ -190,6 +192,8 @@
     const originalFetch = window.fetch.bind(window);
     window.fetch = function (input, init = {}) {
       const url = typeof input === 'string' ? input : input?.url || '';
+      const isKnowledgeDetail = /\/knowledge\/fetch\?[^#]*\bid=\d+/.test(url);
+      const requestVersion = isKnowledgeDetail ? ++knowledgeRequestVersion : null;
       if (/\/knowledge\/save(?:\?|$)/.test(url) && init.body) {
         const current = activeState();
         const guardError = saveGuardError(current);
@@ -200,8 +204,10 @@
         init = { ...init, body: appendDraftToken(init.body, current?.draftToken) };
       }
       return originalFetch(input, init).then((response) => {
-        if (/\/knowledge\/fetch\?[^#]*\bid=\d+/.test(url)) {
-          response.clone().text().then((text) => rememberKnowledgeDetail(url, text)).catch(() => {});
+        if (isKnowledgeDetail) {
+          response.clone().text()
+            .then((text) => rememberKnowledgeDetail(url, text, requestVersion))
+            .catch(() => {});
         }
         return response;
       });
@@ -230,24 +236,43 @@
     });
   }
 
-  function rememberKnowledgeDetail(url, responseText) {
+  function rememberKnowledgeDetail(url, responseText, requestVersion) {
     try {
+      if (!isLatestKnowledgeRequest(requestVersion, knowledgeRequestVersion)) return;
       const response = JSON.parse(responseText);
       const fromUrl = Number(new URL(url, location.origin).searchParams.get('id'));
       const knowledgeId = Number(response?.data?.id || fromUrl);
       if (!knowledgeId) return;
+      const detail = {
+        id: knowledgeId,
+        body: String(response?.data?.body || ''),
+      };
       const current = activeState();
-      if (current) assignKnowledge(current, knowledgeId);
-      else pendingKnowledgeId = { id: knowledgeId, at: Date.now() };
+      if (current) assignKnowledge(current, detail);
+      else pendingKnowledgeDetail = { ...detail, at: Date.now() };
     } catch (_) {
       // Not a knowledge detail response.
     }
   }
 
-  function assignKnowledge(state, knowledgeId) {
-    if (state.knowledgeId === knowledgeId) return;
+  function assignKnowledge(state, detail) {
+    const knowledgeId = Number(detail?.id);
+    if (!knowledgeId) return;
+    state.loadVersion += 1;
+    const loadVersion = state.loadVersion;
+    for (const item of state.items.values()) item.controller?.abort();
+    state.items.clear();
+    state.draftToken = createDraftToken();
     state.knowledgeId = knowledgeId;
-    loadAttachments(state).catch((error) => toast(error.message, 'error'));
+    state.sourceBody = String(detail?.body || '');
+    render(state);
+    window.__xboardKnowledgeRichEditor?.documentAvailable?.(state.editor, {
+      id: knowledgeId,
+      body: String(detail?.body || ''),
+    });
+    loadAttachments(state, loadVersion).catch((error) => {
+      if (loadVersion === state.loadVersion) toast(error.message, 'error');
+    });
   }
 
   function toolbarButton() {
@@ -289,19 +314,21 @@
       badge: trigger.querySelector('[data-knowledge-attachment="badge"]'),
       draftToken: createDraftToken(),
       knowledgeId: null,
+      sourceBody: '',
       items: new Map(),
       internalEdit: false,
       dragDepth: 0,
       previewObserver: null,
+      loadVersion: 0,
     };
     states.add(state);
     bindEditor(state);
     installPreviewObserver(state);
     render(state);
 
-    if (pendingKnowledgeId && Date.now() - pendingKnowledgeId.at < 3000) {
-      assignKnowledge(state, pendingKnowledgeId.id);
-      pendingKnowledgeId = null;
+    if (pendingKnowledgeDetail && Date.now() - pendingKnowledgeDetail.at < 3000) {
+      assignKnowledge(state, pendingKnowledgeDetail);
+      pendingKnowledgeDetail = null;
     }
   }
 
@@ -705,13 +732,15 @@
     }
   }
 
-  async function loadAttachments(state) {
+  async function loadAttachments(state, loadVersion = state.loadVersion) {
+    const knowledgeId = state.knowledgeId;
     const query = state.knowledgeId
       ? `knowledge_id=${state.knowledgeId}`
       : `draft_token=${state.draftToken}`;
     const result = await request(`/knowledge/attachment/fetch?${query}&per_page=100`);
+    if (!isCurrentAttachmentLoad(state, loadVersion, knowledgeId)) return;
     for (const attachment of result.items || []) {
-      const referenced = state.textarea.value.includes(attachment.placeholder);
+      const referenced = String(state.sourceBody || state.textarea.value).includes(attachment.placeholder);
       state.items.set(attachment.uuid, {
         id: attachment.uuid,
         name: attachment.original_name,
@@ -744,6 +773,18 @@
       deleteAttachment(state, button.dataset.knowledgeAttachmentDelete);
     });
     schedulePreview(state);
+  }
+
+  function isCurrentAttachmentLoad(state, loadVersion, knowledgeId) {
+    return Boolean(
+      state?.editor?.isConnected
+      && loadVersion === state.loadVersion
+      && knowledgeId === state.knowledgeId
+    );
+  }
+
+  function isLatestKnowledgeRequest(requestVersion, currentVersion) {
+    return Number.isInteger(requestVersion) && requestVersion === currentVersion;
   }
 
   function schedulePreview(state) {
@@ -822,9 +863,22 @@
 
   function scan() {
     for (const state of [...states]) {
-      if (!state.editor.isConnected) {
+      const textarea = state.editor.querySelector('textarea');
+      const replaced = state.editor.isConnected && textarea !== state.textarea;
+      if (!state.editor.isConnected || replaced) {
+        if (replaced && state.knowledgeId) {
+          pendingKnowledgeDetail = {
+            id: state.knowledgeId,
+            body: state.sourceBody,
+            at: Date.now(),
+          };
+        }
+        state.loadVersion += 1;
         state.previewObserver?.disconnect();
         for (const item of state.items.values()) item.controller?.abort();
+        state.trigger.remove();
+        state.input.remove();
+        delete state.editor.dataset.knowledgeAttachmentsMounted;
         states.delete(state);
         continue;
       }
@@ -842,6 +896,8 @@
     clipboardImages,
     createDraftToken,
     formatBytes,
+    isCurrentAttachmentLoad,
+    isLatestKnowledgeRequest,
     markdownFor,
     removeAttachmentMarkup,
     chooseFiles(kind = 'file') {
