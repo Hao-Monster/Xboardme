@@ -8,6 +8,8 @@ on:
       - ".github/scripts/diagnose-bookstack-origin.sh"
       - ".github/scripts/configure-bookstack-caddy.sh"
       - ".github/scripts/provision-bookstack-bridge.sh"
+      - ".github/scripts/snapshot-bookstack-before-rollback.sh"
+      - ".github/scripts/disable-bookstack-after-snapshot.sh"
   workflow_dispatch:
 
 jobs:
@@ -45,3 +47,19 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
         run: |
           sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' < .github/scripts/provision-bookstack-bridge.sh
+      - name: Snapshot BookStack before rollback
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' < .github/scripts/snapshot-bookstack-before-rollback.sh
+      - name: Disable BookStack after verified snapshot
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' < .github/scripts/disable-bookstack-after-snapshot.sh
