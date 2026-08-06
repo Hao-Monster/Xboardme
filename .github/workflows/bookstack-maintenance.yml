@@ -1,6 +1,11 @@
 name: BookStack Origin Maintenance
 
 on:
+  push:
+    branches: ["codex/distributor"]
+    paths:
+      - ".github/workflows/bookstack-maintenance.yml"
+      - ".github/scripts/diagnose-bookstack-origin.sh"
   workflow_dispatch:
 
 jobs:
