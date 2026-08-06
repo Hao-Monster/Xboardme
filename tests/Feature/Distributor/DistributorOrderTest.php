@@ -1053,7 +1053,7 @@ class DistributorOrderTest extends TestCase
         $sheetXml = (string) $archive->getFromName('xl/worksheets/sheet1.xml');
         $archive->close();
         $this->assertStringContainsString('numFmtId="2"', $styles);
-        $this->assertStringContainsString('<autoFilter ref="A1:G', $sheetXml);
+        $this->assertStringContainsString('<autoFilter ref="A1:F', $sheetXml);
         $this->assertStringContainsString('state="frozen"', $sheetXml);
 
         $reader = new Reader();
