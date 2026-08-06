@@ -31,10 +31,10 @@
       pending: '待领取', claimed: '已领取', closed: '已关闭', showQr: '显示二维码',
       checkDelivery: '检查交付', issuing: '二维码已领取，正在等待订阅配置成功下发。',
       qrTitle: '客户订阅二维码', premiumCustomerQrTitle: '高端客户{customer}的订阅码', premiumCustomerQrTitleFallback: '高端客户的订阅码', qrHint: '请让终端客户使用订阅客户端扫描。二维码只能成功领取一次。',
-      done: '已添加成功', closeAgain: '再次点击确认关闭', closeWarning: '请确保节点已经可用，关闭之后无法再次获取。',
+      done: '已添加成功', closePopup: '关闭弹窗', buyAgain: '再次购买该套餐', planUnavailable: '套餐已下架或当前周期不可购买',
       claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
       waitingConnection: '等待用户开启代理进入网络', connectedThrough: '客户已经通过 {node} 节点进入网络',
-      delivery: '交付状态', settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
+      settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
       customerName: '用户名称', customerNamePlaceholder: '请输入便于售后识别的用户名称',
       customerNameRequired: '为了售后方便，请输入备注清楚用户',
       boundDevices: '已绑定设备', unboundDevice: '尚未绑定设备', hwidDisabled: '未启用设备绑定',
@@ -68,10 +68,10 @@
       pending: 'Pending claim', claimed: 'Claimed', closed: 'Closed', showQr: 'Show QR',
       checkDelivery: 'Check delivery', issuing: 'The QR was claimed. Waiting for the subscription configuration response.',
       qrTitle: 'Customer subscription QR', premiumCustomerQrTitle: 'Premium customer {customer} subscription QR', premiumCustomerQrTitleFallback: 'Premium customer subscription QR', qrHint: 'Scan with the customer subscription client. This QR can only be claimed once.',
-      done: 'Added successfully', closeAgain: 'Click again to close', closeWarning: 'Make sure the nodes work. The QR cannot be recovered after closing.',
+      done: 'Added successfully', closePopup: 'Close window', buyAgain: 'Buy this plan again', planUnavailable: 'This plan or billing period is no longer available',
       claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
       waitingConnection: 'Waiting for the customer to enable the proxy', connectedThrough: 'Customer connected through {node}',
-      delivery: 'Delivery', settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
+      settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
       customerName: 'Customer name', customerNamePlaceholder: 'Enter a name for after-sales identification',
       customerNameRequired: 'Enter a clear customer name for after-sales support.',
       boundDevices: 'Bound devices', unboundDevice: 'No device bound', hwidDisabled: 'Device binding disabled',
@@ -100,7 +100,6 @@
     dark: localStorage.getItem('xboard_distributor_dark') === '1',
     loading: false,
     modal: null,
-    closeArmed: false,
     poller: null,
     orderSettlementStatus: '',
     orderSearch: '',
@@ -446,8 +445,12 @@
     }
   }
 
+  async function fetchAvailablePlans() {
+    return (dataOf(await api('/user/plan/fetch')) || []).filter((plan) => availablePeriods(plan).length);
+  }
+
   async function renderPlans() {
-    state.plans = (dataOf(await api('/user/plan/fetch')) || []).filter((plan) => availablePeriods(plan).length);
+    state.plans = await fetchAvailablePlans();
     state.plans.forEach((plan) => {
       if (!availablePeriods(plan).some(([key]) => key === state.selectedPeriods[plan.id])) {
         state.selectedPeriods[plan.id] = availablePeriods(plan)[0][0];
@@ -508,12 +511,34 @@
     `);
   }
 
-  function confirmPurchase(planId, planName) {
+  function openPurchaseModal(plan, period) {
+    if (!plan || typeof plan.capacity_limit === 'string' || !period || !availablePeriods(plan).some(([key]) => key === period) || Number(plan[period]) <= 0) {
+      toast(t('planUnavailable'), 'error');
+      return false;
+    }
+    state.selectedPeriods[plan.id] = period;
+    state.modal = { type: 'purchase', planId: plan.id, planName: plan.name, period, periodLabel: `${periodName(period)} · ${money(plan[period])}`, price: plan[period], customerName: '' };
+    renderModal();
+    return true;
+  }
+
+  function confirmPurchase(planId) {
     const plan = state.plans.find((item) => String(item.id) === String(planId));
     const period = state.selectedPeriods[planId];
-    if (!plan || !period || Number(plan[period]) <= 0) return;
-    state.modal = { type: 'purchase', planId, planName, period, periodLabel: `${periodName(period)} · ${money(plan[period])}`, price: plan[period], customerName: '' };
-    renderModal();
+    openPurchaseModal(plan, period);
+  }
+
+  async function repurchaseDelivery() {
+    const delivery = state.modal?.type === 'delivery' ? state.modal.delivery : null;
+    if (!delivery) return;
+    if (!state.plans.length) state.plans = await fetchAvailablePlans();
+    const plan = state.plans.find((item) => String(item.id) === String(delivery.plan_id));
+    if (!plan || !availablePeriods(plan).some(([key]) => key === delivery.period) || Number(plan[delivery.period]) <= 0) {
+      toast(t('planUnavailable'), 'error');
+      return;
+    }
+    stopPolling();
+    openPurchaseModal(plan, delivery.period);
   }
 
   async function submitPurchase() {
@@ -546,7 +571,6 @@
     if (state.orderSearch) params.set('search', state.orderSearch);
     const orders = dataOf(await api(`/user/order/fetch${params.size ? `?${params}` : ''}`)) || [];
     const rows = orders.map((order) => {
-      const delivery = order.delivery_status === 0 ? t('pending') : order.delivery_status === 1 ? t('claimed') : t('closed');
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
       const boundDevices = Array.isArray(order.bound_devices) ? order.bound_devices : [];
@@ -555,7 +579,7 @@
         : boundDevices.length
           ? `<div class="dist-bound-device-list">${boundDevices.map((hwid) => `<code>${escapeHtml(hwid)}</code>`).join('')}</div>`
           : `<span class="dist-device-state">${t('unboundDevice')}</span>`;
-      const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
+      const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="7"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
         <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
@@ -565,9 +589,6 @@
         <span><dt>${t('deviceLimit')}</dt><dd>${formatLimit(entitlement.device_limit, state.locale === 'zh-CN' ? '台' : 'devices')}</dd></span>
         <span><dt>${t('boundDevices')}</dt><dd>${boundDeviceContent}</dd></span>
       </dl></div></td></tr>` : '';
-      const deliveryAction = order.delivery_status === 0 || (order.delivery_status === 1 && !order.config_issued_at)
-        ? `<button class="dist-link-btn" data-delivery="${escapeHtml(order.trade_no)}">${order.delivery_status === 0 ? t('showQr') : t('checkDelivery')}</button>`
-        : '';
       const qrAction = order.can_view_subscription_qr
         ? `<button class="dist-link-btn" data-subscription-qr="${escapeHtml(order.trade_no)}">${t('viewSubscriptionQr')}</button>`
         : `<span class="dist-action-disabled">${t('subscriptionPending')}</span>`;
@@ -576,15 +597,14 @@
         <td>${escapeHtml(order.customer_name || '-')}</td>
         <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
-        <td><span class="dist-badge delivery-${order.delivery_status}">${delivery}</span></td>
         <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
-        <td><div class="dist-order-actions">${deliveryAction}${qrAction}</div></td>
+        <td><div class="dist-order-actions">${qrAction}</div></td>
       </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
       <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
-      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('delivery')}</th><th>${t('settlement')}</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="8" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
+      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('settlement')}</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="7" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
   }
 
   function periodLabel(period) {
@@ -654,7 +674,6 @@
   async function openDelivery(tradeNo) {
     const delivery = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(tradeNo)}`));
     state.modal = await makeDeliveryModal(delivery);
-    state.closeArmed = false;
     renderModal();
     startPolling();
   }
@@ -714,42 +733,16 @@
     const connectionText = connected
       ? t('connectedThrough').replace('{node}', delivery.connected_node_name || '-')
       : issued ? t('waitingConnection') : '';
-    root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-qr-modal"><button class="dist-modal-x" data-modal-action="done">×</button><h2>${t('qrTitle')}</h2>
+    root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-qr-modal"><button class="dist-modal-x" data-modal-action="close-delivery">×</button><h2>${t('qrTitle')}</h2>
       <p>${pending ? t('qrHint') : claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p>
       ${pending && modal.imageUrl ? `<img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}"><div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>` : `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong>${claimed && issued ? `<small class="dist-network-status">${escapeHtml(connectionText)}</small>` : ''}</div>`}
-      ${state.closeArmed && !issued && delivery.delivery_status !== 2 ? `<div class="dist-warning">${t('closeWarning')}</div>` : ''}
-      <div class="dist-modal-actions"><button class="primary" data-modal-action="done">${state.closeArmed && !issued && delivery.delivery_status !== 2 ? t('closeAgain') : t('done')}</button></div>
+      <div class="dist-modal-actions"><button data-modal-action="buy-again">${t('buyAgain')}</button><button class="primary" data-modal-action="close-delivery">${t('closePopup')}</button></div>
       </section></div>`;
   }
 
   function closeModal() {
     state.modal = null;
-    state.closeArmed = false;
     renderModal();
-  }
-
-  async function handleDone() {
-    if (!state.modal || state.modal.type !== 'delivery') { closeModal(); return; }
-    const delivery = state.modal.delivery;
-    if (delivery.delivery_status === 2 || delivery.config_issued_at) { closeModal(); return; }
-    if (!state.closeArmed) {
-      state.closeArmed = true;
-      renderModal();
-      return;
-    }
-    if (delivery.delivery_status === 1) {
-      closeModal();
-      await renderPage();
-      return;
-    }
-    try {
-      const updated = dataOf(await api('/user/distributor/delivery/close', {
-        method: 'POST', data: { trade_no: delivery.trade_no, confirm: 1 },
-      }));
-      state.modal.delivery = updated;
-      closeModal();
-      await renderPage();
-    } catch (error) { toast(error.message, 'error'); }
   }
 
   function startPolling() {
@@ -764,7 +757,6 @@
           const nextModal = await makeDeliveryModal(updated);
           if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.trade_no !== currentTradeNo) return;
           state.modal = nextModal;
-          state.closeArmed = false;
           renderModal();
         }
       } catch (_) { /* keep the current QR visible during transient failures */ }
@@ -774,19 +766,6 @@
   function stopPolling() {
     if (state.poller) clearInterval(state.poller);
     state.poller = null;
-  }
-
-  async function recoverPendingDelivery() {
-    try {
-      const delivery = dataOf(await api('/user/distributor/delivery'));
-      if (delivery?.delivery_status === 0) {
-        state.modal = await makeDeliveryModal(delivery);
-        renderModal();
-        startPolling();
-      }
-    } catch (error) {
-      if (error.status !== 404) console.warn('Unable to recover distributor delivery', error);
-    }
   }
 
   async function handleAction(target) {
@@ -805,9 +784,7 @@
       return;
     }
     const buy = target.closest('[data-buy]');
-    if (buy) { confirmPurchase(buy.dataset.buy, buy.dataset.name); return; }
-    const delivery = target.closest('[data-delivery]');
-    if (delivery) { try { await openDelivery(delivery.dataset.delivery); } catch (e) { toast(e.message, 'error'); } return; }
+    if (buy) { confirmPurchase(buy.dataset.buy); return; }
     const subscriptionQr = target.closest('[data-subscription-qr]');
     if (subscriptionQr) { try { await openSubscriptionQr(subscriptionQr.dataset.subscriptionQr); } catch (e) { toast(e.message, 'error'); } return; }
     const knowledge = target.closest('[data-knowledge-id]');
@@ -879,7 +856,10 @@
     const action = target.closest('[data-modal-action]')?.dataset.modalAction;
     if (!action) return;
     if (action === 'confirm-purchase') await submitPurchase();
-    else if (action === 'done') await handleDone();
+    else if (action === 'close-delivery') closeModal();
+    else if (action === 'buy-again') {
+      try { await repurchaseDelivery(); } catch (error) { toast(error.message, 'error'); }
+    }
     else if (action === 'copy-subscription-qr') {
       if (!state.modal || !['subscriptionQr', 'delivery'].includes(state.modal.type) || !state.modal.blob) return;
       if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined' || !window.isSecureContext) {
@@ -925,7 +905,6 @@
     document.documentElement.classList.add('distributor-mode');
     if (!['/plan', '/order', '/invite', '/knowledge'].includes(currentPage())) navigate('/plan');
     renderPage();
-    recoverPendingDelivery();
   }
 
   async function detectDistributor() {
@@ -959,13 +938,6 @@
     }
   });
   window.addEventListener('hashchange', () => { if (state.active) renderPage(); });
-  window.addEventListener('beforeunload', (event) => {
-    if (state.modal?.type === 'delivery' && state.modal.delivery.delivery_status === 0) {
-      event.preventDefault();
-      event.returnValue = '';
-    }
-  });
-
   const detector = setInterval(() => {
     if (state.active) clearInterval(detector);
     else detectDistributor();

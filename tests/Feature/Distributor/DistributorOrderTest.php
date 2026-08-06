@@ -215,6 +215,9 @@ class DistributorOrderTest extends TestCase
         $data = app(DistributorOrderService::class)->deliveryData($delivery);
         $this->assertArrayNotHasKey('claim_url', $data);
         $this->assertArrayHasKey('qr_code', $data);
+        $this->assertSame($order->plan_id, $data['plan_id']);
+        $this->assertSame('Distributor Test Plan', $data['plan_name']);
+        $this->assertSame('month_price', $data['period']);
 
         [, $encodedSvg] = explode(',', $data['qr_code'], 2);
         $svg = base64_decode($encodedSvg, true);
@@ -634,15 +637,14 @@ class DistributorOrderTest extends TestCase
         $response->assertOk();
 
         $rows = $this->readXlsx($response);
-        $this->assertSame(['订单号', '用户名称', '分销商', '套餐', '原价', '交付状态', '结算状态'], $rows[0]);
+        $this->assertSame(['订单号', '用户名称', '分销商', '套餐', '原价', '结算状态'], $rows[0]);
         $this->assertSame($newer->trade_no, $rows[1][0]);
         $this->assertSame('新客户', $rows[1][1]);
         $this->assertSame('第二分销商', $rows[1][2]);
         $this->assertSame('Distributor Test Plan', $rows[1][3]);
         $this->assertTrue(is_int($rows[1][4]) || is_float($rows[1][4]));
         $this->assertEquals(30.0, $rows[1][4]);
-        $this->assertSame('待领取', $rows[1][5]);
-        $this->assertSame('未结算', $rows[1][6]);
+        $this->assertSame('未结算', $rows[1][5]);
         $this->assertSame($older->trade_no, $rows[2][0]);
         $this->assertCount(3, $rows);
         $this->assertStringNotContainsString('NORMAL-ORDER-MUST-NOT-EXPORT', json_encode($rows));
@@ -697,7 +699,7 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.trade_no', $settled->trade_no);
 
         $rows = $this->readXlsx($this->get('/api/v1/user/order/export?settlement_status=1')->assertOk());
-        $this->assertSame(['订单号', '用户名称', '订阅计划', '周期', '订单金额', '交付状态', '结算状态'], $rows[0]);
+        $this->assertSame(['订单号', '用户名称', '订阅计划', '周期', '订单金额', '结算状态'], $rows[0]);
         $this->assertCount(2, $rows);
         $this->assertSame($settled->trade_no, $rows[1][0]);
         $this->assertSame('导出客户', $rows[1][1]);
@@ -705,8 +707,7 @@ class DistributorOrderTest extends TestCase
         $this->assertSame('季付', $rows[1][3]);
         $this->assertTrue(is_int($rows[1][4]) || is_float($rows[1][4]));
         $this->assertEquals(30.0, $rows[1][4]);
-        $this->assertSame('已领取', $rows[1][5]);
-        $this->assertSame('已结算', $rows[1][6]);
+        $this->assertSame('已结算', $rows[1][5]);
         $this->assertStringNotContainsString($unsettled->trade_no, json_encode($rows));
         $this->assertStringNotContainsString($otherOrder->trade_no, json_encode($rows));
 

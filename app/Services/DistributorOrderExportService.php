@@ -21,11 +21,11 @@ class DistributorOrderExportService
     private const CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     private const ADMIN_HEADERS = [
-        '订单号', '用户名称', '分销商', '套餐', '原价', '交付状态', '结算状态',
+        '订单号', '用户名称', '分销商', '套餐', '原价', '结算状态',
     ];
 
     private const DISTRIBUTOR_HEADERS = [
-        '订单号', '用户名称', '订阅计划', '周期', '订单金额', '交付状态', '结算状态',
+        '订单号', '用户名称', '订阅计划', '周期', '订单金额', '结算状态',
     ];
 
     public function __construct(private readonly DistributorOrderSearchService $searchService)
@@ -56,7 +56,6 @@ class DistributorOrderExportService
                 (string) ($order->distributor_name ?: $order->distributor_email),
                 (string) ($order->plan_name ?: '-'),
                 $this->yuan($order->total_amount),
-                $this->deliveryLabel((int) $order->delivery_status),
                 $this->settlementLabel((int) $order->settlement_status),
             ],
             '分销订单'
@@ -86,7 +85,6 @@ class DistributorOrderExportService
                 (string) ($order->plan_name ?: '-'),
                 $this->periodLabel((string) $order->period),
                 $this->yuan($order->total_amount),
-                $this->deliveryLabel((int) $order->delivery_status),
                 $this->settlementLabel((int) $order->settlement_status),
             ],
             '我的分销订单'
@@ -111,7 +109,6 @@ class DistributorOrderExportService
                 'distributor.email as distributor_email',
                 'distributor.distributor_name as distributor_name',
                 'v2_plan.name as plan_name',
-                'v2_distributor_order.delivery_status',
                 'v2_distributor_order.settlement_status',
             ])
             ->orderByDesc('v2_order.created_at')
@@ -143,7 +140,7 @@ class DistributorOrderExportService
             $sheet->setColumnWidth(22, 2);
             $sheet->setColumnWidth(28, 3);
             $sheet->setColumnWidth(24, 4);
-            $sheet->setColumnWidth(14, 5, 6, 7);
+            $sheet->setColumnWidth(14, 5, 6);
 
             $headerStyle = (new Style())
                 ->setFontBold()
@@ -162,7 +159,7 @@ class DistributorOrderExportService
                 ++$dataRows;
             }
 
-            $sheet->setAutoFilter(new AutoFilter(0, 1, 6, $dataRows + 1));
+            $sheet->setAutoFilter(new AutoFilter(0, 1, count($headers) - 1, $dataRows + 1));
             $writer->close();
         } catch (Throwable $exception) {
             $writer->close();
@@ -181,16 +178,6 @@ class DistributorOrderExportService
     private function yuan(mixed $amount): float
     {
         return round(((int) $amount) / 100, 2);
-    }
-
-    private function deliveryLabel(int $status): string
-    {
-        return match ($status) {
-            DistributorOrder::DELIVERY_PENDING => '待领取',
-            DistributorOrder::DELIVERY_CLAIMED => '已领取',
-            DistributorOrder::DELIVERY_CLOSED => '已关闭',
-            default => '未知',
-        };
     }
 
     private function settlementLabel(int $status): string

@@ -105,7 +105,8 @@ class DistributorOrderService
     public function deliveryData(DistributorOrder $delivery, bool $includeClaimUrl = true): array
     {
         $delivery->loadMissing([
-            'order:id,trade_no',
+            'order:id,trade_no,plan_id,period',
+            'order.plan:id,name',
             'subscriber:id,token',
             'hwidDevices:id,distributor_order_id,hwid,last_seen_at',
         ]);
@@ -113,6 +114,9 @@ class DistributorOrderService
         $data = [
             'trade_no' => $delivery->order->trade_no,
             'customer_name' => trim((string) $delivery->customer_name),
+            'plan_id' => (int) $delivery->order->plan_id,
+            'plan_name' => (string) ($delivery->order->plan?->name ?: ''),
+            'period' => PlanService::getLegacyPeriod((string) $delivery->order->period),
             'delivery_status' => $delivery->delivery_status,
             'settlement_status' => $delivery->settlement_status,
             'config_issued_at' => $delivery->config_issued_at,

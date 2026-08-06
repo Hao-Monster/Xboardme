@@ -17,7 +17,10 @@ class DistributorController extends Controller
         ]);
 
         $query = DistributorOrder::query()
-            ->with('order:id,user_id,trade_no')
+            ->with([
+                'order:id,user_id,trade_no,plan_id,period',
+                'order.plan:id,name',
+            ])
             ->where('distributor_user_id', $request->user()->id);
 
         if ($request->filled('trade_no')) {
@@ -94,7 +97,10 @@ class DistributorController extends Controller
                 $delivery->save();
             }
 
-            return $delivery->load('order:id,user_id,trade_no');
+            return $delivery->load([
+                'order:id,user_id,trade_no,plan_id,period',
+                'order.plan:id,name',
+            ]);
         });
 
         if (!$delivery) {

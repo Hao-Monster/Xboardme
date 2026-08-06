@@ -83,7 +83,7 @@ html.distributor-mode, html.distributor-mode body { margin:0; background:var(--d
 .dist-bound-device-list { display:grid; gap:4px; }.dist-bound-device-list code { display:block; color:var(--dist-text); font:600 12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; overflow-wrap:anywhere; }.dist-device-state,.dist-action-disabled { color:var(--dist-muted); font-size:12px; font-weight:500; }
 .dist-free { color:#168466!important; font-weight:700; }
 .dist-badge { display:inline-block; border-radius:999px; padding:5px 10px; font-size:12px; font-weight:700; }
-.delivery-0,.settle-0 { color:#956312; background:#fff3d8; }.delivery-1,.settle-1 { color:#187159; background:#dff5eb; }.delivery-2 { color:#8c3f3f; background:#fbe7e7; }
+.settle-0 { color:#956312; background:#fff3d8; }.settle-1 { color:#187159; background:#dff5eb; }
 .dist-link-btn { border:0; background:transparent; color:var(--dist-primary); font-weight:700; cursor:pointer; }
 .dist-order-actions { display:grid; justify-items:start; gap:7px; min-width:128px; }
 .dist-stats { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:22px; }

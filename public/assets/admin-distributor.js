@@ -427,7 +427,7 @@
     return state.orders.map((order) => `<tr>
       <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
       <td>${escapeHtml(order.customer_name || '-')}</td><td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
-      <td>${money(order.total_amount)}</td><td>${order.delivery_status === 0 ? '待领取' : order.delivery_status === 1 ? '已领取' : '已关闭'}${order.connected_at ? `<small class="admin-dist-connected">客户已经通过 ${escapeHtml(order.connected_node_name || '-')} 节点进入网络</small>` : order.config_issued_at ? '<small class="admin-dist-waiting">等待用户开启代理 进入网络</small>' : ''}</td>
+      <td>${money(order.total_amount)}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
       <td><button class="admin-dist-link" ${detailAttribute}="${order.id}">详情 / 订阅链接</button></td>
     </tr>`).join('');
@@ -443,7 +443,7 @@
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
       <div class="admin-dist-search"><input id="admin-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button data-admin-dist="search-orders">查询</button><button class="secondary" data-admin-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
-      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付</th><th>结算状态</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个订单</span><div><button data-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button data-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`);
   }
 
@@ -656,7 +656,7 @@
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
         <div class="admin-dist-search"><input id="native-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button type="button" data-native-dist="search-orders">查询</button><button type="button" class="secondary" data-native-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       </div>${nativeSummary()}
-      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>交付状态</th><th>结算状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个分销订单</span><div><button type="button" data-native-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button type="button" data-native-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`;
   }
 

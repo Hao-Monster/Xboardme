@@ -64,10 +64,10 @@ test('period selection changes display state while checkout keeps the existing o
   assert.match(source, /selectedPeriods:\s*\{\}/);
   assert.match(source, /state\.selectedPeriods\[period\.dataset\.planId\]/);
 
-  const confirmBlock = source.match(/function confirmPurchase\(planId, planName\)[\s\S]*?\n  }/);
+  const confirmBlock = source.match(/function confirmPurchase\(planId\)[\s\S]*?\n  }/);
   assert.ok(confirmBlock, 'purchase confirmation should exist');
   assert.match(confirmBlock[0], /state\.selectedPeriods\[planId\]/);
-  assert.match(confirmBlock[0], /plan\[period\]/);
+  assert.match(confirmBlock[0], /openPurchaseModal\(plan, period\)/);
 
   const submitBlock = source.match(/async function submitPurchase\(\)[\s\S]*?\n  }/);
   assert.ok(submitBlock, 'purchase submission should exist');
