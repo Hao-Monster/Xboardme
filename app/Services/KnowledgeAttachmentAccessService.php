@@ -38,6 +38,7 @@ class KnowledgeAttachmentAccessService
 
     public function replacePlaceholders(string $body, int $knowledgeId): string
     {
+        $body = $this->bindingService->normalizeMarkup($body);
         $uuids = $this->bindingService->extractUuids($body);
         if ($uuids === []) {
             return $body;
@@ -64,6 +65,7 @@ class KnowledgeAttachmentAccessService
 
     public function replaceWithPublicUrls(string $body, int $knowledgeId): string
     {
+        $body = $this->bindingService->normalizeMarkup($body);
         $uuids = $this->bindingService->extractUuids($body);
         if ($uuids === []) {
             return $body;

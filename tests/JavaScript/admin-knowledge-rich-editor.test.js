@@ -111,6 +111,8 @@ test('rich editor source mounts one WYSIWYG surface and the approved minimal too
   assert.match(source, /documentAvailable\(editor, detail\)/);
   assert.match(source, /pendingDocuments/);
   assert.match(source, /documentSourceReady/);
+  assert.match(source, /const enclosingLink = target\.closest\('a'\)/);
+  assert.match(source, /enclosingLink\.after\(media\)/);
   assert.match(source, /'SCRIPT', 'STYLE', 'SVG'/);
   assert.match(styles, /\.knowledge-rich-surface/);
   assert.match(styles, /\.knowledge-rich-attachment:hover \.knowledge-rich-delete/);

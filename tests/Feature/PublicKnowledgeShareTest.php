@@ -96,6 +96,20 @@ class PublicKnowledgeShareTest extends TestCase
         $this->get('/guide-attachments/' . $referenced->uuid)->assertNotFound();
     }
 
+    public function test_public_article_repairs_legacy_double_wrapped_attachment_links(): void
+    {
+        $article = $this->article('Legacy download', true, 'placeholder');
+        $attachment = $this->attachment($article, 'client.zip', 'application/zip', 'archive');
+        $article->update([
+            'body' => '[client.zip]([client.zip](' . $attachment->placeholder() . '))',
+        ]);
+
+        $page = $this->get('/guide/' . $article->id . '/legacy-download')->assertOk();
+        $page->assertSee('href="http://example.test/guide-attachments/' . $attachment->uuid . '"', false)
+            ->assertDontSee('href="[client.zip](', false)
+            ->assertDontSee('%5Bclient.zip%5D', false);
+    }
+
     public function test_user_knowledge_api_exposes_the_same_share_url(): void
     {
         $article = $this->article('API Guide', true, 'Body');

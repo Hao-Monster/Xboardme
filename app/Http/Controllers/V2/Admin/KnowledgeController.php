@@ -30,7 +30,9 @@ class KnowledgeController extends Controller
             $knowledge = Knowledge::find($request->input('id'));
             if (!$knowledge)
                 return $this->fail([400202, '知识不存在']);
-            return $this->success($this->withShareUrl($knowledge->toArray()));
+            $data = $knowledge->toArray();
+            $data['body'] = $this->attachmentBindingService->normalizeMarkup((string) $data['body']);
+            return $this->success($this->withShareUrl($data));
         }
         $data = Knowledge::select(['title', 'id', 'updated_at', 'category', 'show'])
             ->orderBy('sort', 'ASC')
@@ -51,6 +53,9 @@ class KnowledgeController extends Controller
         $knowledgeId = isset($params['id']) ? (int) $params['id'] : null;
         $draftToken = $params['draft_token'] ?? null;
         $knowledgeData = Arr::except($params, ['id', 'draft_token']);
+        $knowledgeData['body'] = $this->attachmentBindingService->normalizeMarkup(
+            (string) ($knowledgeData['body'] ?? '')
+        );
 
         try {
             DB::transaction(function () use (

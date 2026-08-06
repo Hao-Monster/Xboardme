@@ -135,6 +135,49 @@ class KnowledgeAttachmentReadTest extends TestCase
         $this->get($matches[0])->assertOk();
     }
 
+    public function test_legacy_double_wrapped_download_link_is_repaired_before_rendering(): void
+    {
+        $knowledge = Knowledge::create([
+            'language' => 'zh-CN',
+            'category' => 'Guide',
+            'title' => 'Legacy attachment link',
+            'body' => 'placeholder',
+            'sort' => 1,
+            'show' => true,
+        ]);
+        $attachment = $this->makeAttachment(
+            'karing.zip',
+            'application/zip',
+            'archive-content',
+            $knowledge->id
+        );
+        $knowledge->update([
+            'body' => '[karing.zip]([karing.zip](' . $attachment->placeholder() . '))',
+        ]);
+
+        Sanctum::actingAs($this->makeUser('legacy-link@example.com', true));
+        $response = $this->getJson('/api/v1/user/knowledge/fetch?id=' . $knowledge->id . '&render=html')
+            ->assertOk();
+        $html = (string) $response->json('data.body');
+
+        $this->assertStringContainsString('href="http://localhost/knowledge-attachments/', $html);
+        $this->assertStringNotContainsString('href="[karing.zip](', $html);
+        $this->assertStringNotContainsString('%5Bkaring.zip%5D', $html);
+    }
+
+    public function test_attachment_markup_normalizer_is_scoped_to_private_attachment_uris(): void
+    {
+        $placeholder = 'knowledge-attachment://11111111-1111-4111-8111-111111111111';
+        $service = app(\App\Services\KnowledgeAttachmentBindingService::class);
+
+        $this->assertSame(
+            '[client.zip](' . $placeholder . ')',
+            $service->normalizeMarkup('[client.zip]([client.zip](' . $placeholder . '))')
+        );
+        $ordinary = '[outer]([inner](https://example.test/file.zip))';
+        $this->assertSame($ordinary, $service->normalizeMarkup($ordinary));
+    }
+
     public function test_missing_soft_deleted_or_size_mismatched_files_cannot_be_read(): void
     {
         $missing = $this->makeAttachment('missing.bin', 'application/octet-stream', 'data');

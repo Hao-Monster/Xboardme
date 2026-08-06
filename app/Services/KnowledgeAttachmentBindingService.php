@@ -95,6 +95,41 @@ class KnowledgeAttachmentBindingService
         return $uuids;
     }
 
+    /**
+     * Repair attachment links which were accidentally wrapped in a second
+     * Markdown link by older editor/upload integrations.
+     *
+     * Example:
+     * [download]([download](knowledge-attachment://uuid))
+     * becomes:
+     * [download](knowledge-attachment://uuid)
+     *
+     * The expression is deliberately limited to our private attachment URI
+     * scheme, so ordinary nested-looking article content is left untouched.
+     */
+    public function normalizeMarkup(string $body): string
+    {
+        $uuid = self::UUID_PATTERN;
+        $uri = preg_quote(KnowledgeAttachment::URI_PREFIX, '~') . $uuid;
+        $label = '[^\\r\\n\\]]*';
+        $pattern = '~(?<outer>!?\\[' . $label . '\\])\\(\\s*!?\\[' . $label
+            . '\\]\\(\\s*(?<uri>' . $uri . ')\\s*\\)\\s*\\)~i';
+
+        for ($attempt = 0; $attempt < 4; $attempt++) {
+            $normalized = preg_replace_callback(
+                $pattern,
+                static fn(array $matches): string => $matches['outer'] . '(' . $matches['uri'] . ')',
+                $body
+            );
+            if ($normalized === null || $normalized === $body) {
+                break;
+            }
+            $body = $normalized;
+        }
+
+        return $body;
+    }
+
     public function placeholderPattern(): string
     {
         return '~' . preg_quote(KnowledgeAttachment::URI_PREFIX, '~')

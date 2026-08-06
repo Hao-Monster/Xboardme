@@ -138,6 +138,13 @@ test('knowledge attachment assets are mounted independently from the compiled ad
   assert.match(source, /ensurePreviewVisible/);
   assert.match(source, /knowledgeRequestVersion/);
   assert.match(source, /documentAvailable/);
+  assert.match(source, /handledByRichEditor/);
+  assert.match(source, /if \(!handledByRichEditor\) replaceText/);
+  assert.ok(
+    source.indexOf('attachmentReady?.(state.editor, attachment, marker)')
+      < source.indexOf('if (!handledByRichEditor) replaceText'),
+    'the rich editor must insert a completed upload before the Markdown fallback runs'
+  );
   assert.match(source, /loadVersion/);
   assert.match(source, /knowledge-attachment-preview-delete/);
   assert.match(source, /state\.input\.click\(\)/);

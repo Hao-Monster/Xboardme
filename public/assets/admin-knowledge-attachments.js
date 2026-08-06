@@ -546,11 +546,12 @@
     item.attachment = attachment;
     item.id = attachment.uuid;
     item.marker = null;
-    replaceText(state, marker, markdownFor(attachment));
+    const handledByRichEditor = window.__xboardKnowledgeRichEditor
+      ?.attachmentReady?.(state.editor, attachment, marker) === true;
+    if (!handledByRichEditor) replaceText(state, marker, markdownFor(attachment));
     if (currentKey) state.items.delete(currentKey);
     state.items.set(attachment.uuid, item);
     render(state);
-    window.__xboardKnowledgeRichEditor?.attachmentReady?.(state.editor, attachment, marker);
     ensurePreviewVisible(state);
     schedulePreview(state);
     toast(`${attachment.original_name} 已上传并插入正文`);

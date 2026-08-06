@@ -677,8 +677,15 @@
       const key = String(marker || '').replace(/^<!--\s*|\s*-->$/g, '').trim();
       const target = state.surface.querySelector(`[data-knowledge-upload-marker="${CSS.escape(key)}"]`);
       const media = attachmentElement(attachment);
-      if (target) target.replaceWith(media);
-      else state.surface.appendChild(media);
+      if (target) {
+        const enclosingLink = target.closest('a');
+        target.replaceWith(media);
+        // A file picker can be opened while the caret is inside an existing
+        // link. Never leave the uploaded attachment nested in that anchor.
+        if (enclosingLink && enclosingLink !== media) enclosingLink.after(media);
+      } else {
+        state.surface.appendChild(media);
+      }
       decorateAttachment(state, media);
       sync(state);
       return true;
