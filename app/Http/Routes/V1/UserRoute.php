@@ -49,6 +49,7 @@ class UserRoute
             // Distributor delivery
             $router->get('/distributor/delivery', [DistributorController::class, 'delivery']);
             $router->post('/distributor/delivery/close', [DistributorController::class, 'close']);
+            $router->get('/distributor/subscription-qr', [DistributorController::class, 'subscriptionQr']);
             // Plan
             $router->get('/plan/fetch', [PlanController::class, 'fetch']);
             // Invite

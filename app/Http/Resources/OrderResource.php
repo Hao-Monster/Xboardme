@@ -33,6 +33,15 @@ class OrderResource extends JsonResource
                 ->data($distributorOrder);
         }
 
+        $boundDevices = $distributorOrder && $distributorOrder->relationLoaded('hwidDevices')
+            ? $distributorOrder->hwidDevices
+                ->sortByDesc('last_seen_at')
+                ->pluck('hwid')
+                ->filter()
+                ->values()
+                ->all()
+            : [];
+
         return [
             ...$data,
             'period' => PlanService::getLegacyPeriod((string)$this->period),
@@ -47,6 +56,10 @@ class OrderResource extends JsonResource
             'connected_node_name' => $distributorOrder?->connected_node_name,
             'claimed_at' => $distributorOrder?->claimed_at,
             'closed_at' => $distributorOrder?->closed_at,
+            'hwid_enabled' => $distributorOrder ? (bool) $distributorOrder->hwid_enabled : null,
+            'hwid_limit' => $distributorOrder ? (int) $distributorOrder->hwid_limit : null,
+            'bound_devices' => $boundDevices,
+            'can_view_subscription_qr' => (bool) ($distributorOrder?->subscriber?->token),
             ...($distributorOrder ? ['subscription_entitlement' => $subscriptionEntitlement] : []),
             'plan' => $this->whenLoaded('plan', fn() => PlanResource::make($this->plan)),
             'payment' => $this->whenLoaded('payment', fn() => $this->payment ? [

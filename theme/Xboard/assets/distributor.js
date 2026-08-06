@@ -37,6 +37,11 @@
       delivery: '交付状态', settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
       customerName: '用户名称', customerNamePlaceholder: '请输入便于售后识别的用户名称',
       customerNameRequired: '为了售后方便，请输入备注清楚用户',
+      boundDevices: '已绑定设备', unboundDevice: '尚未绑定设备', hwidDisabled: '未启用设备绑定',
+      viewSubscriptionQr: '查看订阅二维码', subscriptionPending: '订阅尚未生成',
+      subscriptionBoundDevice: '订阅已绑定设备', subscriptionUnboundDevice: '订阅尚未绑定设备',
+      subscriptionHwidDisabled: '该订阅未启用设备绑定', copyImage: '复制图片', downloadImage: '下载图片',
+      copyImageUnsupported: '当前浏览器不支持复制图片，请使用下载图片',
       entitlement: '订阅权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
       expiresAt: '到期时间', speedLimit: '限速', deviceLimit: '设备限制', permanent: '长期有效', unlimited: '不限',
       inviteUsers: '已邀请用户', validCommission: '有效佣金', pendingCommission: '确认中佣金',
@@ -69,6 +74,11 @@
       delivery: 'Delivery', settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
       customerName: 'Customer name', customerNamePlaceholder: 'Enter a name for after-sales identification',
       customerNameRequired: 'Enter a clear customer name for after-sales support.',
+      boundDevices: 'Bound devices', unboundDevice: 'No device bound', hwidDisabled: 'Device binding disabled',
+      viewSubscriptionQr: 'View subscription QR', subscriptionPending: 'Subscription not generated',
+      subscriptionBoundDevice: 'Subscription bound to device', subscriptionUnboundDevice: 'Subscription has no bound device',
+      subscriptionHwidDisabled: 'Device binding is disabled for this subscription', copyImage: 'Copy image', downloadImage: 'Download image',
+      copyImageUnsupported: 'This browser cannot copy images. Use Download image instead.',
       entitlement: 'Subscription entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
       expiresAt: 'Expires at', speedLimit: 'Speed limit', deviceLimit: 'Device limit', permanent: 'Never expires', unlimited: 'Unlimited',
       inviteUsers: 'Invited users', validCommission: 'Valid commission', pendingCommission: 'Pending commission',
@@ -130,6 +140,67 @@
       input.remove();
     }
     if (!copied) throw new Error(t('copyFailed'));
+  }
+  const loadImage = (src) => new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Unable to render QR image'));
+    image.src = src;
+  });
+  const canvasBlob = (canvas) => new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Unable to create PNG')), 'image/png');
+  });
+  function wrapCanvasText(context, value, maxWidth) {
+    const characters = Array.from(String(value || ''));
+    const lines = [];
+    let current = '';
+    characters.forEach((character) => {
+      const candidate = current + character;
+      if (current && context.measureText(candidate).width > maxWidth) {
+        lines.push(current);
+        current = character;
+      } else {
+        current = candidate;
+      }
+    });
+    if (current) lines.push(current);
+    return lines.length ? lines : ['-'];
+  }
+  async function composeSubscriptionQrPng(payload) {
+    const qrImage = await loadImage(payload.qr_code);
+    const width = 760;
+    const padding = 52;
+    const qrSize = 540;
+    const lineHeight = 31;
+    const canvas = document.createElement('canvas');
+    const measure = canvas.getContext('2d');
+    measure.font = '600 20px "Microsoft YaHei", "PingFang SC", sans-serif';
+    const deviceTexts = !payload.hwid_enabled
+      ? [t('subscriptionHwidDisabled')]
+      : (payload.hwid_devices || []).length
+        ? payload.hwid_devices.map((hwid) => `${t('subscriptionBoundDevice')} ${hwid}`)
+        : [t('subscriptionUnboundDevice')];
+    const detailLines = [`${t('orderNo')} ${payload.trade_no}`, ...deviceTexts]
+      .flatMap((line) => wrapCanvasText(measure, line, width - padding * 2));
+    const headerHeight = 64 + detailLines.length * lineHeight + 20;
+    canvas.width = width;
+    canvas.height = padding + headerHeight + qrSize + padding;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.textAlign = 'center';
+    context.textBaseline = 'top';
+    context.fillStyle = '#111827';
+    context.font = '800 32px "Microsoft YaHei", "PingFang SC", sans-serif';
+    context.fillText(t('qrTitle'), width / 2, padding);
+    context.font = '600 20px "Microsoft YaHei", "PingFang SC", sans-serif';
+    let y = padding + 54;
+    detailLines.forEach((line) => {
+      context.fillText(line, width / 2, y);
+      y += lineHeight;
+    });
+    context.drawImage(qrImage, (width - qrSize) / 2, padding + headerHeight, qrSize, qrSize);
+    return { imageUrl: canvas.toDataURL('image/png'), blob: await canvasBlob(canvas) };
   }
   const money = (cents) => `¥${((Number(cents) || 0) / 100).toFixed(2)}`;
   const formatTime = (seconds) => seconds ? new Date(Number(seconds) * 1000).toLocaleString() : '-';
@@ -467,6 +538,12 @@
       const delivery = order.delivery_status === 0 ? t('pending') : order.delivery_status === 1 ? t('claimed') : t('closed');
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
+      const boundDevices = Array.isArray(order.bound_devices) ? order.bound_devices : [];
+      const boundDeviceContent = !order.hwid_enabled
+        ? `<span class="dist-device-state">${t('hwidDisabled')}</span>`
+        : boundDevices.length
+          ? `<div class="dist-bound-device-list">${boundDevices.map((hwid) => `<code>${escapeHtml(hwid)}</code>`).join('')}</div>`
+          : `<span class="dist-device-state">${t('unboundDevice')}</span>`;
       const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
@@ -475,7 +552,14 @@
         <span><dt>${t('expiresAt')}</dt><dd>${entitlement.expired_at ? formatTime(entitlement.expired_at) : t('permanent')}</dd></span>
         <span><dt>${t('speedLimit')}</dt><dd>${formatLimit(entitlement.speed_limit, 'Mbps')}</dd></span>
         <span><dt>${t('deviceLimit')}</dt><dd>${formatLimit(entitlement.device_limit, state.locale === 'zh-CN' ? '台' : 'devices')}</dd></span>
+        <span><dt>${t('boundDevices')}</dt><dd>${boundDeviceContent}</dd></span>
       </dl></div></td></tr>` : '';
+      const deliveryAction = order.delivery_status === 0 || (order.delivery_status === 1 && !order.config_issued_at)
+        ? `<button class="dist-link-btn" data-delivery="${escapeHtml(order.trade_no)}">${order.delivery_status === 0 ? t('showQr') : t('checkDelivery')}</button>`
+        : '';
+      const qrAction = order.can_view_subscription_qr
+        ? `<button class="dist-link-btn" data-subscription-qr="${escapeHtml(order.trade_no)}">${t('viewSubscriptionQr')}</button>`
+        : `<span class="dist-action-disabled">${t('subscriptionPending')}</span>`;
       return `<tr>
         <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
         <td>${escapeHtml(order.customer_name || '-')}</td>
@@ -483,7 +567,7 @@
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
         <td><span class="dist-badge delivery-${order.delivery_status}">${delivery}</span></td>
         <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
-        <td>${order.delivery_status === 0 || (order.delivery_status === 1 && !order.config_issued_at) ? `<button class="dist-link-btn" data-delivery="${escapeHtml(order.trade_no)}">${order.delivery_status === 0 ? t('showQr') : t('checkDelivery')}</button>` : '-'}</td>
+        <td><div class="dist-order-actions">${deliveryAction}${qrAction}</div></td>
       </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
@@ -557,6 +641,13 @@
     startPolling();
   }
 
+  async function openSubscriptionQr(tradeNo) {
+    const payload = dataOf(await api(`/user/distributor/subscription-qr?trade_no=${encodeURIComponent(tradeNo)}`));
+    const png = await composeSubscriptionQrPng(payload);
+    state.modal = { type: 'subscriptionQr', payload, ...png, copied: false };
+    renderModal();
+  }
+
   function renderModal() {
     let root = document.getElementById('dist-modal-root');
     if (!root) {
@@ -586,6 +677,14 @@
     if (state.modal.type === 'knowledge') {
       const article = state.modal.article;
       root.innerHTML = `<div class="dist-modal-backdrop"><article class="dist-modal dist-knowledge-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${escapeHtml(article.title)}</h2><button type="button" class="dist-knowledge-share" data-copy="${escapeHtml(article.share_url || `${window.location.origin}/guide/${article.id}`)}">复制分享链接</button><div class="dist-knowledge-updated">${t('lastUpdated')}：${formatTime(article.updated_at)}</div><div class="dist-knowledge-body">${article.body || ''}</div></article></div>`;
+      return;
+    }
+    if (state.modal.type === 'subscriptionQr') {
+      const modal = state.modal;
+      root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-subscription-qr-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${t('viewSubscriptionQr')}</h2>
+        <img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}">
+        <div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>
+      </section></div>`;
       return;
     }
     const delivery = state.modal.delivery;
@@ -687,6 +786,8 @@
     if (buy) { confirmPurchase(buy.dataset.buy, buy.dataset.name); return; }
     const delivery = target.closest('[data-delivery]');
     if (delivery) { try { await openDelivery(delivery.dataset.delivery); } catch (e) { toast(e.message, 'error'); } return; }
+    const subscriptionQr = target.closest('[data-subscription-qr]');
+    if (subscriptionQr) { try { await openSubscriptionQr(subscriptionQr.dataset.subscriptionQr); } catch (e) { toast(e.message, 'error'); } return; }
     const knowledge = target.closest('[data-knowledge-id]');
     if (knowledge) { try { await openKnowledge(knowledge.dataset.knowledgeId); } catch (e) { toast(e.message, 'error'); } return; }
     const copy = target.closest('[data-copy]');
@@ -757,6 +858,34 @@
     if (!action) return;
     if (action === 'confirm-purchase') await submitPurchase();
     else if (action === 'done') await handleDone();
+    else if (action === 'copy-subscription-qr') {
+      if (!state.modal || state.modal.type !== 'subscriptionQr') return;
+      if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined' || !window.isSecureContext) {
+        toast(t('copyImageUnsupported'), 'error');
+        return;
+      }
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': state.modal.blob })]);
+        state.modal.copied = true;
+        renderModal();
+        window.setTimeout(() => {
+          if (!state.modal || state.modal.type !== 'subscriptionQr') return;
+          state.modal.copied = false;
+          renderModal();
+        }, 1800);
+      } catch (_) { toast(t('copyImageUnsupported'), 'error'); }
+    }
+    else if (action === 'download-subscription-qr') {
+      if (!state.modal || state.modal.type !== 'subscriptionQr') return;
+      const url = URL.createObjectURL(state.modal.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `订阅二维码-${state.modal.payload.trade_no}.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
     else if (action === 'cancel') closeModal();
   }
 

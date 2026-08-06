@@ -439,6 +439,77 @@ class DistributorOrderTest extends TestCase
         $this->assertStringNotContainsString($otherOrder->trade_no, $encoded);
     }
 
+    public function test_distributor_order_fetch_and_subscription_qr_expose_all_bound_hwids_without_plain_credentials(): void
+    {
+        $distributor = $this->makeUser('qr-owner@example.com', true);
+        $order = $this->createDistributorOrder($distributor, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $delivery->update(['hwid_limit' => 3]);
+        foreach ([
+            ['hwid' => 'device-primary-001', 'last_seen_at' => 100],
+            ['hwid' => 'device-secondary-02', 'last_seen_at' => 200],
+        ] as $device) {
+            DistributorHwidDevice::create($device + [
+                'distributor_order_id' => $delivery->id,
+                'first_seen_at' => 50,
+            ]);
+        }
+        Sanctum::actingAs($distributor);
+
+        $this->getJson('/api/v1/user/order/fetch')
+            ->assertOk()
+            ->assertJsonPath('data.0.trade_no', $order->trade_no)
+            ->assertJsonPath('data.0.hwid_enabled', true)
+            ->assertJsonPath('data.0.hwid_limit', 3)
+            ->assertJsonPath('data.0.bound_devices.0', 'device-secondary-02')
+            ->assertJsonPath('data.0.bound_devices.1', 'device-primary-001')
+            ->assertJsonPath('data.0.can_view_subscription_qr', true);
+
+        $response = $this->getJson('/api/v1/user/distributor/subscription-qr?' . http_build_query([
+            'trade_no' => $order->trade_no,
+        ]))->assertOk()
+            ->assertJsonPath('data.trade_no', $order->trade_no)
+            ->assertJsonPath('data.hwid_enabled', true)
+            ->assertJsonPath('data.hwid_devices.0', 'device-secondary-02')
+            ->assertJsonPath('data.hwid_devices.1', 'device-primary-001');
+
+        $this->assertStringStartsWith('data:image/svg+xml;base64,', $response->json('data.qr_code'));
+        $this->assertArrayNotHasKey('subscribe_url', $response->json('data'));
+        $this->assertStringNotContainsString($delivery->subscriber->token, $response->getContent());
+    }
+
+    public function test_subscription_qr_is_owner_only_and_reports_disabled_unbound_and_missing_subscription_states(): void
+    {
+        $owner = $this->makeUser('qr-state-owner@example.com', true);
+        $other = $this->makeUser('qr-state-other@example.com', true);
+        $order = $this->createDistributorOrder($owner, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $uri = '/api/v1/user/distributor/subscription-qr?' . http_build_query(['trade_no' => $order->trade_no]);
+
+        Sanctum::actingAs($other);
+        $this->getJson($uri)->assertNotFound();
+
+        Sanctum::actingAs($this->makeUser('qr-normal@example.com'));
+        $this->getJson($uri)->assertForbidden();
+
+        Sanctum::actingAs($owner);
+        $this->getJson($uri)->assertOk()
+            ->assertJsonPath('data.hwid_enabled', true)
+            ->assertJsonCount(0, 'data.hwid_devices');
+
+        $delivery->update(['hwid_enabled' => false]);
+        $this->getJson($uri)->assertOk()
+            ->assertJsonPath('data.hwid_enabled', false)
+            ->assertJsonCount(0, 'data.hwid_devices');
+
+        $delivery->subscriber->update(['token' => '']);
+        $this->getJson('/api/v1/user/order/fetch')
+            ->assertOk()
+            ->assertJsonPath('data.0.can_view_subscription_qr', false);
+        $this->getJson($uri)->assertStatus(409)
+            ->assertJsonPath('message', '订阅尚未生成');
+    }
+
     public function test_distributor_can_search_only_their_orders_by_number_or_customer_name_and_export_the_result(): void
     {
         $distributor = $this->makeUser('search-own@example.com', true);

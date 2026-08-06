@@ -130,6 +130,31 @@ class DistributorOrderService
         return $data;
     }
 
+    public function subscriptionQrData(DistributorOrder $delivery): array
+    {
+        $delivery->loadMissing([
+            'order:id,trade_no',
+            'subscriber:id,token',
+            'hwidDevices:id,distributor_order_id,hwid,last_seen_at',
+        ]);
+
+        if (!$delivery->subscriber?->token) {
+            throw new ApiException('订阅尚未生成', 409);
+        }
+
+        return [
+            'trade_no' => $delivery->order->trade_no,
+            'qr_code' => $this->makeQrDataUri(Helper::getSubscribeUrl($delivery->subscriber->token)),
+            'hwid_enabled' => (bool) $delivery->hwid_enabled,
+            'hwid_devices' => $delivery->hwidDevices
+                ->sortByDesc('last_seen_at')
+                ->pluck('hwid')
+                ->filter()
+                ->values()
+                ->all(),
+        ];
+    }
+
     private function calculateExpiredAt(string $period): ?int
     {
         if ($period === Plan::PERIOD_ONETIME) {

@@ -41,6 +41,34 @@ class DistributorController extends Controller
         return $this->success($service->deliveryData($delivery));
     }
 
+    public function subscriptionQr(Request $request, DistributorOrderService $service)
+    {
+        abort_unless((bool) $request->user()->is_distributor, 403);
+
+        $validated = $request->validate([
+            'trade_no' => 'required|string|max:64',
+        ]);
+
+        $delivery = DistributorOrder::query()
+            ->with([
+                'order:id,trade_no',
+                'subscriber:id,token',
+                'hwidDevices:id,distributor_order_id,hwid,last_seen_at',
+            ])
+            ->where('distributor_user_id', $request->user()->id)
+            ->whereHas('order', fn($query) => $query->where('trade_no', $validated['trade_no']))
+            ->first();
+
+        if (!$delivery) {
+            return $this->fail([404, '分销订单不存在']);
+        }
+        if (!$delivery->subscriber?->token) {
+            return $this->fail([409, '订阅尚未生成']);
+        }
+
+        return $this->success($service->subscriptionQrData($delivery));
+    }
+
     public function close(Request $request, DistributorOrderService $service)
     {
         $request->validate([
