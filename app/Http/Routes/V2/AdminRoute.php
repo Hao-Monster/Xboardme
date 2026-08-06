@@ -230,7 +230,6 @@ class AdminRoute
                 $router->post('/show', [KnowledgeController::class, 'show']);
                 $router->post('/drop', [KnowledgeController::class, 'drop']);
                 $router->post('/sort', [KnowledgeController::class, 'sort']);
-                $router->post('/bookstack/ensure', [KnowledgeController::class, 'ensureBookStackPage']);
                 $router->post('/attachment/upload/initialize', [KnowledgeAttachmentController::class, 'initialize'])
                     ->middleware('throttle:20,1')
                     ->name('admin.knowledge.attachments.upload.initialize');

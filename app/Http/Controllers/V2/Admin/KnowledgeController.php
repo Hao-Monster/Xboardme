@@ -8,7 +8,6 @@ use App\Http\Requests\Admin\KnowledgeSave;
 use App\Http\Requests\Admin\KnowledgeSort;
 use App\Models\Knowledge;
 use App\Services\KnowledgeAttachmentBindingService;
-use App\Services\BookStackService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -45,22 +44,14 @@ class KnowledgeController extends Controller
         $params = $request->validated();
         $knowledgeId = isset($params['id']) ? (int) $params['id'] : null;
         $draftToken = $params['draft_token'] ?? null;
-        $bookStackManaged = (bool) ($params['bookstack_managed'] ?? false);
-        $knowledgeData = Arr::except($params, ['id', 'draft_token', 'bookstack_managed']);
-        if ($bookStackManaged && $knowledgeId) {
-            unset($knowledgeData['body']);
-        } else {
-            $knowledgeData['body'] = trim((string) ($knowledgeData['body'] ?? '')) ?: '<p>BookStack 正文由 BookStack 管理。</p>';
-        }
-        $savedKnowledgeId = null;
+        $knowledgeData = Arr::except($params, ['id', 'draft_token']);
 
         try {
             DB::transaction(function () use (
                 $knowledgeId,
                 $knowledgeData,
                 $draftToken,
-                $request,
-                &$savedKnowledgeId
+                $request
             ): void {
                 if ($knowledgeId) {
                     $knowledge = Knowledge::where('id', $knowledgeId)->lockForUpdate()->first();
@@ -79,7 +70,6 @@ class KnowledgeController extends Controller
                     (int) $request->user()->id,
                     $draftToken
                 );
-                $savedKnowledgeId = (int) $knowledge->id;
             }, 3);
         } catch (ApiException $exception) {
             throw $exception;
@@ -92,7 +82,7 @@ class KnowledgeController extends Controller
             throw new ApiException('知识文章保存失败，请稍后重试。', 500);
         }
 
-        return $this->success(['id' => $savedKnowledgeId]);
+        return $this->success(true);
     }
 
     public function show(Request $request)
@@ -112,13 +102,6 @@ class KnowledgeController extends Controller
         }
 
         return $this->success(true);
-    }
-
-    public function ensureBookStackPage(Request $request, BookStackService $bookStack)
-    {
-        $request->validate(['id' => 'required|integer|min:1']);
-        $knowledge = Knowledge::findOrFail($request->integer('id'));
-        return $this->success($bookStack->ensurePage($knowledge));
     }
 
     public function sort(Request $request)

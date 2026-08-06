@@ -9,7 +9,6 @@ use App\Models\Knowledge;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Services\KnowledgeAttachmentAccessService;
-use App\Services\BookStackService;
 use App\Services\UserService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
@@ -21,8 +20,7 @@ class KnowledgeController extends Controller
 
     public function __construct(
         UserService $userService,
-        private KnowledgeAttachmentAccessService $attachmentAccessService,
-        private BookStackService $bookStackService
+        private KnowledgeAttachmentAccessService $attachmentAccessService
     )
     {
         $this->userService = $userService;
@@ -53,11 +51,8 @@ class KnowledgeController extends Controller
         }
 
         $knowledge = $knowledge->toArray();
-        if (!empty($knowledge['bookstack_page_id'])) {
-            $knowledge['body'] = $this->bookStackService->pageHtml(Knowledge::findOrFail($knowledge['id']));
-        }
         $knowledge = $this->processKnowledgeContent($knowledge, $request->user());
-        if ($request->input('render') === 'html' && empty($knowledge['bookstack_page_id'])) {
+        if ($request->input('render') === 'html') {
             $knowledge['body'] = Str::markdown($knowledge['body'] ?? '', [
                 'html_input' => 'allow',
                 'allow_unsafe_links' => false,

@@ -25,9 +25,8 @@ class KnowledgeSave extends FormRequest
             'category' => 'required',
             'language' => 'required',
             'title' => 'required',
-            'body' => 'nullable|string',
+            'body' => 'required',
             'show' => 'nullable|boolean',
-            'bookstack_managed' => 'nullable|boolean',
             'draft_token' => ['nullable', 'string', 'size:64', 'regex:/^[a-f0-9]{64}$/'],
         ];
     }
