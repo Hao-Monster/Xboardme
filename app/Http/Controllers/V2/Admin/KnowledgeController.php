@@ -45,8 +45,13 @@ class KnowledgeController extends Controller
         $params = $request->validated();
         $knowledgeId = isset($params['id']) ? (int) $params['id'] : null;
         $draftToken = $params['draft_token'] ?? null;
-        $knowledgeData = Arr::except($params, ['id', 'draft_token']);
-        $knowledgeData['body'] = trim((string) ($knowledgeData['body'] ?? '')) ?: '<p>BookStack 正文由 BookStack 管理。</p>';
+        $bookStackManaged = (bool) ($params['bookstack_managed'] ?? false);
+        $knowledgeData = Arr::except($params, ['id', 'draft_token', 'bookstack_managed']);
+        if ($bookStackManaged && $knowledgeId) {
+            unset($knowledgeData['body']);
+        } else {
+            $knowledgeData['body'] = trim((string) ($knowledgeData['body'] ?? '')) ?: '<p>BookStack 正文由 BookStack 管理。</p>';
+        }
         $savedKnowledgeId = null;
 
         try {

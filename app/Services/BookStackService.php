@@ -30,7 +30,7 @@ class BookStackService
             $page = $this->request()->post('/api/pages', [
                 'book_id' => config('bookstack.book_id'),
                 'name' => $knowledge->title,
-                'html' => '<p>请在此编写正文。</p>',
+                'html' => $this->initialHtml($knowledge),
             ])->throw()->json();
             $knowledge->bookstack_page_id = (int) ($page['id'] ?? 0);
         }
@@ -74,6 +74,23 @@ class BookStackService
     {
         if ($url === '') return '';
         return Str::startsWith($url, ['http://', 'https://']) ? $url : config('bookstack.base_url') . '/' . ltrim($url, '/');
+    }
+
+    private function initialHtml(Knowledge $knowledge): string
+    {
+        $body = trim((string) $knowledge->body);
+        if ($body === '' || $body === '<p>BookStack 正文由 BookStack 管理。</p>') {
+            return '<p>请在此编写正文。</p>';
+        }
+
+        if (preg_match('/^\s*</', $body) === 1) {
+            return $body;
+        }
+
+        return Str::markdown($body, [
+            'html_input' => 'allow',
+            'allow_unsafe_links' => false,
+        ]);
     }
 
     private function ensureConfigured(): void

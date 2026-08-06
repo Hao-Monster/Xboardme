@@ -25,9 +25,12 @@
     const title = String(inputs[0]?.value || '').trim();
     const category = String(inputs[1]?.value || '').trim();
     const language = dialog.querySelector('select')?.value || dialog.querySelector('input[role="combobox"]')?.value || 'zh-CN';
-    const toggle = dialog.querySelector('input[type="checkbox"]');
+    const toggle = dialog.querySelector('[role="switch"]') || dialog.querySelector('input[type="checkbox"]');
+    const show = toggle?.getAttribute('aria-checked') !== null
+      ? toggle.getAttribute('aria-checked') === 'true'
+      : Boolean(toggle?.checked);
     if (!title || !category) throw new Error('请填写标题和分类');
-    return { id: currentKnowledgeId || undefined, title, category, language, show: Boolean(toggle?.checked), body: '<p>BookStack 正文由 BookStack 管理。</p>' };
+    return { id: currentKnowledgeId || undefined, title, category, language, show, bookstack_managed: true };
   }
   async function saveArticle(dialog) {
     const response = await fetch(endpoint('/knowledge/save'), { method: 'POST', credentials: 'same-origin', headers: { Authorization: token(), 'Content-Type': 'application/json' }, body: JSON.stringify(articlePayload(dialog)) });

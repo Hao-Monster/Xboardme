@@ -53,6 +53,7 @@ jobs:
           bash -n .github/scripts/deploy-bookstack-compose.sh
           bash -n .github/scripts/diagnose-bookstack-origin.sh
           bash -n .github/scripts/configure-bookstack-caddy.sh
+          bash -n .github/scripts/provision-bookstack-bridge.sh
 
   build:
     needs: verify
@@ -236,6 +237,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends sshpass
           sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' < .github/scripts/deploy-bookstack-compose.sh
           sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' < .github/scripts/configure-bookstack-caddy.sh
+          sshpass -e ssh -o StrictHostKeyChecking=accept-new -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' < .github/scripts/provision-bookstack-bridge.sh
 
   smoke-distributor:
     if: ${{ github.ref == 'refs/heads/codex/distributor' }}
