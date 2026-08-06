@@ -557,7 +557,7 @@
     }
     if (state.modal.type === 'knowledge') {
       const article = state.modal.article;
-      root.innerHTML = `<div class="dist-modal-backdrop"><article class="dist-modal dist-knowledge-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${escapeHtml(article.title)}</h2><div class="dist-knowledge-updated">${t('lastUpdated')}：${formatTime(article.updated_at)}</div><div class="dist-knowledge-body">${article.body || ''}</div></article></div>`;
+      root.innerHTML = `<div class="dist-modal-backdrop"><article class="dist-modal dist-knowledge-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${escapeHtml(article.title)}</h2><button type="button" class="dist-knowledge-share" data-copy="${escapeHtml(article.share_url || `${window.location.origin}/guide/${article.id}`)}">复制分享链接</button><div class="dist-knowledge-updated">${t('lastUpdated')}：${formatTime(article.updated_at)}</div><div class="dist-knowledge-body">${article.body || ''}</div></article></div>`;
       return;
     }
     const delivery = state.modal.delivery;

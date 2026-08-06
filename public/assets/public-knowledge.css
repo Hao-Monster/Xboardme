@@ -1,0 +1,41 @@
+:root { color-scheme: light; font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif; color: #17212b; background: #f4f7f9; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: #f4f7f9; }
+.public-knowledge-header { position: sticky; top: 0; z-index: 10; min-height: 64px; padding: 10px max(20px, calc((100vw - 1100px) / 2)); display: flex; align-items: center; justify-content: space-between; gap: 16px; background: rgba(255,255,255,.96); border-bottom: 1px solid #e4eaf0; backdrop-filter: blur(12px); }
+.public-knowledge-brand { display: flex; align-items: center; gap: 10px; min-width: 0; color: #17212b; font-size: 18px; font-weight: 700; text-decoration: none; }
+.public-knowledge-brand img { width: 36px; height: 36px; object-fit: contain; border-radius: 9px; }
+.public-knowledge-copy { border: 1px solid #25858b; border-radius: 9px; padding: 9px 16px; color: #18747a; background: #fff; font-weight: 600; cursor: pointer; }
+.public-knowledge-copy:hover { background: #edf8f8; }
+.public-knowledge-layout { width: min(940px, calc(100% - 32px)); margin: 28px auto 120px; }
+.public-knowledge-article { padding: clamp(24px, 5vw, 56px); background: #fff; border: 1px solid #e1e8ee; border-radius: 18px; box-shadow: 0 14px 40px rgba(31,55,72,.07); }
+.public-knowledge-meta { color: #25858b; font-size: 14px; font-weight: 700; }
+.public-knowledge-article h1 { margin: 10px 0 8px; font-size: clamp(28px, 5vw, 42px); line-height: 1.2; }
+.public-knowledge-updated { color: #748495; font-size: 13px; }
+.public-knowledge-body { margin-top: 34px; font-size: 16px; line-height: 1.8; overflow-wrap: anywhere; }
+.public-knowledge-body h1, .public-knowledge-body h2, .public-knowledge-body h3 { margin: 1.5em 0 .6em; line-height: 1.35; }
+.public-knowledge-body img, .public-knowledge-body video { display: block; max-width: 100%; height: auto; margin: 20px auto; border-radius: 10px; }
+.public-knowledge-body video { width: 100%; background: #0e151b; }
+.public-knowledge-body a { color: #187f85; text-underline-offset: 3px; }
+.public-knowledge-body pre { overflow: auto; padding: 16px; border-radius: 10px; background: #f0f4f6; }
+.public-knowledge-body table { width: 100%; border-collapse: collapse; }
+.public-knowledge-body th, .public-knowledge-body td { padding: 9px 12px; border: 1px solid #dce5eb; }
+.public-auth-card { position: fixed; right: 22px; bottom: 22px; z-index: 20; width: min(300px, calc(100vw - 32px)); padding: 16px; display: grid; gap: 7px; background: rgba(255,255,255,.98); border: 1px solid #dce5eb; border-radius: 14px; box-shadow: 0 14px 38px rgba(20,43,57,.18); }
+.public-auth-card strong { font-size: 16px; }
+.public-auth-card span { color: #708090; font-size: 13px; }
+.public-auth-card div { display: flex; gap: 8px; margin-top: 5px; }
+.public-auth-card a { flex: 1; padding: 8px 12px; text-align: center; text-decoration: none; color: #18747a; border: 1px solid #25858b; border-radius: 8px; font-weight: 600; }
+.public-auth-card a.primary { color: #fff; background: #25858b; }
+.public-knowledge-toast { position: fixed; left: 50%; bottom: 28px; z-index: 30; padding: 9px 16px; opacity: 0; transform: translate(-50%, 12px); color: #fff; background: #17212b; border-radius: 8px; transition: .2s ease; pointer-events: none; }
+.public-knowledge-toast.show { opacity: 1; transform: translate(-50%, 0); }
+@media (max-width: 640px) {
+  .public-knowledge-header { min-height: 56px; padding: 8px 12px; }
+  .public-knowledge-brand { font-size: 16px; }
+  .public-knowledge-copy { padding: 8px 10px; font-size: 13px; }
+  .public-knowledge-layout { width: calc(100% - 16px); margin: 10px auto 104px; }
+  .public-knowledge-article { padding: 20px 16px; border-radius: 12px; }
+  .public-knowledge-body { margin-top: 24px; }
+  .public-auth-card { right: 8px; bottom: 8px; width: auto; max-width: calc(100vw - 16px); grid-template-columns: auto auto; align-items: center; gap: 4px 12px; padding: 10px 12px; }
+  .public-auth-card span { display: none; }
+  .public-auth-card div { grid-column: 2; grid-row: 1; margin: 0; }
+  .public-auth-card a { min-width: 60px; padding: 7px 9px; }
+}

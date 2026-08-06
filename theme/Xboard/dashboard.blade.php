@@ -6,6 +6,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no" />
   <title>{{$title}}</title>
   <link rel="stylesheet" href="/theme/{{$theme}}/assets/distributor.css?v={{$version}}" />
+  <link rel="stylesheet" href="/assets/knowledge-share.css?v={{$version}}" />
+  <script defer src="/assets/knowledge-share.js?v={{$version}}"></script>
   <script type="module" crossorigin src="/theme/{{$theme}}/assets/umi.js"></script>
 </head>
 

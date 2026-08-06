@@ -12,6 +12,16 @@ Route::get('/knowledge-attachments/{attachmentUuid}', [\App\Http\Controllers\Kno
     ->whereUuid('attachmentUuid')
     ->name('knowledge.attachments.read');
 
+Route::get('/guide-attachments/{attachmentUuid}', [\App\Http\Controllers\KnowledgeAttachmentController::class, 'readPublic'])
+    ->middleware('throttle:600,1')
+    ->whereUuid('attachmentUuid')
+    ->name('knowledge.public.attachments.read');
+
+Route::get('/guide/{knowledge}/{slug?}', [\App\Http\Controllers\PublicKnowledgeController::class, 'show'])
+    ->middleware('throttle:120,1')
+    ->whereNumber('knowledge')
+    ->name('knowledge.public.show');
+
 /*
 |--------------------------------------------------------------------------
 | Web Routes

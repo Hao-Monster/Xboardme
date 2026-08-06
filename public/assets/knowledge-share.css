@@ -1,0 +1,5 @@
+.knowledge-share-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; margin-left: 8px; padding: 6px 11px; border: 1px solid #25858b; border-radius: 7px; color: #19777d; background: #fff; font-size: 13px; font-weight: 600; line-height: 1.2; cursor: pointer; }
+.knowledge-share-button:hover { background: #edf8f8; }
+.knowledge-share-button.knowledge-share-detail { margin: 10px 0 2px; }
+.knowledge-share-button.copied { color: #fff; background: #25858b; }
+@media (max-width: 640px) { .knowledge-share-button { padding: 6px 9px; font-size: 12px; } }

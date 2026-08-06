@@ -16,4 +16,9 @@ class KnowledgeAttachmentController extends Controller
     {
         return $this->accessService->stream($request, $attachmentUuid);
     }
+
+    public function readPublic(Request $request, string $attachmentUuid): Response
+    {
+        return $this->accessService->streamPublic($request, $attachmentUuid);
+    }
 }

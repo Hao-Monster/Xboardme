@@ -8,6 +8,7 @@ use App\Http\Requests\Admin\KnowledgeSave;
 use App\Http\Requests\Admin\KnowledgeSort;
 use App\Models\Knowledge;
 use App\Services\KnowledgeAttachmentBindingService;
+use App\Services\PublicKnowledgeService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -16,22 +17,27 @@ use Throwable;
 
 class KnowledgeController extends Controller
 {
-    public function __construct(private KnowledgeAttachmentBindingService $attachmentBindingService)
+    public function __construct(
+        private KnowledgeAttachmentBindingService $attachmentBindingService,
+        private PublicKnowledgeService $publicKnowledgeService
+    )
     {
     }
 
     public function fetch(Request $request)
     {
         if ($request->input('id')) {
-            $knowledge = Knowledge::find($request->input('id'))->toArray();
+            $knowledge = Knowledge::find($request->input('id'));
             if (!$knowledge)
                 return $this->fail([400202, '知识不存在']);
-            return $this->success($knowledge);
+            return $this->success($this->withShareUrl($knowledge->toArray()));
         }
         $data = Knowledge::select(['title', 'id', 'updated_at', 'category', 'show'])
             ->orderBy('sort', 'ASC')
             ->get();
-        return $this->success($data);
+        return $this->success($data->map(
+            fn(Knowledge $knowledge) => $this->withShareUrl($knowledge->toArray())
+        ));
     }
 
     public function getCategory(Request $request)
@@ -153,5 +159,14 @@ class KnowledgeController extends Controller
         }
 
         return $this->success(true);
+    }
+
+    private function withShareUrl(array $knowledge): array
+    {
+        $knowledge['share_url'] = $this->publicKnowledgeService->shareUrlFor(
+            (int) $knowledge['id'],
+            (string) $knowledge['title']
+        );
+        return $knowledge;
     }
 }

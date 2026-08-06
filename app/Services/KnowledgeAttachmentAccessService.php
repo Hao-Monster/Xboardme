@@ -62,6 +62,32 @@ class KnowledgeAttachmentAccessService
         ) ?? $body;
     }
 
+    public function replaceWithPublicUrls(string $body, int $knowledgeId): string
+    {
+        $uuids = $this->bindingService->extractUuids($body);
+        if ($uuids === []) {
+            return $body;
+        }
+
+        $attachments = KnowledgeAttachment::query()
+            ->where('knowledge_id', $knowledgeId)
+            ->where('status', KnowledgeAttachment::STATUS_READY)
+            ->whereIn('uuid', $uuids)
+            ->get()
+            ->keyBy(fn(KnowledgeAttachment $attachment) => strtolower($attachment->uuid));
+
+        return preg_replace_callback(
+            $this->bindingService->placeholderPattern(),
+            function (array $matches) use ($attachments): string {
+                $attachment = $attachments->get(strtolower($matches[1]));
+                return $attachment
+                    ? route('knowledge.public.attachments.read', ['attachmentUuid' => $attachment->uuid])
+                    : 'about:blank#attachment-unavailable';
+            },
+            $body
+        ) ?? $body;
+    }
+
     public function stream(Request $request, string $attachmentUuid): Response
     {
         $attachment = KnowledgeAttachment::where('uuid', $attachmentUuid)
@@ -131,6 +157,32 @@ class KnowledgeAttachmentAccessService
                 fclose($stream);
             }
         }, $status, $headers);
+    }
+
+    public function streamPublic(Request $request, string $attachmentUuid): Response
+    {
+        $attachment = KnowledgeAttachment::query()
+            ->with('knowledge')
+            ->where('uuid', $attachmentUuid)
+            ->where('status', KnowledgeAttachment::STATUS_READY)
+            ->whereHas('knowledge', fn($query) => $query->where('show', true))
+            ->first();
+        if (!$attachment || !$attachment->knowledge) {
+            abort(404);
+        }
+
+        try {
+            $referenced = $this->bindingService->extractUuids((string) $attachment->knowledge->body);
+        } catch (ApiException) {
+            abort(404);
+        }
+        if (!in_array(strtolower($attachment->uuid), $referenced, true)) {
+            abort(404);
+        }
+
+        $response = $this->stream($request, $attachmentUuid);
+        $response->headers->set('Cache-Control', 'no-store, private');
+        return $response;
     }
 
     public function resolveDisposition(

@@ -141,3 +141,5 @@ html.distributor-mode.dist-modal-open,html.distributor-mode.dist-modal-open body
   .dist-topbar.has-promo { height:64px; }
   .dist-topbar-promo { gap:2px; }
 }
+.dist-knowledge-share { margin: 10px 0 4px; padding: 7px 12px; border: 1px solid #25858b; border-radius: 8px; color: #19777d; background: #fff; font-weight: 600; cursor: pointer; }
+.dist-knowledge-share:hover { background: #edf8f8; }
