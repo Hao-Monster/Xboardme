@@ -23,6 +23,17 @@ test('documentation supports search, grouped articles and server-rendered detail
   assert.match(source, /event\.target\.id === 'dist-knowledge-search'/);
 });
 
+test('every distributor article exposes an isolated permanent share action with success feedback', () => {
+  assert.match(source, /article\.share_url \|\| `\$\{window\.location\.origin\}\/guide\/\$\{article\.id\}`/);
+  assert.match(source, /class="dist-knowledge-copy"[^>]*data-copy="\$\{escapeHtml\(shareUrl\)\}"[^>]*data-copy-success/);
+  assert.match(source, /copyShare: '复制分享'/);
+  assert.match(source, /copySuccess: '复制成功'/);
+  assert.match(source, /copy\.textContent = t\('copySuccess'\)/);
+  assert.match(source, /copy\.classList\.add\('copied'\)/);
+  assert.match(source, /copy\.disabled = true/);
+  assert.match(styles, /\.dist-knowledge-copy\.copied/);
+});
+
 test('documentation styles stay scoped and mobile navigation accommodates four entries', () => {
   assert.match(styles, /\.dist-knowledge-toolbar/);
   assert.match(styles, /\.dist-knowledge-category/);

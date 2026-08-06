@@ -46,7 +46,7 @@
       settlementFilter: '结算状态', allSettlements: '全部', exportExcel: '导出 Excel', exportSuccess: 'Excel 导出成功',
       orderSearchPlaceholder: '输入订单号或用户名称查询', search: '查询', clear: '清空',
       knowledgeSubtitle: '查看产品使用方法与常见问题。', knowledgeSearchPlaceholder: '搜索使用文档',
-      lastUpdated: '最后更新', noArticles: '暂无使用文档',
+      lastUpdated: '最后更新', noArticles: '暂无使用文档', copyShare: '复制分享', copySuccess: '复制成功', copyFailed: '复制失败，请重试',
     },
     'en-US': {
       buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', knowledge: 'Documentation', logout: 'Sign out',
@@ -79,7 +79,7 @@
       settlementFilter: 'Settlement', allSettlements: 'All', exportExcel: 'Export Excel', exportSuccess: 'Excel exported',
       orderSearchPlaceholder: 'Search by order or customer name', search: 'Search', clear: 'Clear',
       knowledgeSubtitle: 'Browse product guides and frequently asked questions.', knowledgeSearchPlaceholder: 'Search documentation',
-      lastUpdated: 'Last updated', noArticles: 'No documentation available',
+      lastUpdated: 'Last updated', noArticles: 'No documentation available', copyShare: 'Copy share link', copySuccess: 'Copied', copyFailed: 'Copy failed. Try again.',
     },
   };
 
@@ -109,6 +109,28 @@
     element.innerHTML = String(value || '');
     return element.textContent || '';
   };
+  async function copyText(value) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return;
+      } catch (_) { /* fall back for browsers that deny Clipboard API access */ }
+    }
+    const input = document.createElement('textarea');
+    input.value = value;
+    input.setAttribute('readonly', '');
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.select();
+    let copied = false;
+    try {
+      copied = document.execCommand('copy');
+    } finally {
+      input.remove();
+    }
+    if (!copied) throw new Error(t('copyFailed'));
+  }
   const money = (cents) => `¥${((Number(cents) || 0) / 100).toFixed(2)}`;
   const formatTime = (seconds) => seconds ? new Date(Number(seconds) * 1000).toLocaleString() : '-';
   const GIB = 1024 * 1024 * 1024;
@@ -503,9 +525,15 @@
     if (state.knowledgeSearch) params.set('keyword', state.knowledgeSearch);
     const grouped = dataOf(await api(`/user/knowledge/fetch?${params}`)) || {};
     const categories = Object.entries(grouped).map(([category, articles]) => {
-      const items = (Array.isArray(articles) ? articles : []).map((article) => `<button type="button" class="dist-knowledge-item" data-knowledge-id="${escapeHtml(article.id)}">
-        <span><strong>${escapeHtml(article.title)}</strong><small>${t('lastUpdated')}：${formatTime(article.updated_at)}</small></span><b>›</b>
-      </button>`).join('');
+      const items = (Array.isArray(articles) ? articles : []).map((article) => {
+        const shareUrl = article.share_url || `${window.location.origin}/guide/${article.id}`;
+        return `<div class="dist-knowledge-item">
+          <button type="button" class="dist-knowledge-open" data-knowledge-id="${escapeHtml(article.id)}">
+            <span><strong>${escapeHtml(article.title)}</strong><small>${t('lastUpdated')}：${formatTime(article.updated_at)}</small></span><b>›</b>
+          </button>
+          <button type="button" class="dist-knowledge-copy" data-copy="${escapeHtml(shareUrl)}" data-copy-success>${t('copyShare')}</button>
+        </div>`;
+      }).join('');
       return items ? `<section class="dist-knowledge-category"><h2>${escapeHtml(category)}</h2><div class="dist-knowledge-list">${items}</div></section>` : '';
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('knowledge')}</h1><p>${t('knowledgeSubtitle')}</p></section>
@@ -662,7 +690,28 @@
     const knowledge = target.closest('[data-knowledge-id]');
     if (knowledge) { try { await openKnowledge(knowledge.dataset.knowledgeId); } catch (e) { toast(e.message, 'error'); } return; }
     const copy = target.closest('[data-copy]');
-    if (copy) { await navigator.clipboard.writeText(copy.dataset.copy); toast(t('success')); return; }
+    if (copy) {
+      try {
+        await copyText(copy.dataset.copy);
+        if (copy.hasAttribute('data-copy-success')) {
+          const original = copy.textContent;
+          copy.textContent = t('copySuccess');
+          copy.classList.add('copied');
+          copy.disabled = true;
+          window.setTimeout(() => {
+            if (!copy.isConnected) return;
+            copy.textContent = original;
+            copy.classList.remove('copied');
+            copy.disabled = false;
+          }, 1800);
+        } else {
+          toast(t('success'));
+        }
+      } catch (_) {
+        toast(t('copyFailed'), 'error');
+      }
+      return;
+    }
     const action = target.closest('[data-action]')?.dataset.action;
     if (action === 'logout') {
       localStorage.removeItem(TOKEN_KEY);
