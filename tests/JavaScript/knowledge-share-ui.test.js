@@ -77,6 +77,9 @@ test('public page includes non-blocking login and register card', () => {
   assert.match(source, /IntersectionObserver/);
   assert.match(source, /renderToc/);
   assert.doesNotMatch(source, /window\.location\.assign/);
-  assert.match(styles, /grid-template-columns:\s*minmax\(190px, 230px\) minmax\(170px, 210px\)/);
+  assert.match(styles, /grid-template-columns:\s*260px 220px minmax\(0, 1fr\)/);
+  assert.match(styles, /public-knowledge-articles\s*\{[^}]*top:\s*64px[^}]*min-height:\s*calc\(100vh - 64px\)/s);
+  assert.match(styles, /public-knowledge-article-list a\s*\{[^}]*font-size:\s*16px/s);
+  assert.match(styles, /public-knowledge-body\s*\{[^}]*font-size:\s*18px/s);
   assert.match(styles, /public-knowledge-sidebar\.is-open/);
 });
