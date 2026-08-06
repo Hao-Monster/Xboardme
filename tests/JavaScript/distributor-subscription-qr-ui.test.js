@@ -22,6 +22,12 @@ test('subscription QR preview uses the protected endpoint and composites order p
   assert.match(source, /\/user\/distributor\/subscription-qr\?trade_no=/);
   assert.match(source, /composeSubscriptionQrPng/);
   assert.match(source, /payload\.hwid_devices\.map/);
+  assert.match(source, /premiumCustomerQrTitle/);
+  assert.match(source, /高端客户\{customer\}的订阅码/);
+  assert.match(source, /高端客户的订阅码/);
+  assert.match(source, /payload\.customer_name/);
+  assert.match(source, /const titleLines = wrapCanvasText/);
+  assert.match(source, /titleLines\.forEach/);
   assert.match(source, /`\$\{t\('orderNo'\)\} \$\{payload\.trade_no\}`/);
   assert.match(source, /canvas\.toDataURL\('image\/png'\)/);
   assert.match(source, /canvasBlob\(canvas\)/);

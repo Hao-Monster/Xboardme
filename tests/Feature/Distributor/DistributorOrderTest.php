@@ -469,6 +469,7 @@ class DistributorOrderTest extends TestCase
             'trade_no' => $order->trade_no,
         ]))->assertOk()
             ->assertJsonPath('data.trade_no', $order->trade_no)
+            ->assertJsonPath('data.customer_name', '测试客户')
             ->assertJsonPath('data.hwid_enabled', true)
             ->assertJsonPath('data.hwid_devices.0', 'device-secondary-02')
             ->assertJsonPath('data.hwid_devices.1', 'device-primary-001');

@@ -30,7 +30,7 @@
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
       pending: '待领取', claimed: '已领取', closed: '已关闭', showQr: '显示二维码',
       checkDelivery: '检查交付', issuing: '二维码已领取，正在等待订阅配置成功下发。',
-      qrTitle: '客户订阅二维码', qrHint: '请让终端客户使用订阅客户端扫描。二维码只能成功领取一次。',
+      qrTitle: '客户订阅二维码', premiumCustomerQrTitle: '高端客户{customer}的订阅码', premiumCustomerQrTitleFallback: '高端客户的订阅码', qrHint: '请让终端客户使用订阅客户端扫描。二维码只能成功领取一次。',
       done: '已添加成功', closeAgain: '再次点击确认关闭', closeWarning: '请确保节点已经可用，关闭之后无法再次获取。',
       claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
       waitingConnection: '等待用户开启代理进入网络', connectedThrough: '客户已经通过 {node} 节点进入网络',
@@ -67,7 +67,7 @@
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
       pending: 'Pending claim', claimed: 'Claimed', closed: 'Closed', showQr: 'Show QR',
       checkDelivery: 'Check delivery', issuing: 'The QR was claimed. Waiting for the subscription configuration response.',
-      qrTitle: 'Customer subscription QR', qrHint: 'Scan with the customer subscription client. This QR can only be claimed once.',
+      qrTitle: 'Customer subscription QR', premiumCustomerQrTitle: 'Premium customer {customer} subscription QR', premiumCustomerQrTitleFallback: 'Premium customer subscription QR', qrHint: 'Scan with the customer subscription client. This QR can only be claimed once.',
       done: 'Added successfully', closeAgain: 'Click again to close', closeWarning: 'Make sure the nodes work. The QR cannot be recovered after closing.',
       claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
       waitingConnection: 'Waiting for the customer to enable the proxy', connectedThrough: 'Customer connected through {node}',
@@ -171,9 +171,16 @@
     const width = 760;
     const padding = 52;
     const qrSize = 540;
-    const lineHeight = 31;
+    const titleLineHeight = 43;
+    const detailLineHeight = 31;
     const canvas = document.createElement('canvas');
     const measure = canvas.getContext('2d');
+    const customerName = String(payload.customer_name || '').trim();
+    const title = customerName
+      ? t('premiumCustomerQrTitle').replace('{customer}', customerName)
+      : t('premiumCustomerQrTitleFallback');
+    measure.font = '800 32px "Microsoft YaHei", "PingFang SC", sans-serif';
+    const titleLines = wrapCanvasText(measure, title, width - padding * 2);
     measure.font = '600 20px "Microsoft YaHei", "PingFang SC", sans-serif';
     const deviceTexts = !payload.hwid_enabled
       ? [t('subscriptionHwidDisabled')]
@@ -182,7 +189,7 @@
         : [t('subscriptionUnboundDevice')];
     const detailLines = [`${t('orderNo')} ${payload.trade_no}`, ...deviceTexts]
       .flatMap((line) => wrapCanvasText(measure, line, width - padding * 2));
-    const headerHeight = 64 + detailLines.length * lineHeight + 20;
+    const headerHeight = titleLines.length * titleLineHeight + 10 + detailLines.length * detailLineHeight + 20;
     canvas.width = width;
     canvas.height = padding + headerHeight + qrSize + padding;
     const context = canvas.getContext('2d');
@@ -192,12 +199,16 @@
     context.textBaseline = 'top';
     context.fillStyle = '#111827';
     context.font = '800 32px "Microsoft YaHei", "PingFang SC", sans-serif';
-    context.fillText(t('qrTitle'), width / 2, padding);
+    let y = padding;
+    titleLines.forEach((line) => {
+      context.fillText(line, width / 2, y);
+      y += titleLineHeight;
+    });
+    y += 10;
     context.font = '600 20px "Microsoft YaHei", "PingFang SC", sans-serif';
-    let y = padding + 54;
     detailLines.forEach((line) => {
       context.fillText(line, width / 2, y);
-      y += lineHeight;
+      y += detailLineHeight;
     });
     context.drawImage(qrImage, (width - qrSize) / 2, padding + headerHeight, qrSize, qrSize);
     return { imageUrl: canvas.toDataURL('image/png'), blob: await canvasBlob(canvas) };

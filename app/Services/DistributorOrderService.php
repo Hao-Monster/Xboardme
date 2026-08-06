@@ -144,6 +144,7 @@ class DistributorOrderService
 
         return [
             'trade_no' => $delivery->order->trade_no,
+            'customer_name' => trim((string) $delivery->customer_name),
             'qr_code' => $this->makeQrDataUri(Helper::getSubscribeUrl($delivery->subscriber->token)),
             'hwid_enabled' => (bool) $delivery->hwid_enabled,
             'hwid_devices' => $delivery->hwidDevices
