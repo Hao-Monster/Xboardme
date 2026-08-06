@@ -6,6 +6,7 @@ use App\Models\Knowledge;
 use DOMDocument;
 use DOMElement;
 use DOMNode;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 class PublicKnowledgeService
@@ -62,7 +63,29 @@ class PublicKnowledgeService
         ]);
     }
 
+    public function publishedNavigation(): Collection
+    {
+        return Knowledge::query()
+            ->where('show', true)
+            ->select(['id', 'category', 'title', 'updated_at', 'sort'])
+            ->orderBy('sort')
+            ->orderBy('id')
+            ->get()
+            ->map(fn(Knowledge $knowledge): array => [
+                'id' => (int) $knowledge->id,
+                'category' => (string) $knowledge->category,
+                'title' => (string) $knowledge->title,
+                'url' => $this->shareUrl($knowledge),
+                'content_url' => route('knowledge.public.content', ['knowledge' => $knowledge->id]),
+            ]);
+    }
+
     public function render(Knowledge $knowledge): string
+    {
+        return $this->renderDocument($knowledge)['html'];
+    }
+
+    public function renderDocument(Knowledge $knowledge): array
     {
         $body = (string) $knowledge->body;
         $loginUrl = url('/#/login');
@@ -77,7 +100,60 @@ class PublicKnowledgeService
             'allow_unsafe_links' => false,
         ]);
 
-        return $this->sanitize($html);
+        $html = $this->sanitize($html);
+        $toc = $this->addHeadingAnchors($html);
+
+        return ['html' => $html, 'toc' => $toc];
+    }
+
+    private function addHeadingAnchors(string &$html): array
+    {
+        if (!class_exists(DOMDocument::class) || trim($html) === '') {
+            return [];
+        }
+
+        $document = new DOMDocument('1.0', 'UTF-8');
+        $previous = libxml_use_internal_errors(true);
+        $document->loadHTML(
+            '<?xml encoding="UTF-8"><div data-public-toc-root>' . $html . '</div>',
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
+        );
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $root = $document->getElementsByTagName('div')->item(0);
+        if (!$root) {
+            return [];
+        }
+
+        $toc = [];
+        $used = [];
+        $position = 0;
+        foreach (iterator_to_array($root->getElementsByTagName('*')) as $node) {
+            if (!$node instanceof DOMElement || preg_match('/^h([1-6])$/i', $node->tagName, $matches) !== 1) {
+                continue;
+            }
+            $title = trim(preg_replace('/\s+/u', ' ', $node->textContent) ?? '');
+            if ($title === '') {
+                continue;
+            }
+            $position++;
+            $base = Str::slug(Str::limit($title, 70, '')) ?: 'section-' . $position;
+            $id = $base;
+            $suffix = 2;
+            while (isset($used[$id])) {
+                $id = $base . '-' . $suffix++;
+            }
+            $used[$id] = true;
+            $node->setAttribute('id', $id);
+            $toc[] = ['id' => $id, 'title' => $title, 'level' => (int) $matches[1]];
+        }
+
+        $html = '';
+        foreach (iterator_to_array($root->childNodes) as $child) {
+            $html .= $document->saveHTML($child);
+        }
+
+        return $toc;
     }
 
     private function sanitize(string $html): string

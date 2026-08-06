@@ -60,6 +60,32 @@ class PublicKnowledgeShareTest extends TestCase
         $this->get('/guide/' . $id . '/deleted')->assertNotFound()->assertDontSee('SECRET-DELETED-CONTENT');
     }
 
+    public function test_public_reader_exposes_article_navigation_toc_and_safe_content_api(): void
+    {
+        $current = $this->article('Current Guide', true, "# Intro\n\n## Install\n\n### First Step");
+        $other = $this->article('Other Guide', true, 'Other body');
+        $hidden = $this->article('Hidden Navigation Guide', false, 'Hidden body');
+
+        $page = $this->get('/guide/' . $current->id . '/current-guide')->assertOk();
+        $page->assertSee('public-knowledge-articles', false)
+            ->assertSee('public-knowledge-toc', false)
+            ->assertSee('Current Guide')
+            ->assertSee('Other Guide')
+            ->assertDontSee('Hidden Navigation Guide')
+            ->assertSee('data-content-url="http://example.test/guide/' . $other->id . '/content"', false)
+            ->assertSee('href="#install"', false)
+            ->assertSee('id="install"', false);
+
+        $content = $this->getJson('/guide/' . $other->id . '/content')
+            ->assertOk()
+            ->assertHeader('Cache-Control', 'no-store, private')
+            ->assertJsonPath('id', $other->id)
+            ->assertJsonPath('title', 'Other Guide')
+            ->assertJsonPath('share_url', 'http://example.test/guide/' . $other->id . '/other-guide');
+        $this->assertIsArray($content->json('toc'));
+        $this->getJson('/guide/' . $hidden->id . '/content')->assertNotFound();
+    }
+
     public function test_public_html_is_sanitized_and_unsafe_protocols_are_removed(): void
     {
         $article = $this->article(
@@ -75,6 +101,12 @@ class PublicKnowledgeShareTest extends TestCase
             ->assertDontSee('onclick=', false)
             ->assertDontSee('javascript:', false)
             ->assertSee('loading="lazy"', false);
+
+        $json = $this->getJson('/guide/' . $article->id . '/content')->assertOk();
+        $body = (string) $json->json('body');
+        $this->assertStringNotContainsString('<script', $body);
+        $this->assertStringNotContainsString('javascript:', $body);
+        $this->assertStringNotContainsString('onerror=', $body);
     }
 
     public function test_only_referenced_attachments_of_published_articles_are_public(): void
