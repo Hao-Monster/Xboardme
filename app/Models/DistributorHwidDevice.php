@@ -21,4 +21,12 @@ class DistributorHwidDevice extends Model
     {
         return $this->belongsTo(DistributorOrder::class, 'distributor_order_id');
     }
+
+    public function displayLabel(): string
+    {
+        $hwid = trim((string) $this->hwid);
+        $deviceModel = trim((string) $this->device_model);
+
+        return $deviceModel !== '' ? "{$deviceModel} {$hwid}" : $hwid;
+    }
 }

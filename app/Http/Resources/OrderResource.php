@@ -36,7 +36,7 @@ class OrderResource extends JsonResource
         $boundDevices = $distributorOrder && $distributorOrder->relationLoaded('hwidDevices')
             ? $distributorOrder->hwidDevices
                 ->sortByDesc('last_seen_at')
-                ->pluck('hwid')
+                ->map(fn($device) => $device->displayLabel())
                 ->filter()
                 ->values()
                 ->all()

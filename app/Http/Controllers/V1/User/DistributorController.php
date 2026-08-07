@@ -56,7 +56,7 @@ class DistributorController extends Controller
             ->with([
                 'order:id,trade_no',
                 'subscriber:id,token',
-                'hwidDevices:id,distributor_order_id,hwid,last_seen_at',
+                'hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
             ])
             ->where('distributor_user_id', $request->user()->id)
             ->whereHas('order', fn($query) => $query->where('trade_no', $validated['trade_no']))

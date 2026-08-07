@@ -450,7 +450,7 @@ class DistributorOrderTest extends TestCase
         $delivery->update(['hwid_limit' => 3]);
         foreach ([
             ['hwid' => 'device-primary-001', 'last_seen_at' => 100],
-            ['hwid' => 'device-secondary-02', 'last_seen_at' => 200],
+            ['hwid' => 'device-secondary-02', 'device_model' => 'vivo V2227A', 'last_seen_at' => 200],
         ] as $device) {
             DistributorHwidDevice::create($device + [
                 'distributor_order_id' => $delivery->id,
@@ -464,7 +464,7 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.trade_no', $order->trade_no)
             ->assertJsonPath('data.0.hwid_enabled', true)
             ->assertJsonPath('data.0.hwid_limit', 3)
-            ->assertJsonPath('data.0.bound_devices.0', 'device-secondary-02')
+            ->assertJsonPath('data.0.bound_devices.0', 'vivo V2227A device-secondary-02')
             ->assertJsonPath('data.0.bound_devices.1', 'device-primary-001')
             ->assertJsonPath('data.0.can_view_subscription_qr', true);
 
@@ -473,7 +473,7 @@ class DistributorOrderTest extends TestCase
         ]))->assertOk()
             ->assertJsonPath('data.trade_no', $order->trade_no)
             ->assertJsonPath('data.customer_name', '测试客户')
-            ->assertJsonPath('data.hwid_devices.0', 'device-secondary-02')
+            ->assertJsonPath('data.hwid_devices.0', 'vivo V2227A device-secondary-02')
             ->assertJsonPath('data.hwid_devices.1', 'device-primary-001');
 
         $this->assertStringStartsWith('data:image/svg+xml;base64,', $deliveryResponse->json('data.qr_code'));
@@ -486,7 +486,7 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.trade_no', $order->trade_no)
             ->assertJsonPath('data.customer_name', '测试客户')
             ->assertJsonPath('data.hwid_enabled', true)
-            ->assertJsonPath('data.hwid_devices.0', 'device-secondary-02')
+            ->assertJsonPath('data.hwid_devices.0', 'vivo V2227A device-secondary-02')
             ->assertJsonPath('data.hwid_devices.1', 'device-primary-001');
 
         $this->assertStringStartsWith('data:image/svg+xml;base64,', $response->json('data.qr_code'));

@@ -34,7 +34,7 @@ class OrderController extends Controller
             'plan',
             'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
             'distributorOrder.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit',
-            'distributorOrder.hwidDevices:id,distributor_order_id,hwid,last_seen_at',
+            'distributorOrder.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ])
             ->where('user_id', $request->user()->id)
             ->when($request->user()->is_distributor, function ($query) use ($request, $searchService) {
@@ -82,7 +82,7 @@ class OrderController extends Controller
             'plan',
             'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
             'distributorOrder.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit',
-            'distributorOrder.hwidDevices:id,distributor_order_id,hwid,last_seen_at',
+            'distributorOrder.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ])
             ->where('user_id', $request->user()->id)
             ->where('trade_no', $request->input('trade_no'))

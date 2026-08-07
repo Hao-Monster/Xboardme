@@ -9,6 +9,7 @@ const styles = fs.readFileSync(path.join(root, 'theme/Xboard/assets/distributor.
 
 test('distributor orders display every bound HWID and a separate subscription QR action', () => {
   assert.match(source, /order\.bound_devices/);
+  assert.match(source, /boundDevices\.map\(\(hwid\) => `<code>\$\{escapeHtml\(hwid\)\}<\/code>`\)/);
   assert.match(source, /dist-bound-device-list/);
   assert.match(source, /尚未绑定设备/);
   assert.match(source, /未启用设备绑定/);

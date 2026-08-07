@@ -108,7 +108,7 @@ class DistributorOrderService
             'order:id,trade_no,plan_id,period',
             'order.plan:id,name',
             'subscriber:id,token',
-            'hwidDevices:id,distributor_order_id,hwid,last_seen_at',
+            'hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ]);
 
         $data = [
@@ -129,7 +129,7 @@ class DistributorOrderService
             'hwid_limit' => (int) $delivery->hwid_limit,
             'hwid_devices' => $delivery->hwidDevices
                 ->sortByDesc('last_seen_at')
-                ->pluck('hwid')
+                ->map(fn($device) => $device->displayLabel())
                 ->filter()
                 ->values()
                 ->all(),
@@ -152,7 +152,7 @@ class DistributorOrderService
         $delivery->loadMissing([
             'order:id,trade_no',
             'subscriber:id,token',
-            'hwidDevices:id,distributor_order_id,hwid,last_seen_at',
+            'hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ]);
 
         if (!$delivery->subscriber?->token) {
@@ -166,7 +166,7 @@ class DistributorOrderService
             'hwid_enabled' => (bool) $delivery->hwid_enabled,
             'hwid_devices' => $delivery->hwidDevices
                 ->sortByDesc('last_seen_at')
-                ->pluck('hwid')
+                ->map(fn($device) => $device->displayLabel())
                 ->filter()
                 ->values()
                 ->all(),
