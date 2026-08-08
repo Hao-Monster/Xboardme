@@ -912,6 +912,12 @@
       const state = activeState();
       return state ? enqueueFiles(state, files) : [];
     },
+    async generateQrCode(url) {
+      return request('/knowledge/attachment/qr-code', {
+        method: 'POST',
+        json: { url },
+      });
+    },
     async deleteAttachment(uuid) {
       const state = activeState();
       if (!state) return false;

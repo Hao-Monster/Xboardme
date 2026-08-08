@@ -8,6 +8,10 @@ use App\Http\Requests\Admin\KnowledgeAttachmentUploadInit;
 use App\Http\Requests\Admin\KnowledgeAttachmentClone;
 use App\Services\KnowledgeAttachmentCloneService;
 use App\Services\KnowledgeAttachmentUploadService;
+use BaconQrCode\Renderer\Image\SvgImageBackEnd;
+use BaconQrCode\Renderer\ImageRenderer;
+use BaconQrCode\Renderer\RendererStyle\RendererStyle;
+use BaconQrCode\Writer;
 use Illuminate\Http\Request;
 
 class KnowledgeAttachmentController extends Controller
@@ -32,6 +36,20 @@ class KnowledgeAttachmentController extends Controller
         ])->values()->all();
 
         return $this->success(['items' => $items]);
+    }
+
+    public function qrCode(Request $request)
+    {
+        $data = $request->validate([
+            'url' => ['required', 'string', 'max:2048', 'url:http,https'],
+        ]);
+        $renderer = new ImageRenderer(
+            new RendererStyle(512, 3),
+            new SvgImageBackEnd()
+        );
+        $svg = (new Writer($renderer))->writeString($data['url']);
+
+        return $this->success(['svg' => $svg]);
     }
 
     public function initialize(KnowledgeAttachmentUploadInit $request)

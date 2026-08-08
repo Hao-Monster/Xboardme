@@ -34,6 +34,11 @@
     return '';
   }
 
+  function safeHttpUrl(value) {
+    const url = safeUrl(value);
+    return /^https?:\/\//i.test(url) ? url : '';
+  }
+
   function escapeInline(value) {
     return String(value || '')
       .replace(/\\/g, '\\\\')
@@ -188,6 +193,7 @@
     documentSourceReady,
     domToMarkdown,
     normalizeMarkdown,
+    safeHttpUrl,
     safeUrl,
     sanitizeFragment,
     serializeNode,
@@ -319,10 +325,191 @@
       document.execCommand('createLink', false, url);
       sync(state);
     }));
+    toolbar.appendChild(button('二维码', '将链接生成为二维码图片', () => openQrDialog(state)));
     toolbar.appendChild(button('图片', '上传图片', () => attachmentApi()?.chooseFiles?.('image')));
     toolbar.appendChild(button('视频', '上传视频', () => attachmentApi()?.chooseFiles?.('video')));
     toolbar.appendChild(button('📎', '上传任意附件', () => attachmentApi()?.chooseFiles?.('file'), 'knowledge-rich-paperclip'));
     return toolbar;
+  }
+
+  function qrPngFile(svg) {
+    return new Promise((resolve, reject) => {
+      const source = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+      const image = new Image();
+      const release = () => URL.revokeObjectURL(source);
+      image.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const context = canvas.getContext('2d');
+        if (!context) {
+          release();
+          reject(new Error('当前浏览器无法生成二维码图片。'));
+          return;
+        }
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          release();
+          if (!blob) {
+            reject(new Error('二维码图片生成失败。'));
+            return;
+          }
+          const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+          resolve(new File([blob], `链接二维码-${timestamp}.png`, { type: 'image/png' }));
+        }, 'image/png');
+      };
+      image.onerror = () => {
+        release();
+        reject(new Error('二维码预览加载失败。'));
+      };
+      image.src = source;
+    });
+  }
+
+  function openQrDialog(state) {
+    const savedRange = rangeInside(state);
+    const overlay = document.createElement('div');
+    overlay.className = 'knowledge-rich-qr-overlay';
+    overlay.dataset.richEditorUi = '1';
+    const dialog = document.createElement('section');
+    dialog.className = 'knowledge-rich-qr-dialog';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'knowledge-rich-qr-title');
+
+    const heading = document.createElement('h3');
+    heading.id = 'knowledge-rich-qr-title';
+    heading.textContent = '插入二维码';
+    const description = document.createElement('p');
+    description.className = 'knowledge-rich-qr-description';
+    description.textContent = '输入链接并确认预览，二维码将作为文章图片上传到服务器。';
+    const label = document.createElement('label');
+    label.className = 'knowledge-rich-qr-label';
+    label.textContent = '链接地址';
+    const input = document.createElement('input');
+    input.className = 'knowledge-rich-qr-input';
+    input.type = 'url';
+    input.inputMode = 'url';
+    input.autocomplete = 'url';
+    input.placeholder = 'https://example.com';
+    label.appendChild(input);
+    const hint = document.createElement('small');
+    hint.className = 'knowledge-rich-qr-hint';
+    hint.textContent = '仅支持 http:// 或 https:// 链接，最长 2048 个字符。';
+    const error = document.createElement('div');
+    error.className = 'knowledge-rich-qr-error';
+    error.setAttribute('role', 'alert');
+    const preview = document.createElement('div');
+    preview.className = 'knowledge-rich-qr-preview';
+    preview.textContent = '二维码预览将在这里显示';
+    const actions = document.createElement('div');
+    actions.className = 'knowledge-rich-qr-actions';
+    const cancel = button('取消', '取消插入二维码', () => close());
+    const generate = button('生成预览', '生成二维码预览', () => generatePreview());
+    const insert = button('插入二维码', '上传并插入二维码图片', () => insertQr(), 'is-primary');
+    insert.disabled = true;
+    actions.append(cancel, generate, insert);
+    dialog.append(heading, description, label, hint, error, preview, actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    let svg = '';
+    let previewUrl = '';
+    let generating = false;
+    let inserting = false;
+
+    function resetPreview() {
+      svg = '';
+      insert.disabled = true;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = '';
+      preview.replaceChildren('二维码预览将在这里显示');
+    }
+
+    function close() {
+      if (generating || inserting) return;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      document.removeEventListener('keydown', onKeydown);
+      overlay.remove();
+      state.surface.focus();
+    }
+
+    async function generatePreview() {
+      const url = safeHttpUrl(input.value);
+      error.textContent = '';
+      if (!url || url.length > 2048) {
+        resetPreview();
+        error.textContent = '请输入有效的 http:// 或 https:// 链接。';
+        input.focus();
+        return;
+      }
+      generating = true;
+      generate.disabled = true;
+      insert.disabled = true;
+      generate.textContent = '生成中…';
+      try {
+        const result = await attachmentApi()?.generateQrCode?.(url);
+        if (!result?.svg) throw new Error('服务器没有返回二维码。');
+        resetPreview();
+        svg = result.svg;
+        previewUrl = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+        const image = document.createElement('img');
+        image.src = previewUrl;
+        image.alt = '链接二维码预览';
+        preview.replaceChildren(image);
+        insert.disabled = false;
+      } catch (exception) {
+        resetPreview();
+        error.textContent = exception?.message || '二维码生成失败，请稍后重试。';
+      } finally {
+        generating = false;
+        generate.disabled = false;
+        generate.textContent = '生成预览';
+      }
+    }
+
+    async function insertQr() {
+      if (!svg || inserting) return;
+      inserting = true;
+      insert.disabled = true;
+      generate.disabled = true;
+      insert.textContent = '正在插入…';
+      error.textContent = '';
+      try {
+        const file = await qrPngFile(svg);
+        uploadFiles(state, [file], savedRange);
+        inserting = false;
+        generating = false;
+        close();
+      } catch (exception) {
+        inserting = false;
+        insert.disabled = false;
+        generate.disabled = false;
+        insert.textContent = '插入二维码';
+        error.textContent = exception?.message || '二维码插入失败，请稍后重试。';
+      }
+    }
+
+    function onKeydown(event) {
+      if (event.key === 'Escape') close();
+    }
+
+    input.addEventListener('input', () => {
+      error.textContent = '';
+      resetPreview();
+    });
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      generatePreview();
+    });
+    overlay.addEventListener('mousedown', (event) => {
+      if (event.target === overlay) close();
+    });
+    document.addEventListener('keydown', onKeydown);
+    input.focus();
   }
 
   function rangeInside(state) {
@@ -444,12 +631,11 @@
     sync(state);
   }
 
-  function uploadFiles(state, files) {
+  function uploadFiles(state, files, insertionRange = rangeInside(state)) {
     const list = Array.from(files || []);
     if (!list.length) return;
-    const range = rangeInside(state);
     const items = attachmentApi()?.enqueueFiles?.(list) || [];
-    if (items.length) insertUploadMarkers(state, items, range);
+    if (items.length) insertUploadMarkers(state, items, insertionRange);
   }
 
   function selectedHtml(state) {

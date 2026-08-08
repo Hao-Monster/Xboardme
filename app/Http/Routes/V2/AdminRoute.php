@@ -254,6 +254,9 @@ class AdminRoute
                 $router->post('/attachment/clone', [KnowledgeAttachmentController::class, 'cloneAttachments'])
                     ->middleware('throttle:30,1')
                     ->name('admin.knowledge.attachments.clone');
+                $router->post('/attachment/qr-code', [KnowledgeAttachmentController::class, 'qrCode'])
+                    ->middleware('throttle:60,1')
+                    ->name('admin.knowledge.attachments.qr-code');
             });
 
             // Payment  

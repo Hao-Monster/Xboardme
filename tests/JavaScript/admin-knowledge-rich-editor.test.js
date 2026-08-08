@@ -62,6 +62,9 @@ test('rich editor rejects executable URLs and malformed attachment placeholders'
   assert.equal(helpers.safeUrl('data:text/html,boom'), '');
   assert.equal(helpers.safeUrl('knowledge-attachment://not-a-uuid'), '');
   assert.equal(helpers.safeUrl('https://cloud.thinderbox.com/file'), 'https://cloud.thinderbox.com/file');
+  assert.equal(helpers.safeHttpUrl('https://cloud.thinderbox.com/guide/1/article'), 'https://cloud.thinderbox.com/guide/1/article');
+  assert.equal(helpers.safeHttpUrl('/guide/1/article'), '');
+  assert.equal(helpers.safeHttpUrl('knowledge-attachment://11111111-1111-4111-8111-111111111111'), '');
 });
 
 test('rich editor serializes signed attachment previews back to private placeholders', () => {
@@ -105,6 +108,11 @@ test('rich editor source mounts one WYSIWYG surface and the approved minimal too
   assert.match(source, /上传图片/);
   assert.match(source, /上传视频/);
   assert.match(source, /上传任意附件/);
+  assert.match(source, /button\('二维码', '将链接生成为二维码图片'/);
+  assert.match(source, /generateQrCode/);
+  assert.match(source, /new File\(\[blob\].+type: 'image\/png'/);
+  assert.match(source, /uploadFiles\(state, \[file\], savedRange\)/);
+  assert.match(styles, /\.knowledge-rich-qr-dialog/);
   assert.match(source, /application\/x-xboard-knowledge/);
   assert.match(source, /cloneAttachments/);
   assert.match(source, /sanitizeFragment/);

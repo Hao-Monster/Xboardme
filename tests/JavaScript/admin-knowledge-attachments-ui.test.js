@@ -133,6 +133,8 @@ test('knowledge attachment assets are mounted independently from the compiled ad
   assert.match(source, /\/knowledge\/attachment\/upload\/initialize/);
   assert.match(source, /\/knowledge\/attachment\/upload\/\$\{item\.uploadUuid\}\/chunk/);
   assert.match(source, /\/knowledge\/attachment\/upload\/\$\{item\.uploadUuid\}\/cancel/);
+  assert.match(source, /\/knowledge\/attachment\/qr-code/);
+  assert.match(source, /async generateQrCode\(url\)/);
   assert.match(source, /dataTransfer\?\.files/);
   assert.match(source, /addEventListener\('paste'/);
   assert.match(source, /ensurePreviewVisible/);
