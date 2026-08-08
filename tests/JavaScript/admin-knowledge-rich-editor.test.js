@@ -112,6 +112,10 @@ test('rich editor source mounts one WYSIWYG surface and the approved minimal too
   assert.match(source, /generateQrCode/);
   assert.match(source, /new File\(\[blob\].+type: 'image\/png'/);
   assert.match(source, /uploadFiles\(state, \[file\], savedRange\)/);
+  assert.match(source, /state\.editor\.closest\?\.\(/);
+  assert.match(source, /\[data-radix-dialog-content\]/);
+  assert.match(source, /dialogHost\.appendChild\(overlay\)/);
+  assert.doesNotMatch(source, /document\.body\.appendChild\(overlay\)/);
   assert.match(styles, /\.knowledge-rich-qr-dialog/);
   assert.match(source, /application\/x-xboard-knowledge/);
   assert.match(source, /cloneAttachments/);

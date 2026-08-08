@@ -370,6 +370,9 @@
 
   function openQrDialog(state) {
     const savedRange = rangeInside(state);
+    const dialogHost = state.editor.closest?.(
+      '[role="dialog"], [data-radix-dialog-content], .n-modal, [data-scope="dialog"][data-part="content"]'
+    ) || document.body;
     const overlay = document.createElement('div');
     overlay.className = 'knowledge-rich-qr-overlay';
     overlay.dataset.richEditorUi = '1';
@@ -413,7 +416,9 @@
     actions.append(cancel, generate, insert);
     dialog.append(heading, description, label, hint, error, preview, actions);
     overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
+    // The admin knowledge form already lives inside a focus-trapped modal.
+    // Mount this nested dialog inside that scope so its input can retain focus.
+    dialogHost.appendChild(overlay);
 
     let svg = '';
     let previewUrl = '';
