@@ -7,7 +7,7 @@ return [
             'id' => 'happ', 'name' => 'Happ', 'core' => 'Xray', 'featured' => true,
             'description' => '支持 Android、iOS、macOS、Windows 与 Linux 的多平台客户端。',
             'downloads' => [
-                'android' => ['url' => 'https://play.google.com/store/apps/details?id=com.happproxy', 'source' => 'google-play'],
+                'android' => ['url' => 'https://github.com/Happ-proxy/happ-android/releases/latest/download/Happ.apk', 'source' => 'github'],
                 'ios' => ['url' => 'https://apps.apple.com/us/app/happ-proxy-utility/id6504287215', 'source' => 'app-store'],
                 'macos' => ['repo' => 'Happ-proxy/happ-desktop', 'patterns' => ['/\.macOS\.universal\.dmg$/i']],
                 'windows' => ['repo' => 'Happ-proxy/happ-desktop', 'patterns' => ['/setup-Happ\.x64\.exe$/i']],
