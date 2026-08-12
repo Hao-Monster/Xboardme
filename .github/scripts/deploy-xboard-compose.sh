@@ -151,8 +151,12 @@ mkdir -p "$BACKUP_DIR" "$STATE_DIR"
 chmod 700 "$DEPLOY_DIR" "$BACKUP_DIR" "$STATE_DIR"
 
 echo "Backing up the current database before migration..."
-docker exec "$PRIMARY_CONTAINER" sh -lc \
-  'mkdir -p /www/storage/backup && php /www/artisan backup:database >/tmp/codex-db-backup.log 2>&1'
+if ! docker exec "$PRIMARY_CONTAINER" sh -lc \
+  'mkdir -p /www/storage/backup && php /www/artisan backup:database >/tmp/codex-db-backup.log 2>&1'; then
+  echo "Database backup command failed." >&2
+  docker exec "$PRIMARY_CONTAINER" sh -lc 'cat /tmp/codex-db-backup.log' >&2 || true
+  exit 1
+fi
 BACKUP_SOURCE=$(docker exec "$PRIMARY_CONTAINER" sh -lc \
   'ls -1t /www/storage/backup/*.gz 2>/dev/null | head -n 1')
 if [[ -z "$BACKUP_SOURCE" ]]; then
