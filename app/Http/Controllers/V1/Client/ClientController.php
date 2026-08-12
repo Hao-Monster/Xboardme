@@ -13,6 +13,7 @@ use App\Services\DistributorHwidService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Symfony\Component\HttpFoundation\Response;
 
 class ClientController extends Controller
 {
@@ -96,7 +97,26 @@ class ClientController extends Controller
             $response->headers->set($name, $value);
         }
 
+        $this->addDistributorOrderHeaders($response, $hwid['delivery']);
+
         return $response;
+    }
+
+    private function addDistributorOrderHeaders(Response $response, ?DistributorOrder $delivery): void
+    {
+        if (!$delivery || !$response->isSuccessful()) {
+            return;
+        }
+
+        $delivery->loadMissing('order:id,trade_no');
+        $tradeNo = trim((string) $delivery->order?->trade_no);
+        if (!preg_match('/^[A-Za-z0-9._-]{1,64}$/D', $tradeNo)) {
+            return;
+        }
+
+        $title = "订单号：{$tradeNo}";
+        $response->headers->set('profile-title', 'base64:' . base64_encode($title));
+        $response->headers->set('x-order-no', $tradeNo);
     }
 
     private function isUsableSubscriptionResponse($response): bool

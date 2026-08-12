@@ -142,20 +142,32 @@ class DistributorOrderTest extends TestCase
 
         $this->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))
             ->assertNotFound()
-            ->assertHeader('x-hwid-not-supported', 'true');
+            ->assertHeader('x-hwid-not-supported', 'true')
+            ->assertHeaderMissing('x-order-no')
+            ->assertHeaderMissing('profile-title');
         $this->assertNull($delivery->refresh()->config_issued_at);
 
-        $this->withHeaders(['X-HWID' => 'legacy-device-001'])
+        $response = $this->withHeaders([
+            'User-Agent' => 'Happ/3.21.1 Android',
+            'X-HWID' => 'legacy-device-001',
+        ])
             ->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))
             ->assertOk()
-            ->assertHeader('x-hwid-active', 'true');
+            ->assertHeader('x-hwid-active', 'true')
+            ->assertHeader('x-order-no', $order->trade_no);
+        $this->assertSame(
+            '订单号：' . $order->trade_no,
+            base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
+        );
         $this->flushHeaders();
 
         $this->assertNotNull($delivery->refresh()->config_issued_at);
         $this->withHeaders(['X-HWID' => 'another-device-002'])
             ->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''))
             ->assertNotFound()
-            ->assertHeader('x-hwid-max-devices-reached', 'true');
+            ->assertHeader('x-hwid-max-devices-reached', 'true')
+            ->assertHeaderMissing('x-order-no')
+            ->assertHeaderMissing('profile-title');
     }
 
     public function test_karing_receives_a_sing_box_config_with_real_server_outbounds(): void
@@ -193,7 +205,13 @@ class DistributorOrderTest extends TestCase
         $this->makeServer();
         $response = $this->withHeaders($headers)->get($uri);
 
-        $response->assertOk()->assertHeader('x-hwid-active', 'true');
+        $response->assertOk()
+            ->assertHeader('x-hwid-active', 'true')
+            ->assertHeader('x-order-no', $order->trade_no);
+        $this->assertSame(
+            '订单号：' . $order->trade_no,
+            base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
+        );
         $config = $response->json();
         $this->assertIsArray($config);
         $this->assertTrue(collect($config['outbounds'] ?? [])->contains(
@@ -201,6 +219,84 @@ class DistributorOrderTest extends TestCase
                 && ($outbound['tag'] ?? null) === 'HWID Test Node'
         ));
         $this->assertNotNull($delivery->refresh()->config_issued_at);
+    }
+
+    public function test_normal_subscription_does_not_receive_distributor_order_headers(): void
+    {
+        config(['cache.stores.redis' => ['driver' => 'array']]);
+        app('cache')->forgetDriver('redis');
+
+        $plan = $this->makePlan();
+        $user = $this->makeUser('normal-subscriber@example.com', false, [
+            'plan_id' => $plan->id,
+            'group_id' => $plan->group_id,
+            'transfer_enable' => 30 * 1073741824,
+            'expired_at' => time() + 86400,
+        ]);
+        $this->makeServer();
+
+        $subscribeUrl = Helper::getSubscribeUrl($user->token);
+        $subscribePath = parse_url($subscribeUrl, PHP_URL_PATH);
+        $subscribeQuery = parse_url($subscribeUrl, PHP_URL_QUERY);
+        $uri = $subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : '');
+
+        $this->get($uri)
+            ->assertOk()
+            ->assertHeaderMissing('x-order-no')
+            ->assertHeaderMissing('profile-title');
+
+        $response = $this->withHeader('User-Agent', 'Karing/1.2.22.2502 Android')
+            ->get($uri)
+            ->assertOk()
+            ->assertHeaderMissing('x-order-no');
+        $this->assertSame(
+            admin_setting('app_name', 'XBoard'),
+            base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
+        );
+    }
+
+    public function test_distributor_subscription_order_headers_do_not_cross_between_requests(): void
+    {
+        $plan = $this->makePlan();
+        $firstOrder = $this->createDistributorOrder(
+            $this->makeUser('first-header-dealer@example.com', true),
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            'First customer'
+        );
+        $secondOrder = $this->createDistributorOrder(
+            $this->makeUser('second-header-dealer@example.com', true),
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            'Second customer'
+        );
+        $firstDelivery = $firstOrder->distributorOrder()->with('subscriber')->firstOrFail();
+        $secondDelivery = $secondOrder->distributorOrder()->with('subscriber')->firstOrFail();
+        $this->makeServer();
+
+        $subscriptions = [
+            [$firstOrder, $firstDelivery, 'isolated-device-a01'],
+            [$secondOrder, $secondDelivery, 'isolated-device-b02'],
+            [$firstOrder, $firstDelivery, 'isolated-device-a01'],
+        ];
+
+        foreach ($subscriptions as [$order, $delivery, $hwid]) {
+            $subscribeUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
+            $subscribePath = parse_url($subscribeUrl, PHP_URL_PATH);
+            $subscribeQuery = parse_url($subscribeUrl, PHP_URL_QUERY);
+            $response = $this->withHeaders([
+                'User-Agent' => 'Happ/3.21.1 Android',
+                'X-HWID' => $hwid,
+            ])->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''));
+
+            $response->assertOk()->assertHeader('x-order-no', $order->trade_no);
+            $this->assertSame(
+                '订单号：' . $order->trade_no,
+                base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
+            );
+        }
+
+        $this->assertNotSame($firstOrder->trade_no, $secondOrder->trade_no);
     }
 
     public function test_delivery_returns_only_an_embedded_qr_and_never_exposes_the_subscription_as_plain_json(): void
