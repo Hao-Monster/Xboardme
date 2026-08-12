@@ -15,6 +15,7 @@ use App\Http\Controllers\V1\User\TelegramController;
 use App\Http\Controllers\V1\User\TicketController;
 use App\Http\Controllers\V1\User\UserController;
 use App\Http\Controllers\V1\User\DistributorController;
+use App\Http\Controllers\V1\User\ClientCatalogController;
 use Illuminate\Contracts\Routing\Registrar;
 
 class UserRoute
@@ -82,6 +83,9 @@ class UserRoute
             // Knowledge
             $router->get('/knowledge/fetch', [KnowledgeController::class, 'fetch']);
             $router->get('/knowledge/getCategory', [KnowledgeController::class, 'getCategory']);
+            // HWID client catalog
+            $router->get('/client-catalog', [ClientCatalogController::class, 'index']);
+            $router->get('/client-catalog/qr', [ClientCatalogController::class, 'qr']);
             // Stat
             $router->get('/stat/getTrafficLog', [StatController::class, 'getTrafficLog']);
         });

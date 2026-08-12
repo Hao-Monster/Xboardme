@@ -7,7 +7,9 @@
   <title>{{$title}}</title>
   <link rel="stylesheet" href="/theme/{{$theme}}/assets/distributor.css?v={{$version}}" />
   <link rel="stylesheet" href="/assets/knowledge-share.css?v={{$version}}" />
+  <link rel="stylesheet" href="/theme/{{$theme}}/assets/client-center.css?v={{$version}}" />
   <script defer src="/assets/knowledge-share.js?v={{$version}}"></script>
+  <script defer src="/theme/{{$theme}}/assets/client-center.js?v={{$version}}"></script>
   <script type="module" crossorigin src="/theme/{{$theme}}/assets/umi.js"></script>
 </head>
 

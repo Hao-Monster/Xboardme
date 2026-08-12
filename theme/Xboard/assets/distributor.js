@@ -17,7 +17,7 @@
   ];
   const COPY = {
     'zh-CN': {
-      buy: '购买订阅', orders: '我的订单', invite: '我的邀请', knowledge: '使用文档', logout: '退出登录',
+      buy: '购买订阅', orders: '我的订单', invite: '我的邀请', knowledge: '使用文档', clients: '客户端下载', logout: '退出登录',
       title: '分销订阅中心', subtitle: '每个订单生成一份独立订阅，客户扫码领取后不可再次领取。',
       buyNow: '立即下单', original: '原价', free: '分销免支付', confirm: '确认下单', cancel: '取消',
       allPlans: '全部套餐', highTraffic: '大流量', unlimitedSpeed: '不限速', unlimitedDevices: '不限设备',
@@ -54,7 +54,7 @@
       lastUpdated: '最后更新', noArticles: '暂无使用文档', copyShare: '复制分享', copySuccess: '复制成功', copyFailed: '复制失败，请重试',
     },
     'en-US': {
-      buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', knowledge: 'Documentation', logout: 'Sign out',
+      buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', knowledge: 'Documentation', clients: 'Client downloads', logout: 'Sign out',
       title: 'Distributor Center', subtitle: 'Each order creates an independent subscription that can be claimed once.',
       buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', confirm: 'Confirm', cancel: 'Cancel',
       allPlans: 'All plans', highTraffic: 'High traffic', unlimitedSpeed: 'Unlimited speed', unlimitedDevices: 'Unlimited devices',
@@ -377,7 +377,7 @@
 
   function currentPage() {
     const path = (window.location.hash || '#/plan').replace(/^#/, '').split('?')[0];
-    return ['/plan', '/order', '/invite', '/knowledge'].includes(path) ? path : '/plan';
+    return ['/plan', '/order', '/invite', '/knowledge', '/clients'].includes(path) ? path : '/plan';
   }
 
   function navigate(path) {
@@ -400,6 +400,7 @@
             <button data-nav="/order" class="${page === '/order' ? 'active' : ''}"><span>☷</span>${t('orders')}</button>
             <button data-nav="/invite" class="${page === '/invite' ? 'active' : ''}"><span>♧</span>${t('invite')}</button>
             <button data-nav="/knowledge" class="${page === '/knowledge' ? 'active' : ''}"><span>▤</span>${t('knowledge')}</button>
+            <button data-nav="/clients" class="${page === '/clients' ? 'active' : ''}"><span>▦</span>${t('clients')}</button>
           </nav>
         </aside>
         <section class="dist-main">
@@ -439,6 +440,7 @@
       if (page === '/order') await renderOrders();
       else if (page === '/invite') await renderInvite();
       else if (page === '/knowledge') await renderKnowledge();
+      else if (page === '/clients') await renderClients();
       else await renderPlans();
     } catch (error) {
       setContent(`<div class="dist-error"><h2>${escapeHtml(error.message)}</h2><button data-action="retry">${t('loading')}</button></div>`);
@@ -654,6 +656,12 @@
     setContent(`<section class="dist-page-head"><h1>${t('knowledge')}</h1><p>${t('knowledgeSubtitle')}</p></section>
       <div class="dist-knowledge-toolbar"><input id="dist-knowledge-search" type="search" maxlength="255" value="${escapeHtml(state.knowledgeSearch)}" placeholder="${t('knowledgeSearchPlaceholder')}"><button data-action="search-knowledge">${t('search')}</button><button class="secondary" data-action="clear-knowledge-search" ${state.knowledgeSearch ? '' : 'disabled'}>${t('clear')}</button></div>
       <div class="dist-knowledge-groups">${categories || `<div class="dist-panel dist-empty">${t('noArticles')}</div>`}</div>`);
+  }
+
+  async function renderClients() {
+    setContent('<div class="xcc-host"><div class="xcc-loading">正在加载客户端目录…</div></div>');
+    if (!window.XBoardClientCenter) throw new Error('Client center is unavailable');
+    await window.XBoardClientCenter.mount(document.querySelector('.dist-content .xcc-host'));
   }
 
   async function openKnowledge(id) {
@@ -903,7 +911,7 @@
       document.body.appendChild(root);
     }
     document.documentElement.classList.add('distributor-mode');
-    if (!['/plan', '/order', '/invite', '/knowledge'].includes(currentPage())) navigate('/plan');
+    if (!['/plan', '/order', '/invite', '/knowledge', '/clients'].includes(currentPage())) navigate('/plan');
     renderPage();
   }
 

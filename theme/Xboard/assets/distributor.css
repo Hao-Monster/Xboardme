@@ -140,6 +140,7 @@ html.distributor-mode.dist-modal-open,html.distributor-mode.dist-modal-open body
   .dist-period-options button { min-height:68px; padding:7px 8px; }
   .dist-plan-actions { padding:6px 14px; }
 }
+@media (max-width:560px) { .dist-sidebar nav { grid-template-columns:repeat(5,1fr); } }
 @media (max-width:560px) {
   .dist-topbar.has-promo { height:64px; }
   .dist-topbar-promo { gap:2px; }
