@@ -32,3 +32,10 @@ test('normal accounts receive a client download menu and distributor accounts us
   assert.match(distributor, /async function renderClients\(\)/);
   assert.match(distributor, /XBoardClientCenter\.mount/);
 });
+
+test('distributor client navigation rides the existing knowledge route without being reset by the SPA router', () => {
+  assert.match(distributor, /path === '\/knowledge' && new URLSearchParams\(query\)\.get\('client-center'\) === '1'\) return '\/clients'/);
+  assert.match(distributor, /path === '\/clients' \? '#\/knowledge\?client-center=1'/);
+  assert.match(distributor, /function isCurrentRouteCanonical\(page\)/);
+  assert.match(distributor, /if \(!isCurrentRouteCanonical\(page\)\)/);
+});

@@ -376,12 +376,23 @@
   }
 
   function currentPage() {
-    const path = (window.location.hash || '#/plan').replace(/^#/, '').split('?')[0];
+    const hash = (window.location.hash || '#/plan').replace(/^#/, '');
+    const [path, query = ''] = hash.split('?');
+    if (path === '/knowledge' && new URLSearchParams(query).get('client-center') === '1') return '/clients';
     return ['/plan', '/order', '/invite', '/knowledge', '/clients'].includes(path) ? path : '/plan';
   }
 
   function navigate(path) {
-    window.location.hash = `#${path}`;
+    window.location.hash = path === '/clients' ? '#/knowledge?client-center=1' : `#${path}`;
+  }
+
+  function isCurrentRouteCanonical(page) {
+    const hash = (window.location.hash || '#/plan').replace(/^#/, '');
+    const [path, query = ''] = hash.split('?');
+    if (page === '/clients') {
+      return path === '/knowledge' && new URLSearchParams(query).get('client-center') === '1';
+    }
+    return path === page;
   }
 
   function shell(content) {
@@ -431,7 +442,7 @@
   async function renderPage() {
     if (!state.active) return;
     const page = currentPage();
-    if ((window.location.hash || '').replace(/^#/, '').split('?')[0] !== page) {
+    if (!isCurrentRouteCanonical(page)) {
       navigate(page);
       return;
     }
