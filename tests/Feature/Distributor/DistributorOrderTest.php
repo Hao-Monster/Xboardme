@@ -117,8 +117,13 @@ class DistributorOrderTest extends TestCase
         $claimToken = $delivery->claim_token;
         $claimPath = parse_url(route('client.distributor.claim', ['token' => $claimToken]), PHP_URL_PATH);
 
-        $first = $this->get($claimPath);
-        $first->assertRedirect(Helper::getSubscribeUrl($delivery->subscriber->token));
+        $first = $this->get($claimPath . '?flag=meta');
+        $first->assertRedirect(
+            str_replace('#', '?flag=meta#', Helper::withSubscriptionRemark(
+                Helper::getSubscribeUrl($delivery->subscriber->token),
+                $order->trade_no
+            ))
+        );
 
         $delivery->refresh();
         $this->assertSame(DistributorOrder::DELIVERY_CLAIMED, $delivery->delivery_status);
@@ -364,6 +369,28 @@ class DistributorOrderTest extends TestCase
         $claimedData = app(DistributorOrderService::class)->deliveryData($delivery->fresh(['order', 'subscriber']));
         $this->assertArrayNotHasKey('qr_code', $claimedData);
         $this->assertFalse($claimedData['can_open']);
+    }
+
+    public function test_distributor_subscription_urls_use_order_number_as_karing_remark(): void
+    {
+        $order = $this->createDistributorOrder(
+            $this->makeUser('karing-url-title-dealer@example.com', true),
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY
+        );
+        $delivery = $order->distributorOrder()->with(['order', 'subscriber'])->firstOrFail();
+
+        $url = app(DistributorOrderService::class)->subscriptionUrl($delivery);
+
+        $this->assertSame($order->trade_no, rawurldecode((string) parse_url($url, PHP_URL_FRAGMENT)));
+        $this->assertSame(
+            parse_url(Helper::getSubscribeUrl($delivery->subscriber->token), PHP_URL_PATH),
+            parse_url($url, PHP_URL_PATH)
+        );
+        $this->assertSame(
+            Helper::getSubscribeUrl($delivery->subscriber->token),
+            preg_replace('/#.*$/', '', $url)
+        );
     }
 
     public function test_hwid_rejects_unsupported_and_extra_devices_but_allows_registered_device_updates(): void

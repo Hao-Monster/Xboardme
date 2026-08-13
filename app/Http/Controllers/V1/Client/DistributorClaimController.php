@@ -5,7 +5,7 @@ namespace App\Http\Controllers\V1\Client;
 use App\Http\Controllers\Controller;
 use App\Models\DistributorOrder;
 use App\Models\User;
-use App\Utils\Helper;
+use App\Services\DistributorOrderService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -26,7 +26,7 @@ class DistributorClaimController extends Controller
             return response('Invalid claim token', 404, ['Content-Type' => 'text/plain']);
         }
 
-        $subscriber = DB::transaction(function () use ($request, $token) {
+        $delivery = DB::transaction(function () use ($request, $token) {
             $delivery = DistributorOrder::query()
                 ->where('claim_token_hash', hash('sha256', $token))
                 ->lockForUpdate()
@@ -50,21 +50,25 @@ class DistributorClaimController extends Controller
             $delivery->claim_token = null;
             $delivery->save();
 
-            return $subscriber;
+            return $delivery->setRelation('subscriber', $subscriber);
         });
 
-        if (!$subscriber) {
+        if (!$delivery) {
             return response('This subscription QR code has already been used or closed.', 410, [
                 'Content-Type' => 'text/plain',
                 'Cache-Control' => 'no-store',
             ]);
         }
 
-        $url = Helper::getSubscribeUrl($subscriber->token);
+        $url = app(DistributorOrderService::class)->subscriptionUrl($delivery);
         $query = $request->query();
         unset($query['token']);
         if ($query) {
-            $url .= (str_contains($url, '?') ? '&' : '?') . http_build_query($query);
+            [$baseUrl, $fragment] = array_pad(explode('#', $url, 2), 2, '');
+            $url = $baseUrl . (str_contains($baseUrl, '?') ? '&' : '?') . http_build_query($query);
+            if ($fragment !== '') {
+                $url .= '#' . $fragment;
+            }
         }
 
         return redirect()->away($url, 302, [

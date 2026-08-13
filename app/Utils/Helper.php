@@ -142,6 +142,16 @@ class Helper
         return HookManager::filter('subscribe.url', $finalUrl);
     }
 
+    public static function withSubscriptionRemark(string $url, string $remark): string
+    {
+        $remark = trim($remark);
+        if ($remark === '') {
+            return $url;
+        }
+
+        return (string) preg_replace('/#.*$/', '', $url) . '#' . rawurlencode($remark);
+    }
+
     public static function randomPort($range): int {
         $portRange = explode('-', (string) $range, 2);
         $min = (int) ($portRange[0] ?? 0);

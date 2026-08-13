@@ -140,7 +140,7 @@ class DistributorOrderService
             $includeClaimUrl
             && $delivery->delivery_status === DistributorOrder::DELIVERY_PENDING
         ) {
-            $subscribeUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
+            $subscribeUrl = $this->subscriptionUrl($delivery);
             $data['qr_code'] = $this->makeQrDataUri($subscribeUrl);
         }
 
@@ -162,7 +162,7 @@ class DistributorOrderService
         return [
             'trade_no' => $delivery->order->trade_no,
             'customer_name' => trim((string) $delivery->customer_name),
-            'qr_code' => $this->makeQrDataUri(Helper::getSubscribeUrl($delivery->subscriber->token)),
+            'qr_code' => $this->makeQrDataUri($this->subscriptionUrl($delivery)),
             'hwid_enabled' => (bool) $delivery->hwid_enabled,
             'hwid_devices' => $delivery->hwidDevices
                 ->sortByDesc('last_seen_at')
@@ -196,5 +196,15 @@ class DistributorOrderService
         $svg = (new Writer($renderer))->writeString($content);
 
         return 'data:image/svg+xml;base64,' . base64_encode($svg);
+    }
+
+    public function subscriptionUrl(DistributorOrder $delivery): string
+    {
+        $delivery->loadMissing(['order:id,trade_no', 'subscriber:id,token']);
+
+        return Helper::withSubscriptionRemark(
+            Helper::getSubscribeUrl($delivery->subscriber->token),
+            (string) $delivery->order->trade_no
+        );
     }
 }

@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Models\DistributorOrder;
 use App\Services\OrderService;
 use App\Services\DistributorOrderEntitlementService;
+use App\Services\DistributorOrderService;
 use App\Services\DistributorOrderExportService;
 use App\Services\DistributorOrderSearchService;
 use App\Services\DistributorHwidService;
@@ -62,7 +63,9 @@ class OrderController extends Controller
         $subscribeUrl = null;
         if ($order->status === Order::STATUS_COMPLETED) {
             $subscriber = $distributorOrder?->subscriber ?: $order->user;
-            $subscribeUrl = Helper::getSubscribeUrl($subscriber->token);
+            $subscribeUrl = $distributorOrder
+                ? app(DistributorOrderService::class)->subscriptionUrl($distributorOrder)
+                : Helper::getSubscribeUrl($subscriber->token);
         }
 
         if ($order->surplus_order_ids) {
