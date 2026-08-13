@@ -256,6 +256,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(host.innerHTML, /备注/);
   assert.match(host.innerHTML, /线下补款后结算/);
   assert.match(host.innerHTML, /data-edit-remark="99"/);
+  assert.match(host.innerHTML, />🖊<\/button>/);
   assert.match(host.innerHTML, /id="native-dist-order-search"/);
   assert.match(host.innerHTML, /订单号\/用户名称\/订阅链接/);
   assert.match(host.innerHTML, /data-native-dist="search-orders"/);
