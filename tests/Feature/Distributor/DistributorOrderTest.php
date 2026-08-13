@@ -1060,11 +1060,14 @@ class DistributorOrderTest extends TestCase
             $order->distributorOrder()->value('settlement_status')
         );
 
-        $subscriber = $order->distributorOrder()->with('subscriber')->firstOrFail()->subscriber;
+        $delivery = $order->distributorOrder()->with(['order', 'subscriber'])->firstOrFail();
         $this->postJson('/' . $detailUri, ['id' => $order->id])
             ->assertOk()
             ->assertJsonPath('data.customer_name', '详情客户')
-            ->assertJsonPath('data.subscribe_url', Helper::getSubscribeUrl($subscriber->token));
+            ->assertJsonPath(
+                'data.subscribe_url',
+                app(DistributorOrderService::class)->subscriptionUrl($delivery)
+            );
     }
 
     public function test_distributor_role_can_be_added_without_revoking_admin_or_staff_roles(): void
