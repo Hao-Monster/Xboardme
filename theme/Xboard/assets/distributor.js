@@ -35,6 +35,7 @@
       claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
       waitingConnection: '等待用户开启代理进入网络', connectedThrough: '客户已经通过 {node} 节点进入网络',
       settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
+      remark: '备注', actions: '操作',
       customerName: '用户名称', customerNamePlaceholder: '请输入便于售后识别的用户名称',
       customerNameRequired: '为了售后方便，请输入备注清楚用户',
       boundDevices: '已绑定设备', unboundDevice: '尚未绑定设备', hwidDisabled: '未启用设备绑定',
@@ -72,6 +73,7 @@
       claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
       waitingConnection: 'Waiting for the customer to enable the proxy', connectedThrough: 'Customer connected through {node}',
       settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
+      remark: 'Remark', actions: 'Actions',
       customerName: 'Customer name', customerNamePlaceholder: 'Enter a name for after-sales identification',
       customerNameRequired: 'Enter a clear customer name for after-sales support.',
       boundDevices: 'Bound devices', unboundDevice: 'No device bound', hwidDisabled: 'Device binding disabled',
@@ -592,7 +594,7 @@
         : boundDevices.length
           ? `<div class="dist-bound-device-list">${boundDevices.map((hwid) => `<code>${escapeHtml(hwid)}</code>`).join('')}</div>`
           : `<span class="dist-device-state">${t('unboundDevice')}</span>`;
-      const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="7"><div><strong>${t('entitlement')}</strong><dl>
+      const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
         <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
@@ -611,13 +613,14 @@
         <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
         <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
+        <td><div class="dist-order-remark">${order.remark ? escapeHtml(order.remark) : '—'}</div></td>
         <td><div class="dist-order-actions">${qrAction}</div></td>
       </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
       <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
-      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('settlement')}</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="7" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
+      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="8" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
   }
 
   function periodLabel(period) {

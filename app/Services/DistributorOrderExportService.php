@@ -7,6 +7,7 @@ use App\Models\DistributorOrder;
 use App\Models\Plan;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
+use OpenSpout\Common\Entity\Cell\StringCell;
 use OpenSpout\Common\Entity\Row;
 use OpenSpout\Common\Entity\Style\Color;
 use OpenSpout\Common\Entity\Style\Style;
@@ -21,11 +22,11 @@ class DistributorOrderExportService
     private const CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     private const ADMIN_HEADERS = [
-        '订单号', '用户名称', '分销商', '套餐', '原价', '结算状态',
+        '订单号', '用户名称', '分销商', '套餐', '原价', '结算状态', '备注',
     ];
 
     private const DISTRIBUTOR_HEADERS = [
-        '订单号', '用户名称', '订阅计划', '周期', '订单金额', '结算状态',
+        '订单号', '用户名称', '订阅计划', '周期', '订单金额', '结算状态', '备注',
     ];
 
     public function __construct(private readonly DistributorOrderSearchService $searchService)
@@ -57,6 +58,7 @@ class DistributorOrderExportService
                 (string) ($order->plan_name ?: '-'),
                 $this->yuan($order->total_amount),
                 $this->settlementLabel((int) $order->settlement_status),
+                (string) ($order->remark ?? ''),
             ],
             '分销订单'
         );
@@ -86,6 +88,7 @@ class DistributorOrderExportService
                 $this->periodLabel((string) $order->period),
                 $this->yuan($order->total_amount),
                 $this->settlementLabel((int) $order->settlement_status),
+                (string) ($order->remark ?? ''),
             ],
             '我的分销订单'
         );
@@ -106,6 +109,7 @@ class DistributorOrderExportService
                 'v2_order.total_amount',
                 'v2_order.created_at',
                 'v2_distributor_order.customer_name',
+                'v2_distributor_order.remark',
                 'distributor.email as distributor_email',
                 'distributor.distributor_name as distributor_name',
                 'v2_plan.name as plan_name',
@@ -141,6 +145,7 @@ class DistributorOrderExportService
             $sheet->setColumnWidth(28, 3);
             $sheet->setColumnWidth(24, 4);
             $sheet->setColumnWidth(14, 5, 6);
+            $sheet->setColumnWidth(42, 7);
 
             $headerStyle = (new Style())
                 ->setFontBold()
@@ -151,11 +156,17 @@ class DistributorOrderExportService
             $writer->addRow(Row::fromValues($headers, $headerStyle));
             $dataRows = 0;
             foreach ($query->cursor() as $order) {
-                $writer->addRow(Row::fromValuesWithStyles(
-                    $rowMapper($order),
+                $values = $rowMapper($order);
+                $remarkIndex = count($values) - 1;
+                $row = Row::fromValuesWithStyles(
+                    $values,
                     null,
                     [4 => $amountStyle]
-                ));
+                );
+                // Force the administrator-authored remark to remain literal text even
+                // when it starts with "=", which OpenSpout otherwise treats as a formula.
+                $row->setCellAtIndex(new StringCell((string) $values[$remarkIndex], null), $remarkIndex);
+                $writer->addRow($row);
                 ++$dataRows;
             }
 

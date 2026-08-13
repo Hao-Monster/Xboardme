@@ -771,6 +771,65 @@ class DistributorOrderTest extends TestCase
         $this->assertSame('链接查询客户', $rows[1][1]);
     }
 
+    public function test_admin_can_save_trim_and_clear_a_distributor_order_remark_while_distributor_can_only_read_it(): void
+    {
+        $distributor = $this->makeUser('remark-dealer@example.com', true);
+        $order = $this->createDistributorOrder(
+            $distributor,
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY,
+            '备注客户'
+        );
+        $admin = $this->makeUser('remark-admin@example.com', false, ['is_admin' => true]);
+        $uri = '/' . $this->adminRouteUri('updateRemark');
+
+        Sanctum::actingAs($admin);
+        $this->postJson($uri, [
+            'order_id' => $order->id,
+            'remark' => "  线下补款\n下次结算核对  ",
+        ])->assertOk()
+            ->assertJsonPath('data.order_id', $order->id)
+            ->assertJsonPath('data.remark', "线下补款\n下次结算核对");
+
+        $this->assertSame(
+            "线下补款\n下次结算核对",
+            $order->distributorOrder()->value('remark')
+        );
+        $this->postJson('/' . $this->adminRouteUri('fetch'), [
+            'current' => 1,
+            'pageSize' => 10,
+            'distributor_only' => true,
+        ])->assertOk()
+            ->assertJsonPath('data.0.remark', "线下补款\n下次结算核对");
+
+        $this->postJson($uri, [
+            'order_id' => $order->id,
+            'remark' => str_repeat('备', 501),
+        ])->assertUnprocessable();
+        $this->postJson($uri, [
+            'order_id' => 999999,
+            'remark' => '不存在的订单',
+        ])->assertNotFound()
+            ->assertJsonPath('message', '分销订单不存在');
+        $this->postJson($uri, [
+            'order_id' => $order->id,
+            'remark' => '   ',
+        ])->assertOk()
+            ->assertJsonPath('data.remark', null);
+        $this->assertNull($order->distributorOrder()->value('remark'));
+
+        $order->distributorOrder()->update(['remark' => '管理员共享备注']);
+        Sanctum::actingAs($distributor);
+        $this->getJson('/api/v1/user/order/fetch')->assertOk()
+            ->assertJsonPath('data.0.trade_no', $order->trade_no)
+            ->assertJsonPath('data.0.remark', '管理员共享备注');
+        $this->postJson($uri, [
+            'order_id' => $order->id,
+            'remark' => '分销商不得修改',
+        ])->assertForbidden();
+        $this->assertSame('管理员共享备注', $order->distributorOrder()->value('remark'));
+    }
+
     public function test_admin_xlsx_export_contains_only_distributor_orders_with_exact_columns_and_numeric_amounts(): void
     {
         $firstDistributor = $this->makeUser('first-dealer@example.com', true, ['distributor_name' => '第一分销商']);
@@ -778,6 +837,8 @@ class DistributorOrderTest extends TestCase
         $plan = $this->makePlan();
         $older = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY, '老客户');
         $newer = $this->createDistributorOrder($secondDistributor, $plan, Plan::PERIOD_QUARTERLY, '新客户');
+        $older->distributorOrder()->update(['remark' => '旧订单备注']);
+        $newer->distributorOrder()->update(['remark' => '=HYPERLINK("https://invalid.example","新订单备注")']);
         $older->update(['created_at' => 100]);
         $newer->update(['created_at' => 200]);
 
@@ -796,7 +857,7 @@ class DistributorOrderTest extends TestCase
         $response->assertOk();
 
         $rows = $this->readXlsx($response);
-        $this->assertSame(['订单号', '用户名称', '分销商', '套餐', '原价', '结算状态'], $rows[0]);
+        $this->assertSame(['订单号', '用户名称', '分销商', '套餐', '原价', '结算状态', '备注'], $rows[0]);
         $this->assertSame($newer->trade_no, $rows[1][0]);
         $this->assertSame('新客户', $rows[1][1]);
         $this->assertSame('第二分销商', $rows[1][2]);
@@ -804,7 +865,9 @@ class DistributorOrderTest extends TestCase
         $this->assertTrue(is_int($rows[1][4]) || is_float($rows[1][4]));
         $this->assertEquals(30.0, $rows[1][4]);
         $this->assertSame('未结算', $rows[1][5]);
+        $this->assertSame('=HYPERLINK("https://invalid.example","新订单备注")', $rows[1][6]);
         $this->assertSame($older->trade_no, $rows[2][0]);
+        $this->assertSame('旧订单备注', $rows[2][6]);
         $this->assertCount(3, $rows);
         $this->assertStringNotContainsString('NORMAL-ORDER-MUST-NOT-EXPORT', json_encode($rows));
     }
@@ -848,6 +911,7 @@ class DistributorOrderTest extends TestCase
         $settled->distributorOrder()->update([
             'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
             'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
+            'remark' => '分销商可见备注',
         ]);
         $otherOrder = $this->createDistributorOrder($otherDistributor, $plan, Plan::PERIOD_QUARTERLY);
 
@@ -858,7 +922,7 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.trade_no', $settled->trade_no);
 
         $rows = $this->readXlsx($this->get('/api/v1/user/order/export?settlement_status=1')->assertOk());
-        $this->assertSame(['订单号', '用户名称', '订阅计划', '周期', '订单金额', '结算状态'], $rows[0]);
+        $this->assertSame(['订单号', '用户名称', '订阅计划', '周期', '订单金额', '结算状态', '备注'], $rows[0]);
         $this->assertCount(2, $rows);
         $this->assertSame($settled->trade_no, $rows[1][0]);
         $this->assertSame('导出客户', $rows[1][1]);
@@ -867,6 +931,7 @@ class DistributorOrderTest extends TestCase
         $this->assertTrue(is_int($rows[1][4]) || is_float($rows[1][4]));
         $this->assertEquals(30.0, $rows[1][4]);
         $this->assertSame('已结算', $rows[1][5]);
+        $this->assertSame('分销商可见备注', $rows[1][6]);
         $this->assertStringNotContainsString($unsettled->trade_no, json_encode($rows));
         $this->assertStringNotContainsString($otherOrder->trade_no, json_encode($rows));
 
@@ -1215,7 +1280,8 @@ class DistributorOrderTest extends TestCase
         $sheetXml = (string) $archive->getFromName('xl/worksheets/sheet1.xml');
         $archive->close();
         $this->assertStringContainsString('numFmtId="2"', $styles);
-        $this->assertStringContainsString('<autoFilter ref="A1:F', $sheetXml);
+        $this->assertStringContainsString('<autoFilter ref="A1:G', $sheetXml);
+        $this->assertStringNotContainsString('<f>', $sheetXml);
         $this->assertStringContainsString('state="frozen"', $sheetXml);
 
         $reader = new Reader();

@@ -79,6 +79,7 @@ class OrderController extends Controller
         $data['distributor_name'] = $distributorOrder?->distributor?->distributor_name
             ?: $distributorOrder?->distributor?->email;
         $data['customer_name'] = $distributorOrder?->customer_name;
+        $data['remark'] = $distributorOrder?->remark;
         $data['delivery_status'] = $distributorOrder?->delivery_status;
         $data['config_issued_at'] = $distributorOrder?->config_issued_at;
         $data['connected_at'] = $distributorOrder?->connected_at;
@@ -95,6 +96,33 @@ class OrderController extends Controller
             : null;
 
         return $this->success($data);
+    }
+
+    public function updateRemark(Request $request)
+    {
+        if ($request->has('remark') && is_string($request->input('remark'))) {
+            $request->merge(['remark' => trim($request->input('remark'))]);
+        }
+        $validated = $request->validate([
+            'order_id' => 'required|integer',
+            'remark' => 'present|nullable|string|max:500',
+        ]);
+
+        $distributorOrder = DistributorOrder::query()
+            ->where('order_id', (int) $validated['order_id'])
+            ->first();
+        if (!$distributorOrder) {
+            return $this->fail([404, '分销订单不存在']);
+        }
+
+        $remark = (string) ($validated['remark'] ?? '');
+        $distributorOrder->remark = $remark === '' ? null : $remark;
+        $distributorOrder->save();
+
+        return $this->success([
+            'order_id' => $distributorOrder->order_id,
+            'remark' => $distributorOrder->remark,
+        ]);
     }
 
     public function updateEntitlement(
@@ -118,7 +146,7 @@ class OrderController extends Controller
         $pageSize = $request->input('pageSize', 10);
         $orderModel = Order::with([
             'plan:id,name',
-            'distributorOrder:id,order_id,distributor_user_id,customer_name,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,settled_at',
+            'distributorOrder:id,order_id,distributor_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,settled_at',
             'distributorOrder.distributor:id,email,distributor_name',
         ]);
 
@@ -176,6 +204,7 @@ class OrderController extends Controller
             $orderArray['distributor_name'] = $distributorOrder?->distributor?->distributor_name
                 ?: $distributorOrder?->distributor?->email;
             $orderArray['customer_name'] = $distributorOrder?->customer_name;
+            $orderArray['remark'] = $distributorOrder?->remark;
             $orderArray['delivery_status'] = $distributorOrder?->delivery_status;
             $orderArray['config_issued_at'] = $distributorOrder?->config_issued_at;
             $orderArray['connected_at'] = $distributorOrder?->connected_at;

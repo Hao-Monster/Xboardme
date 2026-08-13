@@ -424,13 +424,64 @@
   }
 
   function orderRows(detailAttribute = 'data-order-detail') {
-    return state.orders.map((order) => `<tr>
+    return state.orders.map((order) => {
+      const remark = String(order.remark || '');
+      return `<tr>
       <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
       <td>${escapeHtml(order.customer_name || '-')}</td><td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
       <td>${money(order.total_amount)}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
+      <td><div class="admin-dist-remark-cell"><span title="${escapeHtml(remark)}">${remark ? escapeHtml(remark) : '—'}</span><button type="button" data-edit-remark="${order.id}" title="编辑备注" aria-label="编辑备注">✎</button></div></td>
       <td><button class="admin-dist-link" ${detailAttribute}="${order.id}">详情 / 订阅链接</button></td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
+  }
+
+  function openRemarkEditor(orderId) {
+    const order = state.orders.find((item) => String(item.id) === String(orderId));
+    if (!order) throw new Error('分销订单不存在或列表已刷新');
+
+    let modal = document.getElementById('admin-dist-remark');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'admin-dist-remark';
+      document.body.appendChild(modal);
+      modal.addEventListener('click', async (event) => {
+        if (event.target.closest('[data-remark-cancel]')) {
+          modal.classList.remove('open');
+          return;
+        }
+        const save = event.target.closest('[data-remark-save]');
+        if (!save) return;
+        const textarea = modal.querySelector('textarea');
+        save.disabled = true;
+        try {
+          const result = dataOf(await api('/order/remark/update', {
+            method: 'POST',
+            data: { order_id: Number(save.dataset.remarkSave), remark: textarea?.value || '' },
+          }));
+          const current = state.orders.find((item) => String(item.id) === String(result.order_id));
+          if (current) current.remark = result.remark;
+          modal.classList.remove('open');
+          if (document.getElementById('xboard-native-distributor-orders')) renderNativeOrders();
+          if (state.open && state.tab === 'orders') renderOrders();
+          toast('订单备注已保存');
+        } catch (error) {
+          save.disabled = false;
+          toast(error.message, 'error');
+        }
+      });
+    }
+
+    modal.innerHTML = `<div class="admin-dist-remark-backdrop"><section role="dialog" aria-modal="true" aria-labelledby="admin-dist-remark-title">
+      <h2 id="admin-dist-remark-title">编辑订单备注</h2>
+      <p>备注会展示给该订单所属的分销商，并随双方的 Excel 一起导出。</p>
+      <textarea maxlength="500" rows="7" placeholder="请输入备注；保存空内容可清空备注">${escapeHtml(order.remark || '')}</textarea>
+      <small>最多 500 个字符，支持换行</small>
+      <footer><button type="button" data-remark-cancel>取消</button><button type="button" class="primary" data-remark-save="${order.id}">保存</button></footer>
+    </section></div>`;
+    modal.classList.add('open');
+    modal.querySelector('textarea')?.focus();
   }
 
   function renderOrders() {
@@ -443,7 +494,7 @@
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
       <div class="admin-dist-search"><input id="admin-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button data-admin-dist="search-orders">查询</button><button class="secondary" data-admin-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
-      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个订单</span><div><button data-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button data-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`);
   }
 
@@ -610,6 +661,8 @@
       if (toggle) await toggleUser(toggle.dataset.userToggle, toggle.dataset.current === '1');
       const detail = event.target.closest('[data-order-detail]');
       if (detail) await showOrderDetail(detail.dataset.orderDetail);
+      const remark = event.target.closest('[data-edit-remark]');
+      if (remark) openRemarkEditor(remark.dataset.editRemark);
       const page = event.target.closest('[data-page]');
       if (page) { state.page += page.dataset.page === 'next' ? 1 : -1; await loadOrders(); }
     } catch (error) { toast(error.message, 'error'); }
@@ -656,7 +709,7 @@
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
         <div class="admin-dist-search"><input id="native-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button type="button" data-native-dist="search-orders">查询</button><button type="button" class="secondary" data-native-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       </div>${nativeSummary()}
-      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个分销订单</span><div><button type="button" data-native-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button type="button" data-native-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`;
   }
 
@@ -686,6 +739,8 @@
 
       const detail = event.target.closest('[data-native-order-detail]');
       if (detail) await showOrderDetail(detail.dataset.nativeOrderDetail);
+      const remark = event.target.closest('[data-edit-remark]');
+      if (remark) openRemarkEditor(remark.dataset.editRemark);
 
       const page = event.target.closest('[data-native-page]');
       if (page) {

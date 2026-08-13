@@ -33,6 +33,15 @@ test('distributor order search supports enter, trims input and searches on the s
   assert.match(source, /输入订单号或用户名称查询/);
 });
 
+test('distributor order list renders the administrator remark as read-only text', () => {
+  const renderBlock = source.match(/async function renderOrders\(\)[\s\S]*?\n  }/);
+  assert.ok(renderBlock, 'order list renderer should exist');
+  assert.match(renderBlock[0], /t\('remark'\)/);
+  assert.match(renderBlock[0], /order\.remark/);
+  assert.match(renderBlock[0], /escapeHtml\(order\.remark\)/);
+  assert.doesNotMatch(renderBlock[0], /edit-remark|remark\/update|textarea/);
+});
+
 test('binary download handles xlsx filenames and json errors without exposing subscription data', () => {
   const downloadBlock = source.match(/async function downloadFile\(path\)[\s\S]*?\n  }/);
   assert.ok(downloadBlock, 'binary download helper should exist');

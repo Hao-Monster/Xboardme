@@ -197,6 +197,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
           total_amount: 3000,
           delivery_status: 0,
           settlement_status: settled ? 1 : 0,
+          remark: '线下补款后结算',
         }],
       });
     }
@@ -252,6 +253,9 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(host.innerHTML, /DIST-ORDER-1/);
   assert.match(host.innerHTML, /用户名称/);
   assert.match(host.innerHTML, /终端客户甲/);
+  assert.match(host.innerHTML, /备注/);
+  assert.match(host.innerHTML, /线下补款后结算/);
+  assert.match(host.innerHTML, /data-edit-remark="99"/);
   assert.match(host.innerHTML, /id="native-dist-order-search"/);
   assert.match(host.innerHTML, /订单号\/用户名称\/订阅链接/);
   assert.match(host.innerHTML, /data-native-dist="search-orders"/);
@@ -338,6 +342,11 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(source, /data-distributor-name-value/);
   assert.match(source, /maxlength="100"/);
   assert.match(source, /showReadonly = checkbox\.checked && savedName !== ''/);
+  assert.match(source, /\/order\/remark\/update/);
+  assert.match(source, /id="admin-dist-remark-title"/);
+  assert.match(source, /textarea maxlength="500"/);
+  assert.match(source, /data-remark-cancel/);
+  assert.match(source, /data-remark-save/);
   assert.match(source, /input\.required = checkbox\.checked && !showReadonly/);
   assert.match(source, /<dt>用户名称<\/dt><dd>\$\{escapeHtml\(order\.customer_name \|\| '-'\)\}<\/dd>/);
   assert.match(source, /search: state\.orderSearch \|\| null/);

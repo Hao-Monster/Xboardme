@@ -32,7 +32,7 @@ class OrderController extends Controller
         ]);
         $orders = Order::with([
             'plan',
-            'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
+            'distributorOrder:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
             'distributorOrder.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit',
             'distributorOrder.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ])
@@ -80,7 +80,7 @@ class OrderController extends Controller
         $order = Order::with([
             'payment',
             'plan',
-            'distributorOrder:id,order_id,subscriber_user_id,customer_name,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
+            'distributorOrder:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
             'distributorOrder.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit',
             'distributorOrder.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ])

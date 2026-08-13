@@ -85,6 +85,7 @@ jobs:
             --header "Authorization: $auth_data" \
             'http://127.0.0.1:17001/api/v1/user/order/fetch')
           test "$orders_status" = '200'
+          jq -e 'all(.data[]; has("remark"))' orders.json >/dev/null
 
           knowledge_status=$(curl --silent --show-error \
             --output knowledge.json --write-out '%{http_code}' \
@@ -104,6 +105,8 @@ jobs:
             grep -qi 'content-type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' export.headers
             grep -qi 'content-disposition: attachment' export.headers
             unzip -t distributor-orders.xlsx >/dev/null
+            unzip -p distributor-orders.xlsx xl/worksheets/sheet1.xml > distributor-orders-sheet.xml
+            grep -q '备注' distributor-orders-sheet.xml
           else
             test "$export_status" = '422'
             jq -e '(.status == "fail") and (.message == "当前筛选条件下没有可导出的订单")' distributor-orders.xlsx >/dev/null

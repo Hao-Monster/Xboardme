@@ -122,6 +122,7 @@ class AdminRoute
                 $router->post('/paid', [OrderController::class, 'paid']);
                 $router->post('/cancel', [OrderController::class, 'cancel']);
                 $router->post('/detail', [OrderController::class, 'detail']);
+                $router->post('/remark/update', [OrderController::class, 'updateRemark']);
                 $router->post('/entitlement/update', [OrderController::class, 'updateEntitlement']);
                 $router->post('/hwid/update', [OrderController::class, 'updateHwid']);
                 $router->get('/hwid/devices', [OrderController::class, 'hwidDevices']);
