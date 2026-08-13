@@ -159,6 +159,7 @@ class DistributorOrderTest extends TestCase
             '订单号：' . $order->trade_no,
             base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
         );
+        $this->assertOrderContentDisposition($response, $order->trade_no);
         $this->flushHeaders();
 
         $this->assertNotNull($delivery->refresh()->config_issued_at);
@@ -212,6 +213,7 @@ class DistributorOrderTest extends TestCase
             '订单号：' . $order->trade_no,
             base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
         );
+        $this->assertOrderContentDisposition($response, $order->trade_no);
         $config = $response->json();
         $this->assertIsArray($config);
         $this->assertTrue(collect($config['outbounds'] ?? [])->contains(
@@ -297,6 +299,40 @@ class DistributorOrderTest extends TestCase
         }
 
         $this->assertNotSame($firstOrder->trade_no, $secondOrder->trade_no);
+    }
+
+    public function test_distributor_clash_subscription_uses_order_number_in_all_title_headers(): void
+    {
+        config(['cache.stores.redis' => ['driver' => 'array']]);
+        app('cache')->forgetDriver('redis');
+
+        $order = $this->createDistributorOrder(
+            $this->makeUser('clash-title-dealer@example.com', true),
+            $this->makePlan(),
+            Plan::PERIOD_MONTHLY,
+            'Clash title customer'
+        );
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $this->makeServer();
+
+        $subscribeUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
+        $subscribePath = parse_url($subscribeUrl, PHP_URL_PATH);
+        $subscribeQuery = parse_url($subscribeUrl, PHP_URL_QUERY);
+        $response = $this->withHeaders([
+            'User-Agent' => 'clash.meta/1.19.0',
+            'X-HWID' => 'clash-title-device-001',
+        ])->get($subscribePath . ($subscribeQuery ? '?' . $subscribeQuery : ''));
+
+        $response->assertOk()->assertHeader('x-order-no', $order->trade_no);
+        $this->assertSame(
+            '订单号：' . $order->trade_no,
+            base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
+        );
+        $this->assertOrderContentDisposition($response, $order->trade_no);
+        $this->assertStringNotContainsString(
+            rawurlencode(admin_setting('app_name', 'XBoard')),
+            (string) $response->headers->get('content-disposition')
+        );
     }
 
     public function test_delivery_returns_only_an_embedded_qr_and_never_exposes_the_subscription_as_plain_json(): void
@@ -1230,6 +1266,16 @@ class DistributorOrderTest extends TestCase
             $plan,
             $period,
             $customerName
+        );
+    }
+
+    private function assertOrderContentDisposition($response, string $tradeNo, string $extension = ''): void
+    {
+        $disposition = (string) $response->headers->get('content-disposition');
+        $this->assertStringContainsString('filename="' . $tradeNo . $extension . '"', $disposition);
+        $this->assertStringContainsString(
+            "filename*=UTF-8''" . rawurlencode('订单号：' . $tradeNo . $extension),
+            $disposition
         );
     }
 

@@ -116,7 +116,26 @@ class ClientController extends Controller
 
         $title = "订单号：{$tradeNo}";
         $response->headers->set('profile-title', 'base64:' . base64_encode($title));
+        $response->headers->set('content-disposition', $this->buildOrderContentDisposition(
+            $tradeNo,
+            $title,
+            (string) $response->headers->get('content-disposition')
+        ));
         $response->headers->set('x-order-no', $tradeNo);
+    }
+
+    private function buildOrderContentDisposition(string $tradeNo, string $title, string $current): string
+    {
+        $extension = '';
+        $decoded = rawurldecode($current);
+        if (preg_match('/\.(conf|yaml|yml|json|txt)(?=[";\s]|$)/i', $decoded, $matches)) {
+            $extension = '.' . strtolower($matches[1]);
+        }
+
+        $asciiFilename = $tradeNo . $extension;
+        $utf8Filename = $title . $extension;
+
+        return 'attachment; filename="' . $asciiFilename . '"; filename*=UTF-8\'\'' . rawurlencode($utf8Filename);
     }
 
     private function isUsableSubscriptionResponse($response): bool
