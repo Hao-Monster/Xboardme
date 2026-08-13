@@ -13,15 +13,27 @@ test('shared client center is loaded by the XBoard theme', () => {
   assert.match(source, /window\.XBoardClientCenter = \{ mount, refreshNormal: schedule \}/);
 });
 
-test('catalog shows HWID-only clients with platform filters and direct or QR downloads', () => {
+test('catalog shows four per-platform actions while hiding optional empty links', () => {
   assert.match(source, /✓ HWID/);
   assert.match(source, /data-platform-filter/);
   assert.match(source, /data-direct-download/);
   assert.match(source, /data-qr-download/);
+  assert.match(source, /data-cloud-download/);
+  assert.match(source, /data-tutorial/);
+  assert.match(source, /download\.cloud_url \|\| ''/);
+  assert.match(source, /download\.tutorial_url \|\| ''/);
+  assert.match(source, /target\.addEventListener\('change'/);
   assert.match(source, /\/user\/client-catalog\/qr\?client=/);
-  assert.match(source, /二维码将直接进入官方安装包或官方应用商店/);
+  assert.match(source, /未单独配置扫码链接时，将使用直接下载地址/);
   assert.match(styles, /\.xcc-grid/);
+  assert.match(styles, /\.xcc-buttons/);
   assert.match(styles, /\.xcc-backdrop/);
+});
+
+test('requested client priority is defined by the server catalog order', () => {
+  const catalog = fs.readFileSync('config/client_catalog.php', 'utf8');
+  const ids = [...catalog.matchAll(/'id'\s*=>\s*'([^']+)'/g)].map((match) => match[1]);
+  assert.deepEqual(ids.slice(0, 4), ['karing', 'happ', 'clash-mi', 'koalaclash']);
 });
 
 test('normal accounts receive a client download menu and distributor accounts use a native route', () => {

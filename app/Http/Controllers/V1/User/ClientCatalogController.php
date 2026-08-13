@@ -28,7 +28,7 @@ class ClientCatalogController extends Controller
             'platform' => 'required|in:' . implode(',', ClientCatalogService::PLATFORMS),
         ]);
         $this->catalog->find($validated['client']);
-        $downloadUrl = route('client-catalog.download', $validated);
+        $downloadUrl = route('client-catalog.link', $validated + ['action' => 'qr']);
         $renderer = new ImageRenderer(new RendererStyle(360, 2), new SvgImageBackEnd());
         $svg = (new Writer($renderer))->writeString($downloadUrl);
 

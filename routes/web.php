@@ -13,6 +13,13 @@ Route::get('/client-download/{client}/{platform}', \App\Http\Controllers\ClientD
     ->where('platform', 'android|ios|windows|macos|linux')
     ->name('client-catalog.download');
 
+Route::get('/client-link/{client}/{platform}/{action}', \App\Http\Controllers\ClientLinkController::class)
+    ->middleware('throttle:120,1')
+    ->where('client', '[a-z0-9-]+')
+    ->where('platform', 'android|ios|windows|macos|linux')
+    ->where('action', 'qr|cloud|tutorial')
+    ->name('client-catalog.link');
+
 Route::get('/knowledge-attachments/{attachmentUuid}', [\App\Http\Controllers\KnowledgeAttachmentController::class, 'read'])
     ->middleware(['signed', 'throttle:600,1'])
     ->whereUuid('attachmentUuid')

@@ -3,12 +3,16 @@
 namespace Tests\Feature;
 
 use App\Http\Middleware\InitializePlugins;
+use App\Services\ClientCatalogService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
 class ClientCatalogDownloadTest extends TestCase
 {
+    use RefreshDatabase;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -35,5 +39,26 @@ class ClientCatalogDownloadTest extends TestCase
     {
         $this->get('/client-download/unknown/android')->assertStatus(503);
         Http::assertNothingSent();
+    }
+
+    public function test_configured_cloud_and_tutorial_routes_redirect_safely(): void
+    {
+        admin_setting([ClientCatalogService::SETTING_KEY => [
+            'sample' => ['android' => [
+                'cloud' => 'https://pan.example.com/sample',
+                'tutorial' => '/guide/9/sample',
+            ]],
+        ]]);
+
+        $this->get('/client-link/sample/android/cloud')
+            ->assertRedirect('https://pan.example.com/sample')
+            ->assertHeader('Referrer-Policy', 'no-referrer');
+        $this->get('/client-link/sample/android/tutorial')
+            ->assertRedirect('/guide/9/sample');
+    }
+
+    public function test_unconfigured_optional_action_is_not_available(): void
+    {
+        $this->get('/client-link/sample/android/cloud')->assertNotFound();
     }
 }

@@ -39,21 +39,30 @@
   }
 
   function platformOptions(downloads) {
-    return downloads.map((download) => `<option value="${escapeHtml(download.platform)}" data-url="${escapeHtml(download.download_url)}">${escapeHtml(PLATFORM_LABELS[download.platform] || download.platform)}</option>`).join('');
+    return downloads.map((download) => `<option value="${escapeHtml(download.platform)}" data-url="${escapeHtml(download.download_url)}" data-cloud-url="${escapeHtml(download.cloud_url || '')}" data-tutorial-url="${escapeHtml(download.tutorial_url || '')}">${escapeHtml(PLATFORM_LABELS[download.platform] || download.platform)}</option>`).join('');
+  }
+
+  function actionButtons(download) {
+    return `<button type="button" class="xcc-secondary" data-direct-download>直接下载</button>
+      <button type="button" class="xcc-primary" data-qr-download>扫码下载</button>
+      ${download && download.cloudUrl ? '<button type="button" class="xcc-secondary" data-cloud-download>网盘下载</button>' : ''}
+      ${download && download.tutorialUrl ? '<button type="button" class="xcc-secondary" data-tutorial>使用教程</button>' : ''}`;
   }
 
   function renderCards(state) {
     const visible = state.clients.filter((client) => state.filter === 'all' || client.downloads.some((item) => item.platform === state.filter));
     return visible.map((client) => {
       const downloads = state.filter === 'all' ? client.downloads : client.downloads.filter((item) => item.platform === state.filter);
+      const selected = downloads[0] ? {
+        cloudUrl: downloads[0].cloud_url || '', tutorialUrl: downloads[0].tutorial_url || '',
+      } : null;
       const initial = Array.from(client.name || '?')[0] || '?';
       return `<article class="xcc-card ${client.featured ? 'is-featured' : ''}" data-client-card="${escapeHtml(client.id)}">
         <div class="xcc-card-head"><span class="xcc-logo">${escapeHtml(initial)}</span><div><div class="xcc-badges"><span>${escapeHtml(client.core)}</span><b>✓ HWID</b>${client.featured ? '<em>推荐</em>' : ''}</div><h2>${escapeHtml(client.name)}</h2></div></div>
         <p>${escapeHtml(client.description)}</p>
         <div class="xcc-card-actions">
           <select aria-label="选择下载平台" data-client-platform>${platformOptions(downloads)}</select>
-          <button type="button" class="xcc-secondary" data-direct-download="${escapeHtml(client.id)}">直接下载</button>
-          <button type="button" class="xcc-primary" data-qr-download="${escapeHtml(client.id)}">扫码下载</button>
+          <div class="xcc-buttons" data-client-buttons>${actionButtons(selected)}</div>
         </div>
       </article>`;
     }).join('') || '<div class="xcc-empty">该平台暂无支持 HWID 的客户端</div>';
@@ -72,7 +81,12 @@
   function selectedDownload(card) {
     const select = card && card.querySelector('[data-client-platform]');
     const option = select && select.options[select.selectedIndex];
-    return option ? { platform: option.value, url: option.dataset.url } : null;
+    return option ? {
+      platform: option.value,
+      url: option.dataset.url,
+      cloudUrl: option.dataset.cloudUrl || '',
+      tutorialUrl: option.dataset.tutorialUrl || '',
+    } : null;
   }
 
   async function openQr(target, clientId, platform) {
@@ -81,7 +95,7 @@
     try {
       const result = await api(`/user/client-catalog/qr?client=${encodeURIComponent(clientId)}&platform=${encodeURIComponent(platform)}`);
       const client = mounted.get(target).clients.find((item) => item.id === clientId);
-      root.innerHTML = `<div class="xcc-backdrop"><div class="xcc-modal"><button type="button" class="xcc-modal-x" data-close-qr>×</button><span class="xcc-eyebrow">${escapeHtml(PLATFORM_LABELS[platform] || platform)}</span><h2>扫码下载 ${escapeHtml(client ? client.name : '')}</h2><p>二维码将直接进入官方安装包或官方应用商店。</p><div class="xcc-qr"><img src="${escapeHtml(result.qr_code)}" alt="${escapeHtml(client ? client.name : '')} 下载二维码"></div><a class="xcc-primary xcc-modal-download" href="${escapeHtml(result.download_url)}" target="_blank" rel="noopener noreferrer">当前设备直接下载</a></div></div>`;
+      root.innerHTML = `<div class="xcc-backdrop"><div class="xcc-modal"><button type="button" class="xcc-modal-x" data-close-qr>×</button><span class="xcc-eyebrow">${escapeHtml(PLATFORM_LABELS[platform] || platform)}</span><h2>扫码下载 ${escapeHtml(client ? client.name : '')}</h2><p>未单独配置扫码链接时，将使用直接下载地址。</p><div class="xcc-qr"><img src="${escapeHtml(result.qr_code)}" alt="${escapeHtml(client ? client.name : '')} 下载二维码"></div><a class="xcc-primary xcc-modal-download" href="${escapeHtml(result.download_url)}" target="_blank" rel="noopener noreferrer">当前设备打开下载链接</a></div></div>`;
     } catch (error) {
       root.innerHTML = `<div class="xcc-backdrop"><div class="xcc-modal"><button type="button" class="xcc-modal-x" data-close-qr>×</button><div class="xcc-error">${escapeHtml(error.message)}</div></div></div>`;
     }
@@ -102,7 +116,17 @@
       const direct = event.target.closest('[data-direct-download]');
       if (direct && selected) { window.open(selected.url, '_blank', 'noopener,noreferrer'); return; }
       const qr = event.target.closest('[data-qr-download]');
-      if (qr && selected) openQr(target, qr.dataset.qrDownload, selected.platform);
+      if (qr && selected) { openQr(target, card.dataset.clientCard, selected.platform); return; }
+      const cloud = event.target.closest('[data-cloud-download]');
+      if (cloud && selected?.cloudUrl) { window.open(selected.cloudUrl, '_blank', 'noopener,noreferrer'); return; }
+      const tutorial = event.target.closest('[data-tutorial]');
+      if (tutorial && selected?.tutorialUrl) window.open(selected.tutorialUrl, '_blank', 'noopener,noreferrer');
+    });
+    target.addEventListener('change', (event) => {
+      if (!event.target.matches('[data-client-platform]')) return;
+      const card = event.target.closest('[data-client-card]');
+      const buttons = card && card.querySelector('[data-client-buttons]');
+      if (buttons) buttons.innerHTML = actionButtons(selectedDownload(card));
     });
   }
 

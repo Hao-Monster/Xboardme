@@ -17,6 +17,7 @@ use App\Http\Controllers\V2\Admin\CouponController;
 use App\Http\Controllers\V2\Admin\GiftCardController;
 use App\Http\Controllers\V2\Admin\KnowledgeController;
 use App\Http\Controllers\V2\Admin\KnowledgeAttachmentController;
+use App\Http\Controllers\V2\Admin\ClientCatalogController;
 use App\Http\Controllers\V2\Admin\PaymentController;
 use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
@@ -258,6 +259,16 @@ class AdminRoute
                 $router->post('/attachment/qr-code', [KnowledgeAttachmentController::class, 'qrCode'])
                     ->middleware('throttle:60,1')
                     ->name('admin.knowledge.attachments.qr-code');
+            });
+
+            // Client catalog link management
+            $router->group([
+                'prefix' => 'client-catalog'
+            ], function ($router) {
+                $router->get('/', [ClientCatalogController::class, 'index'])
+                    ->name('admin.client-catalog.index');
+                $router->post('/save', [ClientCatalogController::class, 'save'])
+                    ->name('admin.client-catalog.save');
             });
 
             // Payment  

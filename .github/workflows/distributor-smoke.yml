@@ -94,6 +94,19 @@ jobs:
           test "$knowledge_status" = '200'
           jq -e '.status == "success"' knowledge.json >/dev/null
 
+          clients_status=$(curl --silent --show-error \
+            --output clients.json --write-out '%{http_code}' \
+            --header "Authorization: $auth_data" \
+            'http://127.0.0.1:17001/api/v1/user/client-catalog')
+          test "$clients_status" = '200'
+          jq -e '((.data[0:4] | map(.id)) == ["karing", "happ", "clash-mi", "koalaclash"])
+            and all(.data[]; all(.downloads[]; has("download_url") and has("cloud_url") and has("tutorial_url")))' clients.json >/dev/null
+
+          curl --silent --show-error --fail \
+            'http://127.0.0.1:17001/assets/admin-client-catalog.js' | grep -q '客户端管理'
+          curl --silent --show-error --fail \
+            'http://127.0.0.1:17001/theme/Xboard/assets/client-center.js' | grep -q '网盘下载'
+
           order_count=$(jq '.data | length' orders.json)
           export_status=$(curl --silent --show-error \
             --dump-header export.headers \

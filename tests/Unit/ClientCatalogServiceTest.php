@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Services\ClientCatalogService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -10,6 +11,8 @@ use Tests\TestCase;
 
 class ClientCatalogServiceTest extends TestCase
 {
+    use RefreshDatabase;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -30,6 +33,8 @@ class ClientCatalogServiceTest extends TestCase
         $this->assertTrue($catalog[0]['hwid']);
         $this->assertStringEndsWith('/client-download/sample/android', $catalog[0]['downloads'][0]['download_url']);
         $this->assertSame('github', $catalog[0]['downloads'][0]['source']);
+        $this->assertNull($catalog[0]['downloads'][0]['cloud_url']);
+        $this->assertNull($catalog[0]['downloads'][0]['tutorial_url']);
     }
 
     public function test_github_release_resolves_to_matching_install_asset_and_is_cached(): void
@@ -56,5 +61,33 @@ class ClientCatalogServiceTest extends TestCase
     {
         $this->expectException(RuntimeException::class);
         app(ClientCatalogService::class)->resolve('sample', 'windows');
+    }
+
+    public function test_qr_defaults_to_direct_and_configured_actions_are_isolated(): void
+    {
+        admin_setting([ClientCatalogService::SETTING_KEY => [
+            'sample' => ['android' => [
+                'direct' => 'https://downloads.example.com/sample.apk',
+                'cloud' => 'https://pan.example.com/sample',
+                'tutorial' => '/guide/12/sample',
+            ]],
+        ]]);
+
+        $service = app(ClientCatalogService::class);
+        $this->assertSame('https://downloads.example.com/sample.apk', $service->resolveAction('sample', 'android', 'qr'));
+        $this->assertSame('https://pan.example.com/sample', $service->resolveAction('sample', 'android', 'cloud'));
+        $this->assertSame('/guide/12/sample', $service->resolveAction('sample', 'android', 'tutorial'));
+        $catalog = $service->catalog();
+        $this->assertStringEndsWith('/client-link/sample/android/cloud', $catalog[0]['downloads'][0]['cloud_url']);
+        $this->assertStringEndsWith('/client-link/sample/android/tutorial', $catalog[0]['downloads'][0]['tutorial_url']);
+    }
+
+    public function test_production_catalog_starts_with_requested_client_order(): void
+    {
+        $productionConfig = require base_path('config/client_catalog.php');
+        config()->set('client_catalog.clients', $productionConfig['clients']);
+
+        $ids = array_column(app(ClientCatalogService::class)->catalog(), 'id');
+        $this->assertSame(['karing', 'happ', 'clash-mi', 'koalaclash'], array_slice($ids, 0, 4));
     }
 }

@@ -4,6 +4,17 @@ return [
     'cache_ttl' => 21600,
     'clients' => [
         [
+            'id' => 'karing', 'name' => 'Karing', 'core' => 'Sing-box',
+            'description' => '基于 Sing-box 的多平台客户端；HWID 需要在客户端中启用。',
+            'downloads' => [
+                'android' => ['repo' => 'KaringX/karing', 'patterns' => ['/_android_arm\.apk$/i', '/_android_arm64-v8a\.apk$/i']],
+                'ios' => ['url' => 'https://apps.apple.com/us/app/karing/id6472431552', 'source' => 'app-store'],
+                'macos' => ['repo' => 'KaringX/karing', 'patterns' => ['/_macos_universal\.dmg$/i']],
+                'windows' => ['repo' => 'KaringX/karing', 'patterns' => ['/_windows_x64\.exe$/i']],
+                'linux' => ['repo' => 'KaringX/karing', 'patterns' => ['/_linux_amd64\.AppImage$/i', '/_linux_amd64\.deb$/i']],
+            ],
+        ],
+        [
             'id' => 'happ', 'name' => 'Happ', 'core' => 'Xray', 'featured' => true,
             'description' => '支持 Android、iOS、macOS、Windows 与 Linux 的多平台客户端。',
             'downloads' => [
@@ -12,6 +23,26 @@ return [
                 'macos' => ['repo' => 'Happ-proxy/happ-desktop', 'patterns' => ['/\.macOS\.universal\.dmg$/i']],
                 'windows' => ['repo' => 'Happ-proxy/happ-desktop', 'patterns' => ['/setup-Happ\.x64\.exe$/i']],
                 'linux' => ['repo' => 'Happ-proxy/happ-desktop', 'patterns' => ['/\.linux\.x64\.deb$/i']],
+            ],
+        ],
+        [
+            'id' => 'clash-mi', 'name' => 'Clash Mi', 'core' => 'Mihomo',
+            'description' => '跨平台 Mihomo 客户端；HWID 需要在客户端中启用。',
+            'downloads' => [
+                'android' => ['repo' => 'KaringX/clashmi', 'patterns' => ['/_android_arm\.apk$/i', '/_android_arm64-v8a\.apk$/i']],
+                'ios' => ['url' => 'https://apps.apple.com/us/app/clash-mi/id6744321968', 'source' => 'app-store'],
+                'macos' => ['repo' => 'KaringX/clashmi', 'patterns' => ['/_macos_universal\.dmg$/i']],
+                'windows' => ['repo' => 'KaringX/clashmi', 'patterns' => ['/_windows_x64\.exe$/i']],
+                'linux' => ['repo' => 'KaringX/clashmi', 'patterns' => ['/_linux_amd64\.AppImage$/i', '/_linux_amd64\.deb$/i']],
+            ],
+        ],
+        [
+            'id' => 'koalaclash', 'name' => 'Koala Clash', 'core' => 'Mihomo', 'featured' => true,
+            'description' => 'Clash Verge Rev 的轻量增强分支。',
+            'downloads' => [
+                'windows' => ['repo' => 'coolcoala/clash-verge-rev-lite', 'patterns' => ['/_x64-setup\.exe$/i']],
+                'macos' => ['repo' => 'coolcoala/clash-verge-rev-lite', 'patterns' => ['/_arm64\.pkg$/i', '/_x64\.pkg$/i']],
+                'linux' => ['repo' => 'coolcoala/clash-verge-rev-lite', 'patterns' => ['/_amd64\.deb$/i']],
             ],
         ],
         [
@@ -33,32 +64,12 @@ return [
             ],
         ],
         [
-            'id' => 'karing', 'name' => 'Karing', 'core' => 'Sing-box',
-            'description' => '基于 Sing-box 的多平台客户端；HWID 需要在客户端中启用。',
-            'downloads' => [
-                'android' => ['repo' => 'KaringX/karing', 'patterns' => ['/_android_arm\.apk$/i', '/_android_arm64-v8a\.apk$/i']],
-                'ios' => ['url' => 'https://apps.apple.com/us/app/karing/id6472431552', 'source' => 'app-store'],
-                'macos' => ['repo' => 'KaringX/karing', 'patterns' => ['/_macos_universal\.dmg$/i']],
-                'windows' => ['repo' => 'KaringX/karing', 'patterns' => ['/_windows_x64\.exe$/i']],
-                'linux' => ['repo' => 'KaringX/karing', 'patterns' => ['/_linux_amd64\.AppImage$/i', '/_linux_amd64\.deb$/i']],
-            ],
-        ],
-        [
             'id' => 'prizrakbox', 'name' => 'Prizrak-Box', 'core' => 'Mihomo',
             'description' => '带有自定义路由模板的桌面客户端。',
             'downloads' => [
                 'windows' => ['repo' => 'legiz-ru/Prizrak-Box', 'patterns' => ['/windows-amd64-Setup\.exe$/i', '/windows-amd64\.msi$/i']],
                 'macos' => ['repo' => 'legiz-ru/Prizrak-Box', 'patterns' => ['/macos-arm64\.zip$/i', '/macos-amd64\.zip$/i']],
                 'linux' => ['repo' => 'legiz-ru/Prizrak-Box', 'patterns' => ['/linux-amd64\.deb$/i']],
-            ],
-        ],
-        [
-            'id' => 'koalaclash', 'name' => 'Koala Clash', 'core' => 'Mihomo', 'featured' => true,
-            'description' => 'Clash Verge Rev 的轻量增强分支。',
-            'downloads' => [
-                'windows' => ['repo' => 'coolcoala/clash-verge-rev-lite', 'patterns' => ['/_x64-setup\.exe$/i']],
-                'macos' => ['repo' => 'coolcoala/clash-verge-rev-lite', 'patterns' => ['/_arm64\.pkg$/i', '/_x64\.pkg$/i']],
-                'linux' => ['repo' => 'coolcoala/clash-verge-rev-lite', 'patterns' => ['/_amd64\.deb$/i']],
             ],
         ],
         [
@@ -95,17 +106,6 @@ return [
             'downloads' => [
                 'ios' => ['url' => 'https://apps.apple.com/us/app/shadowrocket/id932747118', 'source' => 'app-store'],
                 'macos' => ['url' => 'https://apps.apple.com/us/app/shadowrocket/id932747118', 'source' => 'app-store'],
-            ],
-        ],
-        [
-            'id' => 'clash-mi', 'name' => 'Clash Mi', 'core' => 'Mihomo',
-            'description' => '跨平台 Mihomo 客户端；HWID 需要在客户端中启用。',
-            'downloads' => [
-                'android' => ['repo' => 'KaringX/clashmi', 'patterns' => ['/_android_arm\.apk$/i', '/_android_arm64-v8a\.apk$/i']],
-                'ios' => ['url' => 'https://apps.apple.com/us/app/clash-mi/id6744321968', 'source' => 'app-store'],
-                'macos' => ['repo' => 'KaringX/clashmi', 'patterns' => ['/_macos_universal\.dmg$/i']],
-                'windows' => ['repo' => 'KaringX/clashmi', 'patterns' => ['/_windows_x64\.exe$/i']],
-                'linux' => ['repo' => 'KaringX/clashmi', 'patterns' => ['/_linux_amd64\.AppImage$/i', '/_linux_amd64\.deb$/i']],
             ],
         ],
         [
