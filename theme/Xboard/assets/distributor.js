@@ -19,12 +19,12 @@
     'zh-CN': {
       buy: '购买订阅', orders: '我的订单', invite: '我的邀请', knowledge: '使用文档', clients: '客户端下载', logout: '退出登录',
       title: '分销订阅中心', subtitle: '每个订单生成一份独立订阅，客户扫码领取后不可再次领取。',
-      buyNow: '立即下单', original: '原价', free: '分销免支付', confirm: '确认下单', cancel: '取消',
+      buyNow: '立即下单', original: '原价', free: '分销免支付', cancel: '取消',
       allPlans: '全部套餐', highTraffic: '大流量', unlimitedSpeed: '不限速', unlimitedDevices: '不限设备',
       featured: '精选套餐', traffic: '套餐流量', speed: '速度限制', devices: '同时在线', resetMethod: '流量重置',
       followSystem: '跟随系统', firstDayMonth: '每月1日', monthlyReset: '按月重置', neverReset: '不重置', firstDayYear: '每年1月1日', yearlyReset: '按年重置',
       perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次性交付',
-      saved: '已省', orderAction: '下单', soldOut: '已售罄',
+      saved: '已省', orderAction: '已确认，直接下单', soldOut: '已售罄',
       promoStable: '稳定', promoFast: '高速', promoCompensation: '慢必赔',
       deliveryStepOne: '选择套餐并下单', deliveryStepTwo: '客户扫描二维码', deliveryStepThree: '确认节点可用',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
@@ -35,9 +35,7 @@
       claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
       waitingConnection: '等待用户开启代理进入网络', connectedThrough: '客户已经通过 {node} 节点进入网络',
       settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
-      remark: '备注', actions: '操作',
-      customerName: '用户名称', customerNamePlaceholder: '请输入便于售后识别的用户名称',
-      customerNameRequired: '为了售后方便，请输入备注清楚用户',
+      remark: '备注', actions: '操作', customerName: '用户名称',
       boundDevices: '已绑定设备', unboundDevice: '尚未绑定设备', hwidDisabled: '未启用设备绑定',
       viewSubscriptionQr: '查看订阅二维码', subscriptionPending: '订阅尚未生成',
       subscriptionBoundDevice: '订阅已绑定设备', subscriptionUnboundDevice: '订阅尚未绑定设备',
@@ -57,12 +55,12 @@
     'en-US': {
       buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', knowledge: 'Documentation', clients: 'Client downloads', logout: 'Sign out',
       title: 'Distributor Center', subtitle: 'Each order creates an independent subscription that can be claimed once.',
-      buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', confirm: 'Confirm', cancel: 'Cancel',
+      buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', cancel: 'Cancel',
       allPlans: 'All plans', highTraffic: 'High traffic', unlimitedSpeed: 'Unlimited speed', unlimitedDevices: 'Unlimited devices',
       featured: 'Featured', traffic: 'Traffic', speed: 'Speed', devices: 'Devices', resetMethod: 'Traffic reset',
       followSystem: 'System default', firstDayMonth: '1st of each month', monthlyReset: 'Monthly', neverReset: 'Never', firstDayYear: 'January 1st', yearlyReset: 'Yearly',
       perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time delivery',
-      saved: 'Saved', orderAction: 'Order', soldOut: 'Sold out',
+      saved: 'Saved', orderAction: 'Confirmed — place order', soldOut: 'Sold out',
       promoStable: 'Stable', promoFast: 'Fast', promoCompensation: 'Performance guaranteed',
       deliveryStepOne: 'Choose and order', deliveryStepTwo: 'Customer scans QR', deliveryStepThree: 'Verify service',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
@@ -73,9 +71,7 @@
       claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
       waitingConnection: 'Waiting for the customer to enable the proxy', connectedThrough: 'Customer connected through {node}',
       settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
-      remark: 'Remark', actions: 'Actions',
-      customerName: 'Customer name', customerNamePlaceholder: 'Enter a name for after-sales identification',
-      customerNameRequired: 'Enter a clear customer name for after-sales support.',
+      remark: 'Remark', actions: 'Actions', customerName: 'Customer name',
       boundDevices: 'Bound devices', unboundDevice: 'No device bound', hwidDisabled: 'Device binding disabled',
       viewSubscriptionQr: 'View subscription QR', subscriptionPending: 'Subscription not generated',
       subscriptionBoundDevice: 'Subscription bound to device', subscriptionUnboundDevice: 'Subscription has no bound device',
@@ -526,21 +522,23 @@
     `);
   }
 
-  function openPurchaseModal(plan, period) {
+  async function purchasePlan(plan, period, button) {
     if (!plan || typeof plan.capacity_limit === 'string' || !period || !availablePeriods(plan).some(([key]) => key === period) || Number(plan[period]) <= 0) {
       toast(t('planUnavailable'), 'error');
-      return false;
+      return;
     }
     state.selectedPeriods[plan.id] = period;
-    state.modal = { type: 'purchase', planId: plan.id, planName: plan.name, period, periodLabel: `${periodName(period)} · ${money(plan[period])}`, price: plan[period], customerName: '' };
-    renderModal();
-    return true;
-  }
-
-  function confirmPurchase(planId) {
-    const plan = state.plans.find((item) => String(item.id) === String(planId));
-    const period = state.selectedPeriods[planId];
-    openPurchaseModal(plan, period);
+    if (button) button.disabled = true;
+    try {
+      const tradeNo = dataOf(await api('/user/order/save', {
+        method: 'POST', data: { plan_id: plan.id, period },
+      }));
+      await openDelivery(tradeNo);
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   async function repurchaseDelivery() {
@@ -552,32 +550,7 @@
       toast(t('planUnavailable'), 'error');
       return;
     }
-    stopPolling();
-    openPurchaseModal(plan, delivery.period);
-  }
-
-  async function submitPurchase() {
-    const modal = state.modal;
-    if (!modal || modal.type !== 'purchase') return;
-    const customerNameInput = document.getElementById('dist-customer-name');
-    const customerName = String(customerNameInput?.value || '').trim();
-    if (!customerName) {
-      toast(t('customerNameRequired'), 'error');
-      customerNameInput?.focus();
-      return;
-    }
-    modal.customerName = customerName;
-    const button = document.querySelector('[data-modal-action="confirm-purchase"]');
-    if (button) button.disabled = true;
-    try {
-      const tradeNo = dataOf(await api('/user/order/save', {
-        method: 'POST', data: { plan_id: modal.planId, period: modal.period, customer_name: customerName },
-      }));
-      await openDelivery(tradeNo);
-    } catch (error) {
-      toast(error.message, 'error');
-      if (button) button.disabled = false;
-    }
+    await purchasePlan(plan, delivery.period, document.querySelector('[data-modal-action="buy-again"]'));
   }
 
   async function renderOrders() {
@@ -725,14 +698,6 @@
     root.classList.add('open');
     document.documentElement.classList.add('dist-modal-open');
     document.body.classList.add('dist-modal-open');
-    if (state.modal.type === 'purchase') {
-      const m = state.modal;
-      root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${t('confirm')}</h2>
-        <dl><div><dt>${t('plan')}</dt><dd>${escapeHtml(m.planName)}</dd></div><div><dt>${t('period')}</dt><dd>${escapeHtml(m.periodLabel)}</dd></div><div><dt>${t('original')}</dt><dd>${money(m.price)}</dd></div><div><dt>${t('status')}</dt><dd class="dist-free">${t('free')}</dd></div></dl>
-        <label class="dist-customer-name" for="dist-customer-name"><span>${t('customerName')} <b>*</b></span><input id="dist-customer-name" type="text" maxlength="64" autocomplete="off" value="${escapeHtml(m.customerName || '')}" placeholder="${t('customerNamePlaceholder')}"></label>
-        <div class="dist-modal-actions"><button data-modal-action="cancel">${t('cancel')}</button><button class="primary" data-modal-action="confirm-purchase">${t('confirm')}</button></div></section></div>`;
-      return;
-    }
     if (state.modal.type === 'knowledge') {
       const article = state.modal.article;
       root.innerHTML = `<div class="dist-modal-backdrop"><article class="dist-modal dist-knowledge-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${escapeHtml(article.title)}</h2><button type="button" class="dist-knowledge-share" data-copy="${escapeHtml(article.share_url || `${window.location.origin}/guide/${article.id}`)}">复制分享链接</button><div class="dist-knowledge-updated">${t('lastUpdated')}：${formatTime(article.updated_at)}</div><div class="dist-knowledge-body">${article.body || ''}</div></article></div>`;
@@ -806,7 +771,11 @@
       return;
     }
     const buy = target.closest('[data-buy]');
-    if (buy) { confirmPurchase(buy.dataset.buy); return; }
+    if (buy) {
+      const plan = state.plans.find((item) => String(item.id) === String(buy.dataset.buy));
+      await purchasePlan(plan, state.selectedPeriods[buy.dataset.buy], buy);
+      return;
+    }
     const subscriptionQr = target.closest('[data-subscription-qr]');
     if (subscriptionQr) { try { await openSubscriptionQr(subscriptionQr.dataset.subscriptionQr); } catch (e) { toast(e.message, 'error'); } return; }
     const knowledge = target.closest('[data-knowledge-id]');
@@ -877,8 +846,7 @@
   async function handleModalAction(target) {
     const action = target.closest('[data-modal-action]')?.dataset.modalAction;
     if (!action) return;
-    if (action === 'confirm-purchase') await submitPurchase();
-    else if (action === 'close-delivery') closeModal();
+    if (action === 'close-delivery') closeModal();
     else if (action === 'buy-again') {
       try { await repurchaseDelivery(); } catch (error) { toast(error.message, 'error'); }
     }

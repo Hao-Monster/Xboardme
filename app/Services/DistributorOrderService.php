@@ -19,12 +19,9 @@ use BaconQrCode\Writer;
 
 class DistributorOrderService
 {
-    public function create(User $distributor, Plan $plan, string $period, string $customerName): Order
+    public function create(User $distributor, Plan $plan, string $period, ?string $customerName = null): Order
     {
-        $customerName = trim($customerName);
-        if ($customerName === '') {
-            throw new ApiException('为了售后方便，请输入备注清楚用户', 422);
-        }
+        $customerName = trim((string) $customerName);
         if (mb_strlen($customerName) > 64) {
             throw new ApiException('用户名称不能超过64个字符', 422);
         }
@@ -83,7 +80,7 @@ class DistributorOrderService
             DistributorOrder::create([
                 'order_id' => $order->id,
                 'distributor_user_id' => $lockedDistributor->id,
-                'customer_name' => $customerName,
+                'customer_name' => $customerName !== '' ? $customerName : null,
                 'subscriber_user_id' => $subscriber->id,
                 'claim_token' => $claimToken,
                 'claim_token_hash' => hash('sha256', $claimToken),

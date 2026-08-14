@@ -67,28 +67,26 @@ class DistributorOrderTest extends TestCase
         $this->assertSame($originalExpiredAt, $distributor->expired_at);
     }
 
-    public function test_distributor_checkout_requires_and_trims_customer_name(): void
+    public function test_distributor_checkout_allows_an_omitted_or_blank_customer_name_and_trims_an_optional_name(): void
     {
         $distributor = $this->makeUser('checkout-name@example.com', true);
         $plan = $this->makePlan();
         Sanctum::actingAs($distributor);
 
-        foreach ([null, '   '] as $customerName) {
-            $payload = [
-                'plan_id' => $plan->id,
-                'period' => 'month_price',
-            ];
-            if ($customerName !== null) {
-                $payload['customer_name'] = $customerName;
-            }
+        $withoutNameTradeNo = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+        ])->assertOk()->json('data');
+        $this->assertNull(Order::where('trade_no', $withoutNameTradeNo)->firstOrFail()
+            ->distributorOrder()->value('customer_name'));
 
-            $response = $this->postJson('/api/v1/user/order/save', $payload);
-            $response->assertUnprocessable()
-                ->assertJsonPath(
-                    'errors.customer_name.0',
-                    '为了售后方便，请输入备注清楚用户'
-                );
-        }
+        $blankNameTradeNo = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'customer_name' => '   ',
+        ])->assertOk()->json('data');
+        $this->assertNull(Order::where('trade_no', $blankNameTradeNo)->firstOrFail()
+            ->distributorOrder()->value('customer_name'));
 
         $this->postJson('/api/v1/user/order/save', [
             'plan_id' => $plan->id,

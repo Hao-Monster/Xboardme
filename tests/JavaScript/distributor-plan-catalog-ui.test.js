@@ -30,7 +30,7 @@ test('order button combines original price, calculated saving and emphasized act
   assert.match(source, /const selectedSaving = periodSavings\(plan, selectedPeriod\)/);
   assert.match(source, /<span>\$\{t\('original'\)\} \$\{money\(selectedPrice\)\}<\/span><span>\$\{t\('saved'\)\} \$\{money\(selectedSaving\)\}<\/span><strong>\$\{t\('orderAction'\)\}<\/strong>/);
   assert.match(source, /saved: '已省'/);
-  assert.match(source, /orderAction: '下单'/);
+  assert.match(source, /orderAction: '已确认，直接下单'/);
   assert.match(styles, /\.dist-plan-actions button strong \{[^}]*font-size:18px/);
 });
 
@@ -60,20 +60,17 @@ test('every period price carries its own gold monthly-equivalent insight', () =>
   assert.match(styles, /\.dist-period-options button small \{[^}]*color:#b7791f/);
 });
 
-test('period selection changes display state while checkout keeps the existing order contract', () => {
+test('period selection changes display state while direct checkout preserves the selected period', () => {
   assert.match(source, /selectedPeriods:\s*\{\}/);
   assert.match(source, /state\.selectedPeriods\[period\.dataset\.planId\]/);
 
-  const confirmBlock = source.match(/function confirmPurchase\(planId\)[\s\S]*?\n  }/);
-  assert.ok(confirmBlock, 'purchase confirmation should exist');
-  assert.match(confirmBlock[0], /state\.selectedPeriods\[planId\]/);
-  assert.match(confirmBlock[0], /openPurchaseModal\(plan, period\)/);
-
-  const submitBlock = source.match(/async function submitPurchase\(\)[\s\S]*?\n  }/);
-  assert.ok(submitBlock, 'purchase submission should exist');
-  assert.match(submitBlock[0], /\/user\/order\/save/);
-  assert.match(submitBlock[0], /plan_id:\s*modal\.planId/);
-  assert.match(submitBlock[0], /period:\s*modal\.period/);
+  const purchaseBlock = source.match(/async function purchasePlan\(plan, period, button\)[\s\S]*?\n  }/);
+  assert.ok(purchaseBlock, 'direct purchase handler should exist');
+  assert.match(purchaseBlock[0], /\/user\/order\/save/);
+  assert.match(purchaseBlock[0], /plan_id:\s*plan\.id/);
+  assert.match(purchaseBlock[0], /period \}/);
+  assert.match(source, /await purchasePlan\(plan, state\.selectedPeriods\[buy\.dataset\.buy\], buy\)/);
+  assert.doesNotMatch(source, /confirmPurchase|openPurchaseModal|submitPurchase/);
 });
 
 test('catalog remains isolated behind distributor detection and scoped styles', () => {

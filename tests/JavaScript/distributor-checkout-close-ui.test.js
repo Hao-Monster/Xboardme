@@ -16,14 +16,13 @@ test('checkout delivery closes locally without confirmation, server mutation, re
   assert.doesNotMatch(distributor, /dismissed_deliveries|dismissedDeliveries/);
 });
 
-test('buy again reopens confirmation for the current plan and period with a blank required customer name', () => {
+test('buy again directly creates an order for the current plan and period', () => {
   const repurchase = distributor.match(/async function repurchaseDelivery\(\)[\s\S]*?\n  }/);
   assert.ok(repurchase, 'repurchase handler should exist');
   assert.match(repurchase[0], /delivery\.plan_id/);
   assert.match(repurchase[0], /delivery\.period/);
-  assert.match(repurchase[0], /openPurchaseModal\(plan, delivery\.period\)/);
-  assert.match(distributor, /customerName: ''/);
-  assert.match(distributor, /customerNameRequired/);
+  assert.match(repurchase[0], /await purchasePlan\(plan, delivery\.period, document\.querySelector\('\[data-modal-action="buy-again"\]'\)\)/);
+  assert.doesNotMatch(distributor, /openPurchaseModal|submitPurchase|customerNameRequired/);
   assert.match(distributor, /planUnavailable: '套餐已下架或当前周期不可购买'/);
 });
 
