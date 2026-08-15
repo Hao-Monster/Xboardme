@@ -102,18 +102,20 @@ jobs:
           jq -e '((.data[0:4] | map(.id)) == ["karing", "happ", "clash-mi", "koalaclash"])
             and all(.data[]; all(.downloads[]; has("download_url") and has("cloud_url") and has("tutorial_url")))' clients.json >/dev/null
 
-          curl --silent --show-error --fail \
-            'http://127.0.0.1:17001/assets/admin-client-catalog.js' | grep -q '客户端管理'
-          curl --silent --show-error --fail \
-            'http://127.0.0.1:17001/assets/admin-distributor.js' | grep -q '下单时间'
-          curl --silent --show-error --fail \
-            'http://127.0.0.1:17001/theme/Xboard/assets/client-center.js' | grep -q '网盘下载'
-          curl --silent --show-error --fail \
-            'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q '/user/order/renew'
-          curl --silent --show-error --fail \
-            'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q 'data-entitlement-toggle'
-          curl --silent --show-error --fail \
-            'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q 'orderTime'
+          curl --silent --show-error --fail --output admin-client-catalog.js \
+            'http://127.0.0.1:17001/assets/admin-client-catalog.js'
+          grep -q '客户端管理' admin-client-catalog.js
+          curl --silent --show-error --fail --output admin-distributor.js \
+            'http://127.0.0.1:17001/assets/admin-distributor.js'
+          grep -q '下单时间' admin-distributor.js
+          curl --silent --show-error --fail --output client-center.js \
+            'http://127.0.0.1:17001/theme/Xboard/assets/client-center.js'
+          grep -q '网盘下载' client-center.js
+          curl --silent --show-error --fail --output distributor.js \
+            'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js'
+          grep -q '/user/order/renew' distributor.js
+          grep -q 'data-entitlement-toggle' distributor.js
+          grep -q 'orderTime' distributor.js
 
           order_count=$(jq '.data | length' orders.json)
           export_status=$(curl --silent --show-error \
