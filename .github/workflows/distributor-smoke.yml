@@ -58,6 +58,10 @@ jobs:
           done
           test "$tunnel_ready" = '1'
 
+          curl --silent --show-error --fail --output dashboard.html \
+            'http://127.0.0.1:17001/'
+          grep -q 'distributor-message-guard.js' dashboard.html
+
           login_status=$(curl --silent --show-error \
             --output login.json --write-out '%{http_code}' \
             --request POST 'http://127.0.0.1:17001/api/v1/passport/auth/login' \
@@ -116,6 +120,9 @@ jobs:
           grep -q '/user/order/renew' distributor.js
           grep -q 'data-entitlement-toggle' distributor.js
           grep -q 'orderTime' distributor.js
+          curl --silent --show-error --fail --output distributor-message-guard.js \
+            'http://127.0.0.1:17001/theme/Xboard/assets/distributor-message-guard.js'
+          grep -q 'DISTRIBUTOR_ACCESS_DENIED' distributor-message-guard.js
 
           order_count=$(jq '.data | length' orders.json)
           export_status=$(curl --silent --show-error \
@@ -140,5 +147,6 @@ jobs:
             --header "Authorization: $auth_data" \
             'http://127.0.0.1:17001/api/v1/user/getSubscribe')
           test "$restricted_status" = '403'
+          jq -e '.message == "分销商账号无权访问该功能"' restricted.json >/dev/null
 
           echo 'Distributor production smoke test passed.'

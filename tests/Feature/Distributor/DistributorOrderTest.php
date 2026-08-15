@@ -678,6 +678,15 @@ class DistributorOrderTest extends TestCase
         $this->assertSame('东京 A', $delivery->refresh()->connected_node_name);
     }
 
+    public function test_distributor_restricted_route_keeps_its_forbidden_api_contract(): void
+    {
+        Sanctum::actingAs($this->makeUser('restricted-dealer@example.com', true));
+
+        $this->getJson('/api/v1/user/getSubscribe')
+            ->assertForbidden()
+            ->assertJsonPath('message', '分销商账号无权访问该功能');
+    }
+
     public function test_distributor_cannot_access_normal_subscription_api_and_order_resource_never_exposes_real_token(): void
     {
         $distributor = $this->makeUser('dealer@example.com', true);
