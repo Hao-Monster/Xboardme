@@ -108,6 +108,8 @@ jobs:
             'http://127.0.0.1:17001/theme/Xboard/assets/client-center.js' | grep -q '网盘下载'
           curl --silent --show-error --fail \
             'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q '/user/order/renew'
+          curl --silent --show-error --fail \
+            'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q 'data-entitlement-toggle'
 
           order_count=$(jq '.data | length' orders.json)
           export_status=$(curl --silent --show-error \

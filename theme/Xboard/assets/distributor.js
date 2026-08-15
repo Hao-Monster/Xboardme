@@ -41,7 +41,7 @@
       subscriptionBoundDevice: '订阅已绑定设备', subscriptionUnboundDevice: '订阅尚未绑定设备',
       subscriptionHwidDisabled: '该订阅未启用设备绑定', copyImage: '复制图片', downloadImage: '下载图片',
       copyImageUnsupported: '当前浏览器不支持复制图片，请使用下载图片',
-      entitlement: '订阅权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
+      entitlement: '订阅权益', viewEntitlement: '查看订阅权益', hideEntitlement: '收起订阅权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
       expiresAt: '到期时间', speedLimit: '限速', deviceLimit: '设备限制', permanent: '长期有效', unlimited: '不限',
       renew: '续费', renewTitle: '续费现有订阅', renewHint: '续费后订阅链接、二维码、UUID 和已绑定设备保持不变。',
       renewPeriod: '续费周期', renewCurrentExpiry: '当前到期时间', renewConfirm: '确认续费', renewSuccess: '续费成功',
@@ -80,7 +80,7 @@
       subscriptionBoundDevice: 'Subscription bound to device', subscriptionUnboundDevice: 'Subscription has no bound device',
       subscriptionHwidDisabled: 'Device binding is disabled for this subscription', copyImage: 'Copy image', downloadImage: 'Download image',
       copyImageUnsupported: 'This browser cannot copy images. Use Download image instead.',
-      entitlement: 'Subscription entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
+      entitlement: 'Subscription entitlement', viewEntitlement: 'View subscription entitlement', hideEntitlement: 'Hide subscription entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
       expiresAt: 'Expires at', speedLimit: 'Speed limit', deviceLimit: 'Device limit', permanent: 'Never expires', unlimited: 'Unlimited',
       renew: 'Renew', renewTitle: 'Renew subscription', renewHint: 'The subscription URL, QR code, UUID, and bound devices will stay unchanged.',
       renewPeriod: 'Renewal period', renewCurrentExpiry: 'Current expiry', renewConfirm: 'Confirm renewal', renewSuccess: 'Renewed',
@@ -560,13 +560,38 @@
     await purchasePlan(plan, delivery.period, document.querySelector('[data-modal-action="buy-again"]'));
   }
 
+  function groupSubscriptionOrders(orders) {
+    const groups = new Map();
+    orders.forEach((order) => {
+      const subscriptionTradeNo = String(order.subscription_trade_no || order.trade_no || order.id);
+      if (!groups.has(subscriptionTradeNo)) {
+        groups.set(subscriptionTradeNo, { origin: null, renewals: [] });
+      }
+      const group = groups.get(subscriptionTradeNo);
+      if (order.is_subscription_origin) group.origin = order;
+      else group.renewals.push(order);
+    });
+
+    return Array.from(groups.values()).flatMap((group) => (
+      group.origin ? [group.origin, ...group.renewals] : group.renewals
+    ));
+  }
+
+  function toggleEntitlement(entitlementToggle, entitlementRow) {
+    const willExpand = entitlementToggle.getAttribute('aria-expanded') !== 'true';
+    entitlementToggle.setAttribute('aria-expanded', String(willExpand));
+    entitlementToggle.textContent = t(willExpand ? 'hideEntitlement' : 'viewEntitlement');
+    entitlementRow.hidden = !willExpand;
+  }
+
   async function renderOrders() {
     const params = new URLSearchParams();
     if (state.orderSettlementStatus !== '') params.set('settlement_status', state.orderSettlementStatus);
     if (state.orderSearch) params.set('search', state.orderSearch);
     const orders = dataOf(await api(`/user/order/fetch${params.size ? `?${params}` : ''}`)) || [];
     state.orders = orders;
-    const rows = orders.map((order) => {
+    const rows = groupSubscriptionOrders(orders).map((order) => {
+      const isRenewal = Number(order.type) === 2;
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
       const boundDevices = Array.isArray(order.bound_devices) ? order.bound_devices : [];
@@ -575,7 +600,8 @@
         : boundDevices.length
           ? `<div class="dist-bound-device-list">${boundDevices.map((hwid) => `<code>${escapeHtml(hwid)}</code>`).join('')}</div>`
           : `<span class="dist-device-state">${t('unboundDevice')}</span>`;
-      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr class="dist-entitlement-row"><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
+      const entitlementTarget = `dist-entitlement-${order.id}`;
+      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr id="${entitlementTarget}" class="dist-entitlement-row" data-entitlement-for="${escapeHtml(order.trade_no)}" hidden><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
         <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
@@ -591,18 +617,22 @@
       const renewAction = order.can_renew
         ? `<button class="dist-link-btn dist-renew-btn" data-renew="${escapeHtml(order.trade_no)}">${t('renew')}</button>`
         : '';
-      const orderType = escapeHtml(Number(order.type) === 2 ? t('renew') : t('newPurchase'));
-      const originalOrder = Number(order.type) === 2 && order.subscription_trade_no
+      const entitlementAction = entitlement && order.is_subscription_origin
+        ? `<button type="button" class="dist-link-btn dist-entitlement-toggle" data-entitlement-toggle="${entitlementTarget}" aria-expanded="false" aria-controls="${entitlementTarget}">${t('viewEntitlement')}</button>`
+        : '';
+      const orderType = escapeHtml(isRenewal ? t('renew') : t('newPurchase'));
+      const originalOrder = isRenewal && order.subscription_trade_no
         ? `<small>${t('originalOrder')}：${escapeHtml(order.subscription_trade_no)}</small>`
         : '';
-      return `<tr>
+      const rowClass = isRenewal ? 'dist-renewal-order-row' : 'dist-origin-order-row';
+      return `<tr class="${rowClass}" data-subscription-trade-no="${escapeHtml(order.subscription_trade_no || order.trade_no)}">
         <td><strong>${escapeHtml(order.trade_no)}</strong><small>${orderType} · ${formatTime(order.created_at)}</small>${originalOrder}</td>
         <td>${escapeHtml(order.customer_name || '-')}</td>
         <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
         <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
         <td><div class="dist-order-remark">${order.remark ? escapeHtml(order.remark) : '—'}</div></td>
-        <td><div class="dist-order-actions">${order.is_subscription_origin ? qrAction : ''}${renewAction}</div></td>
+        <td><div class="dist-order-actions">${order.is_subscription_origin ? qrAction : ''}${entitlementAction}${renewAction}</div></td>
       </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
@@ -847,6 +877,13 @@
     }
     const subscriptionQr = target.closest('[data-subscription-qr]');
     if (subscriptionQr) { try { await openSubscriptionQr(subscriptionQr.dataset.subscriptionQr); } catch (e) { toast(e.message, 'error'); } return; }
+    const entitlementToggle = target.closest('[data-entitlement-toggle]');
+    if (entitlementToggle) {
+      const entitlementRow = document.getElementById(entitlementToggle.dataset.entitlementToggle);
+      if (!entitlementRow) return;
+      toggleEntitlement(entitlementToggle, entitlementRow);
+      return;
+    }
     const renew = target.closest('[data-renew]');
     if (renew) { try { openRenewal(renew.dataset.renew); } catch (e) { toast(e.message, 'error'); } return; }
     const knowledge = target.closest('[data-knowledge-id]');
