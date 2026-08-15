@@ -74,10 +74,11 @@ html.distributor-mode, html.distributor-mode body { margin:0; background:var(--d
 .dist-plan-actions button strong { font-size:18px; font-weight:900; line-height:1; }
 .dist-plan-actions button:disabled { opacity:.48; cursor:not-allowed; }
 .dist-table-wrap { overflow:auto; }
-.dist-table-wrap table { width:100%; border-collapse:collapse; min-width:840px; }
+.dist-table-wrap table { width:100%; border-collapse:collapse; min-width:960px; }
 .dist-table-wrap th,.dist-table-wrap td { padding:16px 18px; border-bottom:1px solid var(--dist-border); text-align:left; }
 .dist-table-wrap th { color:var(--dist-muted); font-size:13px; font-weight:600; }
 .dist-table-wrap td small { display:block; color:var(--dist-muted); margin-top:5px; }
+.dist-order-time { min-width:150px; white-space:nowrap; color:var(--dist-muted); font-size:13px; }
 .dist-table-wrap tbody tr:last-child td { border-bottom:0; }
 .dist-entitlement-row[hidden] { display:none; }.dist-entitlement-row td { padding-top:0; background:color-mix(in srgb,var(--dist-primary-soft) 38%,transparent); }.dist-entitlement-row>td>div { padding:14px 16px; border:1px solid color-mix(in srgb,var(--dist-primary) 25%,var(--dist-border)); border-radius:10px; }.dist-entitlement-row strong { display:block; margin-bottom:10px; color:var(--dist-primary); font-size:13px; }.dist-entitlement-row dl { display:grid; grid-template-columns:repeat(4,minmax(125px,1fr)); gap:10px 16px; margin:0; }.dist-entitlement-row dl span { min-width:0; }.dist-entitlement-row dt { margin-bottom:3px; color:var(--dist-muted); font-size:11px; }.dist-entitlement-row dd { margin:0; overflow-wrap:anywhere; font-size:13px; font-weight:600; }
 .dist-origin-order-row td { background:var(--dist-panel); }.dist-renewal-order-row td { background:color-mix(in srgb,var(--dist-primary-soft) 26%,var(--dist-panel)); }.dist-renewal-order-row td:first-child { position:relative; padding-left:48px; }.dist-renewal-order-row td:first-child:before { content:'↳'; position:absolute; top:17px; left:23px; color:var(--dist-primary); font-size:17px; font-weight:800; }.dist-renewal-order-row td:first-child strong { color:color-mix(in srgb,var(--dist-text) 82%,var(--dist-primary)); }

@@ -427,7 +427,8 @@
     return state.orders.map((order) => {
       const remark = String(order.remark || '');
       return `<tr>
-      <td><strong>${escapeHtml(order.trade_no)}</strong><small>${escapeHtml(order.order_type_label || '-')} · ${formatTime(order.created_at)}</small>${Number(order.type) === 2 && order.subscription_trade_no ? `<small>关联原订单：${escapeHtml(order.subscription_trade_no)}</small>` : ''}</td>
+      <td><strong>${escapeHtml(order.trade_no)}</strong><small>${escapeHtml(order.order_type_label || '-')}</small>${Number(order.type) === 2 && order.subscription_trade_no ? `<small>关联原订单：${escapeHtml(order.subscription_trade_no)}</small>` : ''}</td>
+      <td class="admin-dist-order-time">${formatTime(order.created_at)}</td>
       <td>${escapeHtml(order.customer_name || '-')}</td><td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
       <td>${money(order.total_amount)}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
@@ -495,7 +496,7 @@
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
       <div class="admin-dist-search"><input id="admin-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button data-admin-dist="search-orders">查询</button><button class="secondary" data-admin-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
-      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>下单时间</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个订单</span><div><button data-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button data-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`);
   }
 
@@ -712,7 +713,7 @@
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
         <div class="admin-dist-search"><input id="native-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button type="button" data-native-dist="search-orders">查询</button><button type="button" class="secondary" data-native-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       </div>${nativeSummary()}
-      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
+      <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>下单时间</th><th>用户名称</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
       <footer class="admin-dist-pagination"><span>共 ${state.total} 个分销订单</span><div><button type="button" data-native-page="prev" ${state.page <= 1 ? 'disabled' : ''}>上一页</button><span>第 ${state.page} 页</span><button type="button" data-native-page="next" ${state.page * state.pageSize >= state.total ? 'disabled' : ''}>下一页</button></div></footer>`;
   }
 

@@ -105,11 +105,15 @@ jobs:
           curl --silent --show-error --fail \
             'http://127.0.0.1:17001/assets/admin-client-catalog.js' | grep -q '客户端管理'
           curl --silent --show-error --fail \
+            'http://127.0.0.1:17001/assets/admin-distributor.js' | grep -q '下单时间'
+          curl --silent --show-error --fail \
             'http://127.0.0.1:17001/theme/Xboard/assets/client-center.js' | grep -q '网盘下载'
           curl --silent --show-error --fail \
             'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q '/user/order/renew'
           curl --silent --show-error --fail \
             'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q 'data-entitlement-toggle'
+          curl --silent --show-error --fail \
+            'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q 'orderTime'
 
           order_count=$(jq '.data | length' orders.json)
           export_status=$(curl --silent --show-error \

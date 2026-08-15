@@ -32,7 +32,7 @@
       checkDelivery: '检查交付', issuing: '二维码已领取，正在等待订阅配置成功下发。',
       qrTitle: '客户订阅二维码', premiumCustomerQrTitle: '高端客户{customer}的订阅码', premiumCustomerQrTitleFallback: '高端客户的订阅码', qrHint: '请让终端客户使用订阅客户端扫描。二维码只能成功领取一次。',
       done: '已添加成功', closePopup: '关闭弹窗', buyAgain: '再次购买该套餐', planUnavailable: '套餐已下架或当前周期不可购买',
-      claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', amount: '订单金额', status: '订单状态',
+      claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', orderTime: '下单时间', amount: '订单金额', status: '订单状态',
       waitingConnection: '等待用户开启代理进入网络', connectedThrough: '客户已经通过 {node} 节点进入网络',
       settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
       remark: '备注', actions: '操作', customerName: '用户名称',
@@ -71,7 +71,7 @@
       checkDelivery: 'Check delivery', issuing: 'The QR was claimed. Waiting for the subscription configuration response.',
       qrTitle: 'Customer subscription QR', premiumCustomerQrTitle: 'Premium customer {customer} subscription QR', premiumCustomerQrTitleFallback: 'Premium customer subscription QR', qrHint: 'Scan with the customer subscription client. This QR can only be claimed once.',
       done: 'Added successfully', closePopup: 'Close window', buyAgain: 'Buy this plan again', planUnavailable: 'This plan or billing period is no longer available',
-      claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', amount: 'Amount', status: 'Status',
+      claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', orderTime: 'Order time', amount: 'Amount', status: 'Status',
       waitingConnection: 'Waiting for the customer to enable the proxy', connectedThrough: 'Customer connected through {node}',
       settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
       remark: 'Remark', actions: 'Actions', customerName: 'Customer name',
@@ -601,7 +601,7 @@
           ? `<div class="dist-bound-device-list">${boundDevices.map((hwid) => `<code>${escapeHtml(hwid)}</code>`).join('')}</div>`
           : `<span class="dist-device-state">${t('unboundDevice')}</span>`;
       const entitlementTarget = `dist-entitlement-${order.id}`;
-      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr id="${entitlementTarget}" class="dist-entitlement-row" data-entitlement-for="${escapeHtml(order.trade_no)}" hidden><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
+      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr id="${entitlementTarget}" class="dist-entitlement-row" data-entitlement-for="${escapeHtml(order.trade_no)}" hidden><td colspan="9"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
         <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
@@ -626,7 +626,8 @@
         : '';
       const rowClass = isRenewal ? 'dist-renewal-order-row' : 'dist-origin-order-row';
       return `<tr class="${rowClass}" data-subscription-trade-no="${escapeHtml(order.subscription_trade_no || order.trade_no)}">
-        <td><strong>${escapeHtml(order.trade_no)}</strong><small>${orderType} · ${formatTime(order.created_at)}</small>${originalOrder}</td>
+        <td><strong>${escapeHtml(order.trade_no)}</strong><small>${orderType}</small>${originalOrder}</td>
+        <td class="dist-order-time">${formatTime(order.created_at)}</td>
         <td>${escapeHtml(order.customer_name || '-')}</td>
         <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
@@ -637,8 +638,8 @@
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
       <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
-      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="8" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
+      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="9" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
   }
 
   function periodLabel(period) {
