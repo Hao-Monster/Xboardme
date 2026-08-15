@@ -687,6 +687,20 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('message', '分销商账号无权访问该功能');
     }
 
+    public function test_distributor_user_info_exposes_the_name_used_by_the_shell(): void
+    {
+        $distributor = $this->makeUser('named-dealer@example.com', true, [
+            'distributor_name' => '华东渠道',
+        ]);
+        Sanctum::actingAs($distributor);
+
+        $this->getJson('/api/v1/user/info')
+            ->assertOk()
+            ->assertJsonPath('data.email', 'named-dealer@example.com')
+            ->assertJsonPath('data.is_distributor', true)
+            ->assertJsonPath('data.distributor_name', '华东渠道');
+    }
+
     public function test_distributor_cannot_access_normal_subscription_api_and_order_resource_never_exposes_real_token(): void
     {
         $distributor = $this->makeUser('dealer@example.com', true);

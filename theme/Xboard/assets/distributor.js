@@ -118,6 +118,10 @@
   const escapeHtml = (value) => String(value ?? '')
     .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+  function distributorAccountLabel(user) {
+    const distributorName = String(user?.distributor_name ?? '').trim();
+    return distributorName || String(user?.email ?? '').trim();
+  }
   const stripHtml = (value) => {
     const element = document.createElement('div');
     element.innerHTML = String(value || '');
@@ -426,7 +430,7 @@
             <div class="dist-top-actions">
               <button data-action="theme" title="${state.dark ? t('light') : t('dark')}">${state.dark ? '☀' : '◐'}</button>
               <button data-action="language" title="${t('language')}">${state.locale === 'zh-CN' ? '中' : 'EN'}</button>
-              <span class="dist-account">● ${escapeHtml(state.user?.email || '')}</span>
+              <span class="dist-account">● ${escapeHtml(distributorAccountLabel(state.user))}</span>
               <button class="dist-logout" data-action="logout">${t('logout')}</button>
             </div>
           </header>

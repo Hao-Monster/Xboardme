@@ -108,6 +108,7 @@ class UserController extends Controller
                 'telegram_id',
                 'uuid',
                 'is_distributor',
+                'distributor_name',
             ])
             ->first();
         if (!$user) {

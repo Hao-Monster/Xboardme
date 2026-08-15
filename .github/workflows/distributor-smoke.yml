@@ -76,7 +76,7 @@ jobs:
             --header "Authorization: $auth_data" \
             'http://127.0.0.1:17001/api/v1/user/info')
           test "$info_status" = '200'
-          jq -e '(.status == "success") and (.data.is_distributor == true)' info.json >/dev/null
+          jq -e '(.status == "success") and (.data.is_distributor == true) and (.data | has("distributor_name"))' info.json >/dev/null
 
           plans_status=$(curl --silent --show-error \
             --output plans.json --write-out '%{http_code}' \
@@ -120,6 +120,7 @@ jobs:
           grep -q '/user/order/renew' distributor.js
           grep -q 'data-entitlement-toggle' distributor.js
           grep -q 'orderTime' distributor.js
+          grep -q 'distributorAccountLabel' distributor.js
           curl --silent --show-error --fail --output distributor-message-guard.js \
             'http://127.0.0.1:17001/theme/Xboard/assets/distributor-message-guard.js'
           grep -q 'DISTRIBUTOR_ACCESS_DENIED' distributor-message-guard.js
