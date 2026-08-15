@@ -85,7 +85,7 @@ jobs:
             --header "Authorization: $auth_data" \
             'http://127.0.0.1:17001/api/v1/user/order/fetch')
           test "$orders_status" = '200'
-          jq -e 'all(.data[]; has("remark"))' orders.json >/dev/null
+          jq -e 'all(.data[]; has("remark") and has("order_type_label") and has("subscription_trade_no"))' orders.json >/dev/null
 
           knowledge_status=$(curl --silent --show-error \
             --output knowledge.json --write-out '%{http_code}' \
@@ -106,6 +106,8 @@ jobs:
             'http://127.0.0.1:17001/assets/admin-client-catalog.js' | grep -q '客户端管理'
           curl --silent --show-error --fail \
             'http://127.0.0.1:17001/theme/Xboard/assets/client-center.js' | grep -q '网盘下载'
+          curl --silent --show-error --fail \
+            'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js' | grep -q '/user/order/renew'
 
           order_count=$(jq '.data | length' orders.json)
           export_status=$(curl --silent --show-error \

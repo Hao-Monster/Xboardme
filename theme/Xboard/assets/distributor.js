@@ -43,6 +43,9 @@
       copyImageUnsupported: '当前浏览器不支持复制图片，请使用下载图片',
       entitlement: '订阅权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
       expiresAt: '到期时间', speedLimit: '限速', deviceLimit: '设备限制', permanent: '长期有效', unlimited: '不限',
+      renew: '续费', renewTitle: '续费现有订阅', renewHint: '续费后订阅链接、二维码、UUID 和已绑定设备保持不变。',
+      renewPeriod: '续费周期', renewCurrentExpiry: '当前到期时间', renewConfirm: '确认续费', renewSuccess: '续费成功',
+      renewOrder: '续费订单', renewNewExpiry: '新的到期时间', orderType: '订单类型', originalOrder: '关联原订单', newPurchase: '新购',
       inviteUsers: '已邀请用户', validCommission: '有效佣金', pendingCommission: '确认中佣金',
       rate: '佣金比例', availableCommission: '可用佣金', generateCode: '生成邀请码', transfer: '佣金划转余额',
       inviteCode: '邀请码', copy: '复制邀请链接', commissionHistory: '佣金记录', noCode: '暂无邀请码',
@@ -79,6 +82,9 @@
       copyImageUnsupported: 'This browser cannot copy images. Use Download image instead.',
       entitlement: 'Subscription entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
       expiresAt: 'Expires at', speedLimit: 'Speed limit', deviceLimit: 'Device limit', permanent: 'Never expires', unlimited: 'Unlimited',
+      renew: 'Renew', renewTitle: 'Renew subscription', renewHint: 'The subscription URL, QR code, UUID, and bound devices will stay unchanged.',
+      renewPeriod: 'Renewal period', renewCurrentExpiry: 'Current expiry', renewConfirm: 'Confirm renewal', renewSuccess: 'Renewed',
+      renewOrder: 'Renewal order', renewNewExpiry: 'New expiry', orderType: 'Order type', originalOrder: 'Original order', newPurchase: 'New purchase',
       inviteUsers: 'Invited users', validCommission: 'Valid commission', pendingCommission: 'Pending commission',
       rate: 'Commission rate', availableCommission: 'Available commission', generateCode: 'Generate code',
       transfer: 'Transfer commission', inviteCode: 'Invite code', copy: 'Copy invite link',
@@ -105,6 +111,7 @@
     plans: [],
     planFilter: 'all',
     selectedPeriods: {},
+    orders: [],
   };
 
   const t = (key) => (COPY[state.locale] || COPY['zh-CN'])[key] || key;
@@ -558,6 +565,7 @@
     if (state.orderSettlementStatus !== '') params.set('settlement_status', state.orderSettlementStatus);
     if (state.orderSearch) params.set('search', state.orderSearch);
     const orders = dataOf(await api(`/user/order/fetch${params.size ? `?${params}` : ''}`)) || [];
+    state.orders = orders;
     const rows = orders.map((order) => {
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
@@ -567,7 +575,7 @@
         : boundDevices.length
           ? `<div class="dist-bound-device-list">${boundDevices.map((hwid) => `<code>${escapeHtml(hwid)}</code>`).join('')}</div>`
           : `<span class="dist-device-state">${t('unboundDevice')}</span>`;
-      const entitlementRow = entitlement ? `<tr class="dist-entitlement-row"><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
+      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr class="dist-entitlement-row"><td colspan="8"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
         <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
@@ -580,14 +588,21 @@
       const qrAction = order.can_view_subscription_qr
         ? `<button class="dist-link-btn" data-subscription-qr="${escapeHtml(order.trade_no)}">${t('viewSubscriptionQr')}</button>`
         : `<span class="dist-action-disabled">${t('subscriptionPending')}</span>`;
+      const renewAction = order.can_renew
+        ? `<button class="dist-link-btn dist-renew-btn" data-renew="${escapeHtml(order.trade_no)}">${t('renew')}</button>`
+        : '';
+      const orderType = escapeHtml(Number(order.type) === 2 ? t('renew') : t('newPurchase'));
+      const originalOrder = Number(order.type) === 2 && order.subscription_trade_no
+        ? `<small>${t('originalOrder')}：${escapeHtml(order.subscription_trade_no)}</small>`
+        : '';
       return `<tr>
-        <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
+        <td><strong>${escapeHtml(order.trade_no)}</strong><small>${orderType} · ${formatTime(order.created_at)}</small>${originalOrder}</td>
         <td>${escapeHtml(order.customer_name || '-')}</td>
         <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
         <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
         <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
         <td><div class="dist-order-remark">${order.remark ? escapeHtml(order.remark) : '—'}</div></td>
-        <td><div class="dist-order-actions">${qrAction}</div></td>
+        <td><div class="dist-order-actions">${order.is_subscription_origin ? qrAction : ''}${renewAction}</div></td>
       </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
@@ -680,6 +695,36 @@
     renderModal();
   }
 
+  function makeIdempotencyKey() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+      const random = Math.floor(Math.random() * 16);
+      const value = character === 'x' ? random : (random & 0x3) | 0x8;
+      return value.toString(16);
+    });
+  }
+
+  function renewalPeriods(order) {
+    return availablePeriods(order.plan || {}).filter(([key, , , months]) => months > 0 && key !== 'onetime_price');
+  }
+
+  function openRenewal(tradeNo) {
+    const order = state.orders.find((item) => item.trade_no === tradeNo && item.can_renew);
+    if (!order) throw new Error(t('planUnavailable'));
+    const periods = renewalPeriods(order);
+    if (!periods.length) throw new Error(t('planUnavailable'));
+    state.modal = {
+      type: 'renewal',
+      order,
+      periods,
+      period: periods.some(([key]) => key === order.period) ? order.period : periods[0][0],
+      idempotencyKey: makeIdempotencyKey(),
+      submitting: false,
+      result: null,
+    };
+    renderModal();
+  }
+
   function renderModal() {
     let root = document.getElementById('dist-modal-root');
     if (!root) {
@@ -709,6 +754,30 @@
         <img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}">
         <div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>
       </section></div>`;
+      return;
+    }
+    if (state.modal.type === 'renewal') {
+      const modal = state.modal;
+      if (modal.result) {
+        root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-renewal-modal"><button class="dist-modal-x" data-modal-action="renew-done">×</button><h2>${t('renewSuccess')}</h2>
+          <p class="dist-renewal-hint">${t('renewHint')}</p><dl>
+          <div><dt>${t('renewOrder')}</dt><dd>${escapeHtml(modal.result.trade_no)}</dd></div>
+          <div><dt>${t('amount')}</dt><dd>${money(modal.result.total_amount)}</dd></div>
+          <div><dt>${t('renewNewExpiry')}</dt><dd>${formatTime(modal.result.expired_at_after)}</dd></div>
+          <div><dt>${t('settlement')}</dt><dd>${t('unsettled')}</dd></div></dl>
+          <div class="dist-modal-actions"><button class="primary" data-modal-action="renew-done">${t('closePopup')}</button></div></section></div>`;
+        return;
+      }
+      const selectedPrice = Number(modal.order.plan?.[modal.period]) || 0;
+      const options = modal.periods.map(([key]) => `<option value="${key}" ${modal.period === key ? 'selected' : ''}>${periodName(key)} · ${money(modal.order.plan[key])}</option>`).join('');
+      root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-renewal-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${t('renewTitle')}</h2>
+        <p class="dist-renewal-hint">${t('renewHint')}</p><dl>
+        <div><dt>${t('customerName')}</dt><dd>${escapeHtml(modal.order.customer_name || '-')}</dd></div>
+        <div><dt>${t('plan')}</dt><dd>${escapeHtml(modal.order.plan?.name || '-')}</dd></div>
+        <div><dt>${t('renewCurrentExpiry')}</dt><dd>${formatTime(modal.order.subscription_entitlement?.expired_at)}</dd></div>
+        <div><dt>${t('amount')}</dt><dd>${money(selectedPrice)}</dd></div></dl>
+        <label class="dist-renewal-period">${t('renewPeriod')}<select id="dist-renewal-period" ${modal.submitting ? 'disabled' : ''}>${options}</select></label>
+        <div class="dist-modal-actions"><button data-modal-action="cancel" ${modal.submitting ? 'disabled' : ''}>${t('cancel')}</button><button class="primary" data-modal-action="confirm-renewal" ${modal.submitting ? 'disabled' : ''}>${modal.submitting ? t('loading') : t('renewConfirm')}</button></div></section></div>`;
       return;
     }
     const modal = state.modal;
@@ -778,6 +847,8 @@
     }
     const subscriptionQr = target.closest('[data-subscription-qr]');
     if (subscriptionQr) { try { await openSubscriptionQr(subscriptionQr.dataset.subscriptionQr); } catch (e) { toast(e.message, 'error'); } return; }
+    const renew = target.closest('[data-renew]');
+    if (renew) { try { openRenewal(renew.dataset.renew); } catch (e) { toast(e.message, 'error'); } return; }
     const knowledge = target.closest('[data-knowledge-id]');
     if (knowledge) { try { await openKnowledge(knowledge.dataset.knowledgeId); } catch (e) { toast(e.message, 'error'); } return; }
     const copy = target.closest('[data-copy]');
@@ -847,6 +918,29 @@
     const action = target.closest('[data-modal-action]')?.dataset.modalAction;
     if (!action) return;
     if (action === 'close-delivery') closeModal();
+    else if (action === 'renew-done') closeModal();
+    else if (action === 'confirm-renewal') {
+      if (!state.modal || state.modal.type !== 'renewal' || state.modal.submitting) return;
+      state.modal.submitting = true;
+      renderModal();
+      try {
+        state.modal.result = dataOf(await api('/user/order/renew', {
+          method: 'POST',
+          data: {
+            trade_no: state.modal.order.trade_no,
+            period: state.modal.period,
+            idempotency_key: state.modal.idempotencyKey,
+          },
+        }));
+        state.modal.submitting = false;
+        await renderOrders();
+        renderModal();
+      } catch (error) {
+        state.modal.submitting = false;
+        renderModal();
+        toast(error.message, 'error');
+      }
+    }
     else if (action === 'buy-again') {
       try { await repurchaseDelivery(); } catch (error) { toast(error.message, 'error'); }
     }
@@ -911,9 +1005,14 @@
     else handleAction(event.target);
   });
   document.addEventListener('change', (event) => {
-    if (!state.active || event.target.id !== 'dist-order-settlement') return;
-    state.orderSettlementStatus = event.target.value;
-    renderPage();
+    if (!state.active) return;
+    if (event.target.id === 'dist-order-settlement') {
+      state.orderSettlementStatus = event.target.value;
+      renderPage();
+    } else if (event.target.id === 'dist-renewal-period' && state.modal?.type === 'renewal') {
+      state.modal.period = event.target.value;
+      renderModal();
+    }
   });
   document.addEventListener('keydown', (event) => {
     if (!state.active || event.key !== 'Enter') return;

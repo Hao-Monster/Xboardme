@@ -5,8 +5,10 @@ namespace App\Http\Controllers\V1\User;
 use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\User\OrderSave;
+use App\Http\Requests\User\DistributorOrderRenew;
 use App\Http\Resources\OrderResource;
 use App\Models\Order;
+use App\Models\DistributorOrder;
 use App\Models\Payment;
 use App\Models\Plan;
 use App\Models\User;
@@ -32,25 +34,28 @@ class OrderController extends Controller
         ]);
         $orders = Order::with([
             'plan',
-            'distributorOrder:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
-            'distributorOrder.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit',
-            'distributorOrder.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
+            'distributorSubscription:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
+            'distributorSubscription.order:id,trade_no,plan_id,period',
+            'distributorSubscription.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit,banned',
+            'distributorSubscription.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ])
             ->where('user_id', $request->user()->id)
             ->when($request->user()->is_distributor, function ($query) use ($request, $searchService) {
                 $searchService->applyToOrderQuery($query, $request->input('search'));
             })
             ->when($request->user()->is_distributor, function ($query) use ($request) {
-                $query->whereHas('distributorOrder', function ($query) use ($request) {
-                    if ($request->input('settlement_status') !== null) {
-                        $query->where('settlement_status', (int) $request->input('settlement_status'));
-                    }
-                });
+                $query->whereNotNull('distributor_order_id');
+                if ($request->input('settlement_status') !== null) {
+                    $request->integer('settlement_status') === DistributorOrder::SETTLEMENT_SETTLED
+                        ? $query->whereNotNull('paid_at')
+                        : $query->whereNull('paid_at');
+                }
             })
             ->when($request->input('status') !== null, function ($query) use ($request) {
                 $query->where('status', $request->input('status'));
             })
             ->orderBy('created_at', 'DESC')
+            ->orderBy('id', 'DESC')
             ->get();
 
         return $this->success(OrderResource::collection($orders));
@@ -80,9 +85,10 @@ class OrderController extends Controller
         $order = Order::with([
             'payment',
             'plan',
-            'distributorOrder:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
-            'distributorOrder.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit',
-            'distributorOrder.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
+            'distributorSubscription:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
+            'distributorSubscription.order:id,trade_no,plan_id,period',
+            'distributorSubscription.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit,banned',
+            'distributorSubscription.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ])
             ->where('user_id', $request->user()->id)
             ->where('trade_no', $request->input('trade_no'))
@@ -144,6 +150,28 @@ class OrderController extends Controller
         return $this->success($order->trade_no);
     }
 
+    public function renew(DistributorOrderRenew $request)
+    {
+        abort_unless((bool) $request->user()->is_distributor, 403);
+
+        $order = app(DistributorOrderService::class)->renew(
+            User::findOrFail($request->user()->id),
+            (string) $request->input('trade_no'),
+            (string) $request->input('period'),
+            (string) $request->input('idempotency_key')
+        );
+
+        return $this->success([
+            'trade_no' => $order->trade_no,
+            'subscription_trade_no' => $order->distributorSubscription?->order?->trade_no,
+            'period' => PlanService::getLegacyPeriod((string) $order->period),
+            'total_amount' => (int) $order->total_amount,
+            'expired_at_before' => $order->entitlement_expired_at_before,
+            'expired_at_after' => $order->entitlement_expired_at_after,
+            'settlement_status' => DistributorOrder::SETTLEMENT_UNSETTLED,
+        ]);
+    }
+
     protected function applyCoupon(Order $order, string $couponCode): void
     {
         $couponService = new CouponService($couponCode);
@@ -180,7 +208,7 @@ class OrderController extends Controller
             ->where('trade_no', $tradeNo)
             ->where('user_id', $request->user()->id)
             ->where('status', Order::STATUS_COMPLETED)
-            ->whereHas('distributorOrder')
+            ->whereNotNull('distributor_order_id')
             ->first();
         if ($completedDistributorOrder) {
             return response([

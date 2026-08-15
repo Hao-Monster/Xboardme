@@ -16,6 +16,7 @@ use App\Services\DistributorConnectionService;
 use App\Services\DistributorHwidService;
 use App\Services\DistributorOrderService;
 use App\Utils\Helper;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -102,6 +103,174 @@ class DistributorOrderTest extends TestCase
 
         $order = Order::where('trade_no', $tradeNo)->firstOrFail();
         $this->assertSame('终端客户甲', $order->distributorOrder()->value('customer_name'));
+    }
+
+    public function test_distributor_renews_the_same_active_subscription_and_idempotent_retries_do_not_extend_twice(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 8, 15, 12, 0, 0, config('app.timezone')));
+        try {
+            $distributor = $this->makeUser('renew-active@example.com', true);
+            $plan = $this->makePlan();
+            $plan->update(['transfer_enable' => 1]);
+            $rootOrder = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '续费客户');
+            $delivery = $rootOrder->distributorOrder()->with('subscriber')->firstOrFail();
+            $subscriber = $delivery->subscriber;
+            $subscriber->update([
+                'expired_at' => Carbon::create(2026, 10, 31, 12, 0, 0, config('app.timezone'))->timestamp,
+                'u' => 100,
+                'd' => 200,
+            ]);
+            $originalToken = $subscriber->token;
+            $originalUuid = $subscriber->uuid;
+            $idempotencyKey = '123e4567-e89b-42d3-a456-426614174000';
+            Sanctum::actingAs($distributor);
+
+            $payload = [
+                'trade_no' => $rootOrder->trade_no,
+                'period' => 'quarter_price',
+                'idempotency_key' => $idempotencyKey,
+            ];
+            $first = $this->postJson('/api/v1/user/order/renew', $payload)
+                ->assertOk()
+                ->assertJsonPath('data.subscription_trade_no', $rootOrder->trade_no)
+                ->assertJsonPath('data.period', 'quarter_price')
+                ->assertJsonPath('data.total_amount', 3000)
+                ->assertJsonPath(
+                    'data.expired_at_after',
+                    Carbon::create(2027, 1, 31, 12, 0, 0, config('app.timezone'))->timestamp
+                );
+            $renewalTradeNo = $first->json('data.trade_no');
+
+            $this->postJson('/api/v1/user/order/renew', $payload)
+                ->assertOk()
+                ->assertJsonPath('data.trade_no', $renewalTradeNo);
+
+            $renewal = Order::where('trade_no', $renewalTradeNo)->firstOrFail();
+            $this->assertSame(Order::TYPE_RENEWAL, $renewal->type);
+            $this->assertSame(Order::STATUS_COMPLETED, $renewal->status);
+            $this->assertNull($renewal->paid_at);
+            $this->assertSame($delivery->id, $renewal->distributor_order_id);
+            $this->assertSame($idempotencyKey, $renewal->distributor_idempotency_key);
+            $this->assertSame(2, Order::where('user_id', $distributor->id)->count());
+            $this->assertSame(1, DistributorOrder::where('subscriber_user_id', $subscriber->id)->count());
+
+            $subscriber->refresh();
+            $this->assertSame($originalToken, $subscriber->token);
+            $this->assertSame($originalUuid, $subscriber->uuid);
+            $this->assertSame(100, $subscriber->u);
+            $this->assertSame(200, $subscriber->d);
+            $this->assertSame(
+                Carbon::create(2027, 1, 31, 12, 0, 0, config('app.timezone'))->timestamp,
+                $subscriber->expired_at
+            );
+            $this->assertSame(1, DistributorOrder::count());
+
+            $this->getJson('/api/v1/user/order/fetch?' . http_build_query([
+                'search' => $rootOrder->trade_no,
+            ]))->assertOk()
+                ->assertJsonCount(2, 'data')
+                ->assertJsonPath('data.0.trade_no', $renewalTradeNo)
+                ->assertJsonPath('data.0.order_type_label', '续费')
+                ->assertJsonPath('data.0.subscription_trade_no', $rootOrder->trade_no)
+                ->assertJsonPath('data.0.is_subscription_origin', false)
+                ->assertJsonPath('data.0.can_view_subscription_qr', false)
+                ->assertJsonPath('data.1.trade_no', $rootOrder->trade_no)
+                ->assertJsonPath('data.1.can_renew', true);
+
+            $rows = $this->readXlsx($this->get('/api/v1/user/order/export?' . http_build_query([
+                'search' => $rootOrder->trade_no,
+            ]))->assertOk());
+            $this->assertCount(3, $rows);
+            $this->assertSame($renewalTradeNo, $rows[1][0]);
+            $this->assertSame('续费', $rows[1][1]);
+            $this->assertSame($rootOrder->trade_no, $rows[1][2]);
+
+            $this->postJson('/api/v1/user/order/renew', [
+                ...$payload,
+                'period' => 'month_price',
+            ])->assertStatus(409)
+                ->assertJsonPath('message', '续费请求标识已用于其他续费操作');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_expired_distributor_subscription_renews_from_now_and_resets_traffic(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 8, 15, 12, 0, 0, config('app.timezone')));
+        try {
+            $distributor = $this->makeUser('renew-expired@example.com', true);
+            $plan = $this->makePlan();
+            $plan->update(['transfer_enable' => 1]);
+            $rootOrder = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY);
+            $subscriber = $rootOrder->distributorOrder()->with('subscriber')->firstOrFail()->subscriber;
+            $subscriber->update([
+                'expired_at' => Carbon::create(2026, 8, 1, 12, 0, 0, config('app.timezone'))->timestamp,
+                'u' => 100,
+                'd' => 200,
+            ]);
+            Sanctum::actingAs($distributor);
+
+            $this->postJson('/api/v1/user/order/renew', [
+                'trade_no' => $rootOrder->trade_no,
+                'period' => 'month_price',
+                'idempotency_key' => '123e4567-e89b-42d3-a456-426614174001',
+            ])->assertOk()
+                ->assertJsonPath(
+                    'data.expired_at_after',
+                    Carbon::create(2026, 9, 15, 12, 0, 0, config('app.timezone'))->timestamp
+                );
+
+            $subscriber->refresh();
+            $this->assertSame(0, $subscriber->u);
+            $this->assertSame(0, $subscriber->d);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_distributor_renewal_enforces_ownership_delivery_and_plan_rules(): void
+    {
+        $owner = $this->makeUser('renew-owner@example.com', true);
+        $other = $this->makeUser('renew-other@example.com', true);
+        $order = $this->createDistributorOrder($owner, $this->makePlan(), Plan::PERIOD_MONTHLY);
+        $payload = [
+            'trade_no' => $order->trade_no,
+            'period' => 'month_price',
+            'idempotency_key' => '123e4567-e89b-42d3-a456-426614174002',
+        ];
+
+        Sanctum::actingAs($other);
+        $this->postJson('/api/v1/user/order/renew', $payload)->assertNotFound();
+
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $delivery->update(['delivery_status' => DistributorOrder::DELIVERY_CLOSED]);
+        Sanctum::actingAs($owner);
+        $this->postJson('/api/v1/user/order/renew', $payload)
+            ->assertStatus(409)
+            ->assertJsonPath('message', '已关闭的分销订阅不能续费');
+
+        $delivery->update(['delivery_status' => DistributorOrder::DELIVERY_CLAIMED]);
+        $delivery->subscriber->update(['expired_at' => null]);
+        $this->postJson('/api/v1/user/order/renew', [
+            ...$payload,
+            'idempotency_key' => '123e4567-e89b-42d3-a456-426614174003',
+        ])->assertStatus(400)
+            ->assertJsonPath('message', '长期有效订阅无需续费');
+
+        $delivery->subscriber->update(['expired_at' => time() + 86400]);
+        $order->plan->update(['renew' => false]);
+        $this->postJson('/api/v1/user/order/renew', [
+            ...$payload,
+            'idempotency_key' => '123e4567-e89b-42d3-a456-426614174005',
+        ])->assertStatus(400)
+            ->assertJsonPath('message', '该订阅无法续费，请更换其它订阅');
+
+        $this->postJson('/api/v1/user/order/renew', [
+            ...$payload,
+            'period' => 'onetime_price',
+            'idempotency_key' => '123e4567-e89b-42d3-a456-426614174006',
+        ])->assertUnprocessable();
     }
 
     public function test_claim_url_can_only_be_consumed_once(): void
@@ -694,6 +863,7 @@ class DistributorOrderTest extends TestCase
         $namedOrder->distributorOrder()->update([
             'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
         ]);
+        $namedOrder->update(['paid_at' => time()]);
         Sanctum::actingAs($distributor);
 
         $this->getJson('/api/v1/user/order/fetch?' . http_build_query([
@@ -719,7 +889,7 @@ class DistributorOrderTest extends TestCase
         ]))->assertOk());
         $this->assertCount(2, $rows);
         $this->assertSame($numberOrder->trade_no, $rows[1][0]);
-        $this->assertSame('客户李四', $rows[1][1]);
+        $this->assertSame('客户李四', $rows[1][3]);
     }
 
     public function test_admin_can_search_distributor_orders_by_number_customer_name_or_subscription_link(): void
@@ -766,7 +936,7 @@ class DistributorOrderTest extends TestCase
         ]))->assertOk());
         $this->assertCount(2, $rows);
         $this->assertSame($firstOrder->trade_no, $rows[1][0]);
-        $this->assertSame('链接查询客户', $rows[1][1]);
+        $this->assertSame('链接查询客户', $rows[1][3]);
     }
 
     public function test_admin_can_save_trim_and_clear_a_distributor_order_remark_while_distributor_can_only_read_it(): void
@@ -855,17 +1025,20 @@ class DistributorOrderTest extends TestCase
         $response->assertOk();
 
         $rows = $this->readXlsx($response);
-        $this->assertSame(['订单号', '用户名称', '分销商', '套餐', '原价', '结算状态', '备注'], $rows[0]);
+        $this->assertSame(['订单号', '订单类型', '关联原订单', '用户名称', '分销商', '套餐', '周期', '原价', '结算状态', '备注'], $rows[0]);
         $this->assertSame($newer->trade_no, $rows[1][0]);
-        $this->assertSame('新客户', $rows[1][1]);
-        $this->assertSame('第二分销商', $rows[1][2]);
-        $this->assertSame('Distributor Test Plan', $rows[1][3]);
-        $this->assertTrue(is_int($rows[1][4]) || is_float($rows[1][4]));
-        $this->assertEquals(30.0, $rows[1][4]);
-        $this->assertSame('未结算', $rows[1][5]);
-        $this->assertSame('=HYPERLINK("https://invalid.example","新订单备注")', $rows[1][6]);
+        $this->assertSame('新购', $rows[1][1]);
+        $this->assertSame('-', $rows[1][2]);
+        $this->assertSame('新客户', $rows[1][3]);
+        $this->assertSame('第二分销商', $rows[1][4]);
+        $this->assertSame('Distributor Test Plan', $rows[1][5]);
+        $this->assertSame('季付', $rows[1][6]);
+        $this->assertTrue(is_int($rows[1][7]) || is_float($rows[1][7]));
+        $this->assertEquals(30.0, $rows[1][7]);
+        $this->assertSame('未结算', $rows[1][8]);
+        $this->assertSame('=HYPERLINK("https://invalid.example","新订单备注")', $rows[1][9]);
         $this->assertSame($older->trade_no, $rows[2][0]);
-        $this->assertSame('旧订单备注', $rows[2][6]);
+        $this->assertSame('旧订单备注', $rows[2][9]);
         $this->assertCount(3, $rows);
         $this->assertStringNotContainsString('NORMAL-ORDER-MUST-NOT-EXPORT', json_encode($rows));
     }
@@ -878,6 +1051,7 @@ class DistributorOrderTest extends TestCase
         $unsettled = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
         $settled = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
         $settled->distributorOrder()->update(['settlement_status' => DistributorOrder::SETTLEMENT_SETTLED]);
+        $settled->update(['paid_at' => time()]);
         $this->createDistributorOrder($secondDistributor, $plan, Plan::PERIOD_MONTHLY);
 
         Sanctum::actingAs($this->makeUser('admin-filter@example.com', false, ['is_admin' => true]));
@@ -911,6 +1085,7 @@ class DistributorOrderTest extends TestCase
             'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
             'remark' => '分销商可见备注',
         ]);
+        $settled->update(['paid_at' => time()]);
         $otherOrder = $this->createDistributorOrder($otherDistributor, $plan, Plan::PERIOD_QUARTERLY);
 
         Sanctum::actingAs($distributor);
@@ -920,16 +1095,18 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.trade_no', $settled->trade_no);
 
         $rows = $this->readXlsx($this->get('/api/v1/user/order/export?settlement_status=1')->assertOk());
-        $this->assertSame(['订单号', '用户名称', '订阅计划', '周期', '订单金额', '结算状态', '备注'], $rows[0]);
+        $this->assertSame(['订单号', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '结算状态', '备注'], $rows[0]);
         $this->assertCount(2, $rows);
         $this->assertSame($settled->trade_no, $rows[1][0]);
-        $this->assertSame('导出客户', $rows[1][1]);
-        $this->assertSame('Distributor Test Plan', $rows[1][2]);
-        $this->assertSame('季付', $rows[1][3]);
-        $this->assertTrue(is_int($rows[1][4]) || is_float($rows[1][4]));
-        $this->assertEquals(30.0, $rows[1][4]);
-        $this->assertSame('已结算', $rows[1][5]);
-        $this->assertSame('分销商可见备注', $rows[1][6]);
+        $this->assertSame('新购', $rows[1][1]);
+        $this->assertSame('-', $rows[1][2]);
+        $this->assertSame('导出客户', $rows[1][3]);
+        $this->assertSame('Distributor Test Plan', $rows[1][4]);
+        $this->assertSame('季付', $rows[1][5]);
+        $this->assertTrue(is_int($rows[1][6]) || is_float($rows[1][6]));
+        $this->assertEquals(30.0, $rows[1][6]);
+        $this->assertSame('已结算', $rows[1][7]);
+        $this->assertSame('分销商可见备注', $rows[1][8]);
         $this->assertStringNotContainsString($unsettled->trade_no, json_encode($rows));
         $this->assertStringNotContainsString($otherOrder->trade_no, json_encode($rows));
 
@@ -1096,6 +1273,21 @@ class DistributorOrderTest extends TestCase
     {
         $distributor = $this->makeUser('dealer@example.com', true);
         $order = $this->createDistributorOrder($distributor, $this->makePlan(), Plan::PERIOD_MONTHLY, '详情客户');
+        $renewal = app(DistributorOrderService::class)->renew(
+            $distributor,
+            $order->trade_no,
+            Plan::PERIOD_QUARTERLY,
+            '123e4567-e89b-42d3-a456-426614174004'
+        );
+        $normalOrder = Order::create([
+            'user_id' => $this->makeUser('normal-unsettled@example.com')->id,
+            'plan_id' => $order->plan_id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'trade_no' => Helper::generateOrderNo(),
+            'total_amount' => 3000,
+            'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_COMPLETED,
+        ]);
         $admin = $this->makeUser('admin@example.com', false, ['is_admin' => true]);
         Sanctum::actingAs($admin);
 
@@ -1103,21 +1295,32 @@ class DistributorOrderTest extends TestCase
         $settleUri = $this->adminRouteUri('settle');
         $detailUri = $this->adminRouteUri('detail');
 
+        $unsettled = $this->postJson('/' . $this->adminRouteUri('fetch'), [
+            'current' => 1,
+            'pageSize' => 20,
+            'settlement_status' => DistributorOrder::SETTLEMENT_UNSETTLED,
+        ])->assertOk()->json('data');
+        $this->assertCount(2, $unsettled);
+        $this->assertNotContains($normalOrder->trade_no, collect($unsettled)->pluck('trade_no')->all());
+
         $this->getJson('/' . $previewUri . '?distributor_user_id=' . $distributor->id)
             ->assertOk()
-            ->assertJsonPath('data.count', 1)
-            ->assertJsonPath('data.total_amount', 3000);
+            ->assertJsonPath('data.count', 2)
+            ->assertJsonPath('data.total_amount', 6000);
 
         $this->postJson('/' . $settleUri, ['distributor_user_id' => $distributor->id])
             ->assertOk()
-            ->assertJsonPath('data.count', 1)
-            ->assertJsonPath('data.total_amount', 3000);
+            ->assertJsonPath('data.count', 2)
+            ->assertJsonPath('data.total_amount', 6000);
         $this->postJson('/' . $settleUri, ['distributor_user_id' => $distributor->id])
             ->assertOk()
             ->assertJsonPath('data.count', 0);
 
         $order->refresh();
+        $renewal->refresh();
         $this->assertNotNull($order->paid_at);
+        $this->assertNotNull($renewal->paid_at);
+        $this->assertSame($admin->id, $renewal->distributor_settled_by);
         $this->assertSame(
             DistributorOrder::SETTLEMENT_SETTLED,
             $order->distributorOrder()->value('settlement_status')
@@ -1127,6 +1330,14 @@ class DistributorOrderTest extends TestCase
         $this->postJson('/' . $detailUri, ['id' => $order->id])
             ->assertOk()
             ->assertJsonPath('data.customer_name', '详情客户')
+            ->assertJsonPath(
+                'data.subscribe_url',
+                app(DistributorOrderService::class)->subscriptionUrl($delivery)
+            );
+        $this->postJson('/' . $detailUri, ['id' => $renewal->id])
+            ->assertOk()
+            ->assertJsonPath('data.order_type_label', '续费')
+            ->assertJsonPath('data.subscription_trade_no', $order->trade_no)
             ->assertJsonPath(
                 'data.subscribe_url',
                 app(DistributorOrderService::class)->subscriptionUrl($delivery)
@@ -1278,7 +1489,7 @@ class DistributorOrderTest extends TestCase
         $sheetXml = (string) $archive->getFromName('xl/worksheets/sheet1.xml');
         $archive->close();
         $this->assertStringContainsString('numFmtId="2"', $styles);
-        $this->assertStringContainsString('<autoFilter ref="A1:G', $sheetXml);
+        $this->assertMatchesRegularExpression('/<autoFilter ref="A1:[A-Z]+[0-9]+"/', $sheetXml);
         $this->assertStringNotContainsString('<f>', $sheetXml);
         $this->assertStringContainsString('state="frozen"', $sheetXml);
 

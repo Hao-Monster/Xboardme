@@ -22,11 +22,11 @@ class DistributorOrderExportService
     private const CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     private const ADMIN_HEADERS = [
-        '订单号', '用户名称', '分销商', '套餐', '原价', '结算状态', '备注',
+        '订单号', '订单类型', '关联原订单', '用户名称', '分销商', '套餐', '周期', '原价', '结算状态', '备注',
     ];
 
     private const DISTRIBUTOR_HEADERS = [
-        '订单号', '用户名称', '订阅计划', '周期', '订单金额', '结算状态', '备注',
+        '订单号', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '结算状态', '备注',
     ];
 
     public function __construct(private readonly DistributorOrderSearchService $searchService)
@@ -44,7 +44,9 @@ class DistributorOrderExportService
                 $query->where('v2_distributor_order.distributor_user_id', $distributorUserId);
             })
             ->when($settlementStatus !== null, function (Builder $query) use ($settlementStatus) {
-                $query->where('v2_distributor_order.settlement_status', $settlementStatus);
+                $settlementStatus === DistributorOrder::SETTLEMENT_SETTLED
+                    ? $query->whereNotNull('v2_order.paid_at')
+                    : $query->whereNull('v2_order.paid_at');
             });
         $this->searchService->applyToExportQuery($query, $search, true);
 
@@ -53,9 +55,14 @@ class DistributorOrderExportService
             self::ADMIN_HEADERS,
             fn (object $order): array => [
                 (string) $order->trade_no,
+                $this->typeLabel((int) $order->type),
+                (int) $order->type === \App\Models\Order::TYPE_RENEWAL
+                    ? (string) $order->subscription_trade_no
+                    : '-',
                 (string) ($order->customer_name ?: '-'),
                 (string) ($order->distributor_name ?: $order->distributor_email),
                 (string) ($order->plan_name ?: '-'),
+                $this->periodLabel((string) $order->period),
                 $this->yuan($order->total_amount),
                 $this->settlementLabel((int) $order->settlement_status),
                 (string) ($order->remark ?? ''),
@@ -74,7 +81,9 @@ class DistributorOrderExportService
             ->where('v2_order.user_id', $distributorUserId)
             ->where('v2_distributor_order.distributor_user_id', $distributorUserId)
             ->when($settlementStatus !== null, function (Builder $query) use ($settlementStatus) {
-                $query->where('v2_distributor_order.settlement_status', $settlementStatus);
+                $settlementStatus === DistributorOrder::SETTLEMENT_SETTLED
+                    ? $query->whereNotNull('v2_order.paid_at')
+                    : $query->whereNull('v2_order.paid_at');
             });
         $this->searchService->applyToExportQuery($query, $search);
 
@@ -83,6 +92,10 @@ class DistributorOrderExportService
             self::DISTRIBUTOR_HEADERS,
             fn (object $order): array => [
                 (string) $order->trade_no,
+                $this->typeLabel((int) $order->type),
+                (int) $order->type === \App\Models\Order::TYPE_RENEWAL
+                    ? (string) $order->subscription_trade_no
+                    : '-',
                 (string) ($order->customer_name ?: '-'),
                 (string) ($order->plan_name ?: '-'),
                 $this->periodLabel((string) $order->period),
@@ -96,8 +109,9 @@ class DistributorOrderExportService
 
     private function baseQuery(): Builder
     {
-        return DB::table('v2_distributor_order')
-            ->join('v2_order', 'v2_order.id', '=', 'v2_distributor_order.order_id')
+        return DB::table('v2_order')
+            ->join('v2_distributor_order', 'v2_distributor_order.id', '=', 'v2_order.distributor_order_id')
+            ->join('v2_order as root_order', 'root_order.id', '=', 'v2_distributor_order.order_id')
             ->join('v2_user as distributor', 'distributor.id', '=', 'v2_distributor_order.distributor_user_id')
             ->leftJoin('v2_user as subscriber', 'subscriber.id', '=', 'v2_distributor_order.subscriber_user_id')
             ->leftJoin('v2_plan', 'v2_plan.id', '=', 'v2_order.plan_id')
@@ -105,6 +119,7 @@ class DistributorOrderExportService
                 'v2_order.id',
                 'v2_order.user_id',
                 'v2_order.trade_no',
+                'v2_order.type',
                 'v2_order.period',
                 'v2_order.total_amount',
                 'v2_order.created_at',
@@ -113,7 +128,8 @@ class DistributorOrderExportService
                 'distributor.email as distributor_email',
                 'distributor.distributor_name as distributor_name',
                 'v2_plan.name as plan_name',
-                'v2_distributor_order.settlement_status',
+                'root_order.trade_no as subscription_trade_no',
+                DB::raw('CASE WHEN v2_order.paid_at IS NULL THEN 0 ELSE 1 END as settlement_status'),
             ])
             ->orderByDesc('v2_order.created_at')
             ->orderByDesc('v2_order.id');
@@ -141,11 +157,11 @@ class DistributorOrderExportService
             $sheet->setName('分销订单');
             $sheet->setSheetView((new SheetView())->setFreezeRow(2));
             $sheet->setColumnWidth(28, 1);
-            $sheet->setColumnWidth(22, 2);
+            $sheet->setColumnWidth(14, 2);
             $sheet->setColumnWidth(28, 3);
-            $sheet->setColumnWidth(24, 4);
-            $sheet->setColumnWidth(14, 5, 6);
-            $sheet->setColumnWidth(42, 7);
+            $sheet->setColumnWidth(22, 4, 7);
+            $sheet->setColumnWidth(14, 8, 9);
+            $sheet->setColumnWidth(42, count($headers));
 
             $headerStyle = (new Style())
                 ->setFontBold()
@@ -154,6 +170,10 @@ class DistributorOrderExportService
             $amountStyle = (new Style())->setFormat('0.00');
 
             $writer->addRow(Row::fromValues($headers, $headerStyle));
+            $amountIndex = array_search('原价', $headers, true);
+            if ($amountIndex === false) {
+                $amountIndex = array_search('订单金额', $headers, true);
+            }
             $dataRows = 0;
             foreach ($query->cursor() as $order) {
                 $values = $rowMapper($order);
@@ -161,7 +181,7 @@ class DistributorOrderExportService
                 $row = Row::fromValuesWithStyles(
                     $values,
                     null,
-                    [4 => $amountStyle]
+                    [$amountIndex => $amountStyle]
                 );
                 // Force the administrator-authored remark to remain literal text even
                 // when it starts with "=", which OpenSpout otherwise treats as a formula.
@@ -202,5 +222,10 @@ class DistributorOrderExportService
         $periods = Plan::getAvailablePeriods();
 
         return $periods[$periodKey]['name'] ?? $period;
+    }
+
+    private function typeLabel(int $type): string
+    {
+        return \App\Models\Order::$typeMap[$type] ?? (string) $type;
     }
 }

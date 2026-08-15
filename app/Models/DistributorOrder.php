@@ -80,8 +80,15 @@ class DistributorOrder extends Model
         return $this->belongsTo(User::class, 'settled_by');
     }
 
+    /** @return HasMany<DistributorHwidDevice, $this> */
     public function hwidDevices(): HasMany
     {
         return $this->hasMany(DistributorHwidDevice::class, 'distributor_order_id');
+    }
+
+    /** @return HasMany<Order, $this> */
+    public function financialOrders(): HasMany
+    {
+        return $this->hasMany(Order::class, 'distributor_order_id', 'id');
     }
 }

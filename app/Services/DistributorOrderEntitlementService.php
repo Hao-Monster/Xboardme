@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\ApiException;
 use App\Models\DistributorOrder;
+use App\Models\Order;
 use App\Models\User;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
@@ -33,8 +34,8 @@ class DistributorOrderEntitlementService
         $used = max(0, (int) ($subscriber->u ?? 0) + (int) ($subscriber->d ?? 0));
 
         return [
-            'plan_id' => $distributorOrder->order?->plan_id,
-            'plan_name' => $distributorOrder->order?->plan?->name,
+            'plan_id' => $distributorOrder->order->plan_id,
+            'plan_name' => $distributorOrder->order->plan->name,
             'transfer_enable' => $total,
             'used_traffic' => $used,
             'remaining_traffic' => max(0, $total - $used),
@@ -47,10 +48,11 @@ class DistributorOrderEntitlementService
     public function updateForOrder(int $orderId, array $attributes): array
     {
         return DB::transaction(function () use ($orderId, $attributes) {
-            $distributorOrder = DistributorOrder::query()
-                ->where('order_id', $orderId)
+            $order = Order::query()
+                ->with(['distributorSubscription', 'distributorOrder'])
                 ->lockForUpdate()
-                ->first();
+                ->find($orderId);
+            $distributorOrder = $order?->distributorSubscription ?: $order?->distributorOrder;
 
             if (!$distributorOrder) {
                 throw new ApiException('该订单不是分销订单', 422);

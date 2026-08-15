@@ -427,7 +427,7 @@
     return state.orders.map((order) => {
       const remark = String(order.remark || '');
       return `<tr>
-      <td><strong>${escapeHtml(order.trade_no)}</strong><small>${formatTime(order.created_at)}</small></td>
+      <td><strong>${escapeHtml(order.trade_no)}</strong><small>${escapeHtml(order.order_type_label || '-')} · ${formatTime(order.created_at)}</small>${Number(order.type) === 2 && order.subscription_trade_no ? `<small>关联原订单：${escapeHtml(order.subscription_trade_no)}</small>` : ''}</td>
       <td>${escapeHtml(order.customer_name || '-')}</td><td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
       <td>${money(order.total_amount)}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
@@ -460,8 +460,9 @@
             method: 'POST',
             data: { order_id: Number(save.dataset.remarkSave), remark: textarea?.value || '' },
           }));
-          const current = state.orders.find((item) => String(item.id) === String(result.order_id));
-          if (current) current.remark = result.remark;
+          state.orders
+            .filter((item) => item.subscription_trade_no === result.subscription_trade_no)
+            .forEach((item) => { item.remark = result.remark; });
           modal.classList.remove('open');
           if (document.getElementById('xboard-native-distributor-orders')) renderNativeOrders();
           if (state.open && state.tab === 'orders') renderOrders();
@@ -563,8 +564,10 @@
     if (!modal) { modal = document.createElement('div'); modal.id = 'admin-dist-detail'; document.body.appendChild(modal); }
     modal.innerHTML = `<div class="admin-dist-detail-backdrop"><section><button data-detail-close>×</button><h2>分销订单详情</h2><dl>
       <div><dt>订单号</dt><dd>${escapeHtml(order.trade_no)}</dd></div><div><dt>分销商</dt><dd>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</dd></div>
+      <div><dt>订单类型</dt><dd>${escapeHtml(order.order_type_label || '-')}</dd></div><div><dt>关联原订单</dt><dd>${Number(order.type) === 2 ? escapeHtml(order.subscription_trade_no || '-') : '-'}</dd></div>
       <div><dt>套餐</dt><dd>${escapeHtml(order.plan?.name || '-')}</dd></div><div><dt>原价</dt><dd>${money(order.total_amount)}</dd></div>
       <div><dt>结算状态</dt><dd>${order.settlement_status === 1 ? '已结算' : '未结算'}</dd></div><div><dt>订阅链接</dt><dd class="url">${order.subscribe_url ? `<code>${escapeHtml(order.subscribe_url)}</code><button data-copy-subscription="${escapeHtml(order.subscribe_url)}">复制</button>` : '订单未完成，暂无订阅链接'}</dd></div>
+      ${Number(order.type) === 2 ? `<div><dt>续费前到期</dt><dd>${formatTime(order.entitlement_expired_at_before)}</dd></div><div><dt>续费后到期</dt><dd>${formatTime(order.entitlement_expired_at_after)}</dd></div>` : ''}
       <div><dt>用户名称</dt><dd>${escapeHtml(order.customer_name || '-')}</dd></div><div><dt>配置下发</dt><dd>${order.config_issued_at ? formatTime(order.config_issued_at) : '尚未下发'}</dd></div>
       <div><dt>接入状态</dt><dd>${order.connected_at ? `客户已经通过 ${escapeHtml(order.connected_node_name || '-')} 节点进入网络（${formatTime(order.connected_at)}）` : '等待用户开启代理 进入网络'}</dd></div>
       </dl>${entitlement ? `<div class="admin-dist-entitlement"><h3>订阅权益</h3>

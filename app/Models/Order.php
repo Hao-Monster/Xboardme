@@ -37,11 +37,17 @@ use Illuminate\Database\Eloquent\Builder;
  * @property int|null $discount_amount
  * @property int|null $paid_at
  * @property string|null $callback_no
+ * @property int|null $distributor_order_id
+ * @property int|null $entitlement_expired_at_before
+ * @property int|null $entitlement_expired_at_after
+ * @property string|null $distributor_idempotency_key
+ * @property int|null $distributor_settled_by
  *
  * @property-read Plan $plan
  * @property-read Payment|null $payment
  * @property-read User $user
  * @property-read DistributorOrder|null $distributorOrder
+ * @property-read DistributorOrder|null $distributorSubscription
  * @property-read \Illuminate\Database\Eloquent\Collection<int, CommissionLog> $commission_log
  */
 class Order extends Model
@@ -49,11 +55,20 @@ class Order extends Model
     protected $table = 'v2_order';
     protected $dateFormat = 'U';
     protected $guarded = ['id'];
+    protected $hidden = [
+        'distributor_order_id',
+        'distributor_idempotency_key',
+        'distributor_settled_by',
+    ];
     protected $casts = [
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
         'surplus_order_ids' => 'array',
-        'handling_amount' => 'integer'
+        'handling_amount' => 'integer',
+        'distributor_order_id' => 'integer',
+        'entitlement_expired_at_before' => 'integer',
+        'entitlement_expired_at_after' => 'integer',
+        'distributor_settled_by' => 'integer',
     ];
 
     const STATUS_PENDING = 0; // 待支付
@@ -126,13 +141,16 @@ class Order extends Model
         return $this->hasOne(DistributorOrder::class, 'order_id', 'id');
     }
 
+    public function distributorSubscription(): BelongsTo
+    {
+        return $this->belongsTo(DistributorOrder::class, 'distributor_order_id', 'id');
+    }
+
     public function scopeRevenueRecognized(Builder $query): Builder
     {
         return $query->where(function (Builder $query) {
-            $query->whereDoesntHave('distributorOrder')
-                ->orWhereHas('distributorOrder', function (Builder $query) {
-                    $query->where('settlement_status', DistributorOrder::SETTLEMENT_SETTLED);
-                });
+            $query->whereNull('distributor_order_id')
+                ->orWhereNotNull('paid_at');
         });
     }
 }

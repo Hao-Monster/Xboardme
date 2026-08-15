@@ -21,12 +21,15 @@ class DistributorOrderSearchService
 
         return $query->where(function (EloquentBuilder $query) use ($keyword, $token) {
             $query->whereRaw('INSTR(v2_order.trade_no, ?) > 0', [$keyword])
-                ->orWhereHas('distributorOrder', function (EloquentBuilder $query) use ($keyword) {
+                ->orWhereHas('distributorSubscription', function (EloquentBuilder $query) use ($keyword) {
                     $query->whereRaw('INSTR(v2_distributor_order.customer_name, ?) > 0', [$keyword]);
+                })
+                ->orWhereHas('distributorSubscription.order', function (EloquentBuilder $query) use ($keyword) {
+                    $query->whereRaw('INSTR(v2_order.trade_no, ?) > 0', [$keyword]);
                 });
 
             if ($token !== null) {
-                $query->orWhereHas('distributorOrder.subscriber', function (EloquentBuilder $query) use ($token) {
+                $query->orWhereHas('distributorSubscription.subscriber', function (EloquentBuilder $query) use ($token) {
                     $query->where('token', $token);
                 });
             }
@@ -47,7 +50,8 @@ class DistributorOrderSearchService
 
         return $query->where(function (QueryBuilder $query) use ($keyword, $token) {
             $query->whereRaw('INSTR(v2_order.trade_no, ?) > 0', [$keyword])
-                ->orWhereRaw('INSTR(v2_distributor_order.customer_name, ?) > 0', [$keyword]);
+                ->orWhereRaw('INSTR(v2_distributor_order.customer_name, ?) > 0', [$keyword])
+                ->orWhereRaw('INSTR(root_order.trade_no, ?) > 0', [$keyword]);
 
             if ($token !== null) {
                 $query->orWhere('subscriber.token', $token);

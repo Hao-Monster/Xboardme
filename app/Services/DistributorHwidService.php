@@ -155,12 +155,15 @@ class DistributorHwidService
 
     private function deliveryForOrder(int $orderId): DistributorOrder
     {
-        $order = Order::query()->with('distributorOrder')->find($orderId);
-        if (!$order?->distributorOrder) {
+        $order = Order::query()
+            ->with(['distributorSubscription', 'distributorOrder'])
+            ->find($orderId);
+        $delivery = $order?->distributorSubscription ?: $order?->distributorOrder;
+        if (!$delivery) {
             throw new ApiException('分销订单不存在', 422);
         }
 
-        return $order->distributorOrder;
+        return $delivery;
     }
 
     private function header(Request $request, string $name, int $length): ?string

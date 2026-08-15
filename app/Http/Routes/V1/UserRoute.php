@@ -40,6 +40,7 @@ class UserRoute
             $router->post('/removeActiveSession', [UserController::class, 'removeActiveSession']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);
+            $router->post('/order/renew', [OrderController::class, 'renew']);
             $router->post('/order/checkout', [OrderController::class, 'checkout']);
             $router->get('/order/check', [OrderController::class, 'check']);
             $router->get('/order/detail', [OrderController::class, 'detail']);

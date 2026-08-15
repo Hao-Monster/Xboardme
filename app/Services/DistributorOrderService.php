@@ -6,6 +6,7 @@ use App\Exceptions\ApiException;
 use App\Models\DistributorOrder;
 use App\Models\Order;
 use App\Models\Plan;
+use App\Models\TrafficResetLog;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
 use App\Utils\Helper;
@@ -77,7 +78,7 @@ class DistributorOrderService
             app(TrafficResetService::class)->setInitialResetTime($subscriber);
 
             $claimToken = Str::random(64);
-            DistributorOrder::create([
+            $delivery = DistributorOrder::create([
                 'order_id' => $order->id,
                 'distributor_user_id' => $lockedDistributor->id,
                 'customer_name' => $customerName !== '' ? $customerName : null,
@@ -90,11 +91,142 @@ class DistributorOrderService
                 'hwid_limit' => 1,
             ]);
 
-            return $order->load(['plan', 'distributorOrder']);
+            $order->fill([
+                'distributor_order_id' => $delivery->id,
+                'entitlement_expired_at_before' => null,
+                'entitlement_expired_at_after' => $subscriber->expired_at,
+            ])->saveOrFail();
+
+            return $order->load(['plan', 'distributorOrder', 'distributorSubscription']);
         });
 
         HookManager::call('order.create.after', $order);
         HookManager::call('order.after_create', $order);
+
+        return $order;
+    }
+
+    public function renew(
+        User $distributor,
+        string $tradeNo,
+        string $period,
+        string $idempotencyKey
+    ): Order {
+        if (!$distributor->is_distributor) {
+            throw new ApiException('当前账号不是可用的分销商账号', 403);
+        }
+
+        $created = false;
+        $order = DB::transaction(function () use (
+            $distributor,
+            $tradeNo,
+            $period,
+            $idempotencyKey,
+            &$created
+        ) {
+            $lockedDistributor = User::query()->lockForUpdate()->find($distributor->id);
+            if (!$lockedDistributor?->is_distributor || $lockedDistributor->banned) {
+                throw new ApiException('当前分销商账号不可用', 403);
+            }
+
+            $sourceOrder = Order::query()
+                ->where('user_id', $lockedDistributor->id)
+                ->where('trade_no', $tradeNo)
+                ->whereNotNull('distributor_order_id')
+                ->first();
+            if (!$sourceOrder) {
+                throw new ApiException('需要续费的分销订阅不存在', 404);
+            }
+
+            $periodKey = PlanService::getPeriodKey($period);
+            $existing = Order::query()
+                ->where('user_id', $lockedDistributor->id)
+                ->where('distributor_idempotency_key', $idempotencyKey)
+                ->first();
+            if ($existing) {
+                if (
+                    (int) $existing->distributor_order_id !== (int) $sourceOrder->distributor_order_id
+                    || (string) $existing->period !== $periodKey
+                ) {
+                    throw new ApiException('续费请求标识已用于其他续费操作', 409);
+                }
+
+                return $existing->load(['plan', 'distributorSubscription.order']);
+            }
+
+            $delivery = DistributorOrder::query()
+                ->whereKey($sourceOrder->distributor_order_id)
+                ->where('distributor_user_id', $lockedDistributor->id)
+                ->lockForUpdate()
+                ->first();
+            if (!$delivery) {
+                throw new ApiException('需要续费的分销订阅不存在', 404);
+            }
+            if ($delivery->delivery_status === DistributorOrder::DELIVERY_CLOSED) {
+                throw new ApiException('已关闭的分销订阅不能续费', 409);
+            }
+
+            $subscriber = User::query()
+                ->whereKey($delivery->subscriber_user_id)
+                ->lockForUpdate()
+                ->first();
+            if (!$subscriber || $subscriber->banned) {
+                throw new ApiException('分销订单订阅权益不存在或不可用', 422);
+            }
+
+            $plan = Plan::query()->find($subscriber->plan_id);
+            if (!$plan) {
+                throw new ApiException(__('Subscription plan does not exist'));
+            }
+            (new PlanService($plan))->validateDistributorRenewal($subscriber, $periodKey);
+
+            $expiredAtBefore = (int) $subscriber->expired_at;
+            $now = Carbon::now(config('app.timezone'))->timestamp;
+            $wasExpired = $expiredAtBefore <= $now;
+            $expiredAtAfter = $this->calculateRenewedExpiredAt($expiredAtBefore, $periodKey, $now);
+
+            HookManager::call('order.create.before', [$lockedDistributor, $plan, $periodKey, null]);
+            $order = Order::create([
+                'user_id' => $lockedDistributor->id,
+                'plan_id' => $plan->id,
+                'period' => $periodKey,
+                'trade_no' => Helper::generateOrderNo(),
+                'total_amount' => (int) ($plan->prices[$periodKey] * 100),
+                'type' => Order::TYPE_RENEWAL,
+                'status' => Order::STATUS_COMPLETED,
+                'callback_no' => 'distributor_auto',
+                'commission_status' => 0,
+                'commission_balance' => 0,
+                'balance_amount' => 0,
+                'discount_amount' => 0,
+                'paid_at' => null,
+                'distributor_order_id' => $delivery->id,
+                'entitlement_expired_at_before' => $expiredAtBefore,
+                'entitlement_expired_at_after' => $expiredAtAfter,
+                'distributor_idempotency_key' => $idempotencyKey,
+            ]);
+
+            $subscriber->expired_at = $expiredAtAfter;
+            $subscriber->saveOrFail();
+
+            if (
+                $wasExpired
+                && !app(TrafficResetService::class)->performReset(
+                    $subscriber,
+                    TrafficResetLog::SOURCE_ORDER
+                )
+            ) {
+                throw new \RuntimeException('续费订阅流量重置失败');
+            }
+
+            $created = true;
+            return $order->load(['plan', 'distributorSubscription.order']);
+        }, 3);
+
+        if ($created) {
+            HookManager::call('order.create.after', $order);
+            HookManager::call('order.after_create', $order);
+        }
 
         return $order;
     }
@@ -112,7 +244,7 @@ class DistributorOrderService
             'trade_no' => $delivery->order->trade_no,
             'customer_name' => trim((string) $delivery->customer_name),
             'plan_id' => (int) $delivery->order->plan_id,
-            'plan_name' => (string) ($delivery->order->plan?->name ?: ''),
+            'plan_name' => (string) ($delivery->order->plan->name ?: ''),
             'period' => PlanService::getLegacyPeriod((string) $delivery->order->period),
             'delivery_status' => $delivery->delivery_status,
             'settlement_status' => $delivery->settlement_status,
@@ -152,7 +284,7 @@ class DistributorOrderService
             'hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
         ]);
 
-        if (!$delivery->subscriber?->token) {
+        if (!$delivery->subscriber->token) {
             throw new ApiException('订阅尚未生成', 409);
         }
 
@@ -182,6 +314,20 @@ class DistributorOrderService
         }
 
         return Carbon::now()->addMonths($months)->timestamp;
+    }
+
+    private function calculateRenewedExpiredAt(int $expiredAt, string $period, int $now): int
+    {
+        $months = OrderService::STR_TO_TIME[$period] ?? null;
+        if (!$months) {
+            throw new ApiException('无效的套餐周期');
+        }
+
+        $base = max($now, $expiredAt);
+
+        return Carbon::createFromTimestamp($base, config('app.timezone'))
+            ->addMonthsNoOverflow($months)
+            ->timestamp;
     }
 
     private function makeQrDataUri(string $content): string

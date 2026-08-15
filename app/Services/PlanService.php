@@ -113,6 +113,35 @@ class PlanService
         }
     }
 
+    public function validateDistributorRenewal(User $subscriber, string $period): void
+    {
+        $periodKey = self::getPeriodKey($period);
+        if (in_array($periodKey, [Plan::PERIOD_ONETIME, Plan::PERIOD_RESET_TRAFFIC], true)) {
+            throw new ApiException('该套餐周期不支持续费');
+        }
+
+        if ((int) $subscriber->plan_id !== (int) $this->plan->id) {
+            throw new ApiException('只能续费当前订阅使用的套餐');
+        }
+
+        if ($subscriber->expired_at === null) {
+            throw new ApiException('长期有效订阅无需续费');
+        }
+
+        $price = $this->plan->prices[$periodKey] ?? null;
+        if ($price === null || $price <= 0) {
+            throw new ApiException(__('This payment period cannot be purchased, please choose another period'));
+        }
+
+        if (!$this->plan->renew) {
+            throw new ApiException(__('This subscription cannot be renewed, please change to another subscription'));
+        }
+
+        if (!$this->plan->show && $subscriber->expired_at <= time()) {
+            throw new ApiException(__('This subscription has expired, please change to another subscription'));
+        }
+    }
+
     /**
      * 智能转换周期格式为新版格式
      * 如果是新版格式直接返回，如果是旧版格式则转换为新版格式
