@@ -1,4 +1,4 @@
-# Xboard
+# Xboardme
 
 <div align="center">
 
@@ -21,7 +21,38 @@ Xboard is a modern panel system built on Laravel 11, focusing on providing a cle
 - 🐳 Ready-to-use Docker deployment solution
 - 🎯 Optimized system architecture for better maintainability
 
-## 🚀 Quick Start
+## 🚀 一键部署（推荐）
+
+适用于 Linux `amd64` / `arm64` 服务器。请先安装 Docker 与 Docker Compose，然后执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FengHaoyun-MONSTER/Xboardme/codex/distributor/deploy.sh \
+  -o /tmp/xboardme-deploy.sh && \
+sudo bash /tmp/xboardme-deploy.sh
+```
+
+脚本默认部署到 `/opt/xboardme`，首次运行会使用 SQLite、内置 Redis 和
+`admin@demo.com` 初始化，并输出随机管理员密码与管理入口，请立即保存。
+
+同一条命令可以安全地重复执行。再次执行时，脚本会先备份数据库，再拉取
+`ghcr.io/fenghaoyun-monster/xboardme:distributor` 的最新构建并完成数据库迁移，
+因此部署的是 `codex/distributor` 分支最新通过 CI 的代码。
+
+可选配置：
+
+```bash
+sudo env \
+  XBOARDME_DIR=/opt/xboardme \
+  XBOARDME_PORT=7001 \
+  ADMIN_ACCOUNT=admin@example.com \
+  XBOARDME_IMAGE=ghcr.io/fenghaoyun-monster/xboardme:distributor \
+  bash /tmp/xboardme-deploy.sh
+```
+
+> 升级前生成的数据库备份保存在 `/opt/xboardme/backups/`。脚本不会自动安装
+> Docker，也不会覆盖非本脚本管理的非空目录。
+
+## 🚀 Upstream Quick Start
 
 ```bash
 git clone -b compose --depth 1 https://github.com/cedar2025/Xboard && \

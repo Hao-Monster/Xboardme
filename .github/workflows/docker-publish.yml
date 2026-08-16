@@ -50,6 +50,7 @@ jobs:
 
       - name: Validate deployment scripts
         run: |
+          bash -n deploy.sh
           sh -n .docker/entrypoint.sh
           bash -n .github/scripts/deploy-xboard-compose.sh
 
