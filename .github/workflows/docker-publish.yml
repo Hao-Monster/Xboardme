@@ -44,6 +44,7 @@ jobs:
           node --check public/assets/admin-client-catalog.js
           node --check public/assets/admin-knowledge-attachments.js
           node --check public/assets/admin-knowledge-rich-editor.js
+          node --check theme/Xboard/assets/auth-session.js
           node --check theme/Xboard/assets/distributor.js
           node --check theme/Xboard/assets/distributor-message-guard.js
           node --test tests/JavaScript/*.test.js

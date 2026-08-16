@@ -15,6 +15,7 @@ class DistributorAccess
         'api/v1/user/update',
         'api/v1/user/getActiveSession',
         'api/v1/user/removeActiveSession',
+        'api/v1/user/logout',
         'api/v1/user/getQuickLoginUrl',
         'api/v1/user/transfer',
         'api/v1/user/plan/fetch',

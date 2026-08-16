@@ -20,8 +20,7 @@ class AuthService
         // Create a new Sanctum token with device info
         $token = $this->user->createToken(
             Str::random(20), // token name (device identifier)
-            ['*'], // abilities
-            now()->addYear() // expiration
+            ['*'] // abilities; no expiry, revoked explicitly on logout or credential change
         );
 
         // Format token: remove ID prefix and add Bearer
@@ -51,6 +50,17 @@ class AuthService
     {
         $this->user->tokens()->delete();
         return true;
+    }
+
+    public function removeCurrentSession(): bool
+    {
+        /** @var PersonalAccessToken|null $currentToken */
+        $currentToken = $this->user->currentAccessToken();
+        if ($currentToken === null) {
+            return false;
+        }
+
+        return (bool) $currentToken->delete();
     }
 
     public static function findUserByBearerToken(string $bearerToken): ?User

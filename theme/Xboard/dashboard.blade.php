@@ -11,6 +11,7 @@
   <script defer src="/assets/knowledge-share.js?v={{$version}}"></script>
   <script defer src="/theme/{{$theme}}/assets/client-center.js?v={{$version}}"></script>
   <script src="/theme/{{$theme}}/assets/distributor-message-guard.js?v={{$version}}"></script>
+  <script src="/theme/{{$theme}}/assets/auth-session.js?v={{$version}}"></script>
   <script type="module" crossorigin src="/theme/{{$theme}}/assets/umi.js"></script>
 </head>
 

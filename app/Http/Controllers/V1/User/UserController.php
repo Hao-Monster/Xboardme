@@ -44,6 +44,12 @@ class UserController extends Controller
         return $this->success($authService->removeSession($request->input('session_id')));
     }
 
+    public function logout(Request $request)
+    {
+        $authService = new AuthService($request->user());
+        return $this->success($authService->removeCurrentSession());
+    }
+
     public function checkLogin(Request $request)
     {
         $data = [
@@ -77,14 +83,6 @@ class UserController extends Controller
         if (!$user->save()) {
             return $this->fail([400, __('Save failed')]);
         }
-        
-        $currentToken = $user->currentAccessToken();
-        if ($currentToken) {
-            $user->tokens()->where('id', '!=', $currentToken->id)->delete();
-        } else {
-            $user->tokens()->delete();
-        }
-        
         return $this->success(true);
     }
 

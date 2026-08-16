@@ -38,6 +38,7 @@ class UserRoute
             $router->post('/getQuickLoginUrl', [UserController::class, 'getQuickLoginUrl']);
             $router->get('/getActiveSession', [UserController::class, 'getActiveSession']);
             $router->post('/removeActiveSession', [UserController::class, 'removeActiveSession']);
+            $router->post('/logout', [UserController::class, 'logout']);
             // Order
             $router->post('/order/save', [OrderController::class, 'save']);
             $router->post('/order/renew', [OrderController::class, 'renew']);
