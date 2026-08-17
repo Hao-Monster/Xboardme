@@ -4,6 +4,16 @@ on:
   push:
     branches: ["master", "new-dev", "codex/distributor"]
   workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: Deploy this exact codex/distributor commit to production
+        required: true
+        default: false
+        type: boolean
+      expected_sha:
+        description: Full 40-character commit SHA required when deploying production
+        required: false
+        type: string
 
 concurrency:
   group: xboard-${{ github.ref }}
@@ -223,7 +233,10 @@ jobs:
             network.host
 
   deploy-distributor:
-    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.deploy_production == true }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -233,6 +246,13 @@ jobs:
       packages: read
 
     steps:
+      - name: Verify explicit production release commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+
       - name: Checkout deployment script
         uses: actions/checkout@v4
 
