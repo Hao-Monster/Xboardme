@@ -309,9 +309,34 @@ fi
 # errexit mistake a disabled state owner for a script failure.
 redis_supervisor_state=$(docker exec "$green_name" supervisorctl status redis 2>&1 || true)
 horizon_supervisor_state=$(docker exec "$green_name" supervisorctl status horizon 2>&1 || true)
-if [[ "$redis_supervisor_state" != *STOPPED* || "$horizon_supervisor_state" != *STOPPED* ]] || \
-   docker exec "$green_name" sh -c 'pgrep redis-server >/dev/null || pgrep -f "[a]rtisan horizon" >/dev/null'; then
-  echo 'RELEASE_PREPARE_FAIL=duplicate_state_owner'
+if [[ "$redis_supervisor_state" != *STOPPED* || "$horizon_supervisor_state" != *STOPPED* ]]; then
+  printf 'RELEASE_PREPARE_FAIL=unexpected_supervisor_state redis=%q horizon=%q\n' \
+    "$redis_supervisor_state" "$horizon_supervisor_state"
+  exit 1
+fi
+# Read argv directly from /proc so the probe cannot match its own shell command
+# and so unrelated commands such as horizon:status are not treated as workers.
+state_owner_process=$(docker exec "$green_name" sh -c '
+  for proc in /proc/[0-9]*; do
+    [ -r "$proc/cmdline" ] || continue
+    executable=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "1p")
+    argument1=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "2p")
+    argument2=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "3p")
+    executable=${executable##*/}
+    if [ "$executable" = redis-server ]; then
+      printf "redis-server"
+      exit 0
+    fi
+    if [ "$executable" = php ] && { [ "$argument1" = /www/artisan ] || [ "$argument1" = artisan ]; }; then
+      case "$argument2" in
+        horizon|horizon:work) printf "%s" "$argument2"; exit 0 ;;
+      esac
+    fi
+  done
+  exit 1
+' 2>/dev/null || true)
+if [[ -n "$state_owner_process" ]]; then
+  echo "RELEASE_PREPARE_FAIL=duplicate_state_owner process=$state_owner_process"
   exit 1
 fi
 

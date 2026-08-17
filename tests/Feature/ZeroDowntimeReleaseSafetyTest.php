@@ -32,8 +32,10 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('-e ENABLE_SCHEDULER=false', $script);
         $this->assertStringContainsString('supervisorctl status redis 2>&1 || true', $script);
         $this->assertStringContainsString('redis_supervisor_state" != *STOPPED*', $script);
-        $this->assertStringContainsString('pgrep -f "[a]rtisan horizon"', $script);
-        $this->assertStringNotContainsString('pgrep -f "artisan horizon"', $script);
+        $this->assertStringContainsString('for proc in /proc/[0-9]*', $script);
+        $this->assertStringContainsString('[ "$executable" = redis-server ]', $script);
+        $this->assertStringContainsString('horizon|horizon:work)', $script);
+        $this->assertStringNotContainsString('pgrep -f', $script);
         $this->assertStringContainsString('PRAGMA integrity_check;', $script);
         $this->assertStringContainsString('redis-cli -s /data/redis.sock BGSAVE', $script);
     }
