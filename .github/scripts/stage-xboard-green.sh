@@ -105,6 +105,11 @@ if [[ "$db_driver" != sqlite || "$db_path" != /www/.docker/.data/* || "$journal_
   echo "STAGE_FAIL=unsupported_database driver=$db_driver journal=$journal_mode"
   exit 1
 fi
+db_directory=${db_path%/*}
+if ! docker exec -u 0 "$primary" sh -c 'test -r "$1" && test -w "$2"' sh "$db_path" "$db_directory"; then
+  echo 'STAGE_FAIL=database_snapshot_permissions'
+  exit 1
+fi
 
 mount_source() {
   local destination=$1
@@ -162,8 +167,8 @@ if [[ -e "$stage_dir" ]]; then
 fi
 
 container_name="xboard-stage-$STAGE_RUN_ID"
-snapshot_path="${db_path%/*}/.codex-stage-$STAGE_RUN_ID.sqlite"
-if docker exec "$primary" test -e "$snapshot_path"; then
+snapshot_path="$db_directory/.codex-stage-$STAGE_RUN_ID.sqlite"
+if docker exec -u 0 "$primary" test -e "$snapshot_path"; then
   echo 'STAGE_FAIL=snapshot_path_exists'
   exit 1
 fi
@@ -184,7 +189,7 @@ cleanup_on_error() {
     if ((stage_started == 1)); then
       docker rm -f "$container_name" >/dev/null 2>&1 || true
     fi
-    docker exec "$primary" rm -f "$snapshot_path" >/dev/null 2>&1 || true
+    docker exec -u 0 "$primary" rm -f "$snapshot_path" >/dev/null 2>&1 || true
     if ((created_stage_dir == 1)) && [[ -d "$stage_dir" ]]; then
       remove_stage_files || true
     fi
@@ -198,9 +203,9 @@ chmod 700 "$stage_root" "$stage_dir" "$stage_dir/data" "$stage_dir/redis" "$stag
 created_stage_dir=1
 
 docker pull "$STAGE_IMAGE"
-docker exec "$primary" sqlite3 "$db_path" ".backup '$snapshot_path'"
+docker exec -u 0 "$primary" sqlite3 "$db_path" ".backup '$snapshot_path'"
 docker cp "$primary:$snapshot_path" "$stage_dir/data/database.sqlite" >/dev/null
-docker exec "$primary" rm -f "$snapshot_path"
+docker exec -u 0 "$primary" rm -f "$snapshot_path"
 snapshot_counts=$(docker run --rm --entrypoint sqlite3 \
   -v "$stage_dir/data:/stage:ro" "$STAGE_IMAGE" \
   -separator '|' /stage/database.sqlite \

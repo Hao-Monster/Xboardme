@@ -66,6 +66,6 @@ if [[ -d "$stage_dir" ]]; then
     -c 'find /stage -mindepth 1 -delete' >/dev/null
   rmdir -- "$stage_dir"
 fi
-docker exec "${production_ids[0]}" rm -f "/www/.docker/.data/.codex-stage-$STAGE_RUN_ID.sqlite"
+docker exec -u 0 "${production_ids[0]}" rm -f "/www/.docker/.data/.codex-stage-$STAGE_RUN_ID.sqlite"
 
 echo "STAGE_CLEANUP=PASS run=$STAGE_RUN_ID"
