@@ -21,7 +21,7 @@ COPY composer.json composer.lock /www/
 RUN --mount=type=secret,id=github_token \
     if [ -f /run/secrets/github_token ]; then \
         github_token="$(tr -d '\r\n' < /run/secrets/github_token)"; \
-        export COMPOSER_AUTH="$(printf '{\"github-oauth\":{\"github.com\":\"%s\"}}' "$github_token")"; \
+        export COMPOSER_AUTH="$(printf '{"github-oauth":{"github.com":"%s"}}' "$github_token")"; \
     fi; \
     installed=false; \
     for attempt in 1 2; do \
