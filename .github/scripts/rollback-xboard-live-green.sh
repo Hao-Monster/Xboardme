@@ -73,7 +73,8 @@ cp -p -- "$caddy_backup" "$caddy_config"
 chmod 0644 "$caddy_config"
 caddy validate --config "$caddy_config" --adapter caddyfile >/dev/null
 systemctl reload caddy
-if [[ "$(grep -Rho '127\.0\.0\.1:7001' /etc/caddy 2>/dev/null | wc -l)" != 1 ]]; then
+if [[ "$(grep -o '127\.0\.0\.1:7001' "$caddy_config" | wc -l)" != 1 ]] || \
+   grep -q '127\.0\.0\.1:7002' "$caddy_config"; then
   echo 'RELEASE_ROLLBACK_FAIL=caddy_not_blue'
   exit 1
 fi

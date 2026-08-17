@@ -76,6 +76,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('caddy_backup=${CADDY_BACKUP:-$workdir/.codex-release/', $rollback);
         $this->assertStringContainsString('cp -p -- "$caddy_backup" "$caddy_config"', $rollback);
         $this->assertStringContainsString('chmod 0644 "$caddy_config"', $rollback);
+        $this->assertStringContainsString('grep -o \'127\\.0\\.0\\.1:7001\' "$caddy_config"', $rollback);
+        $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001' /etc/caddy", $rollback);
         $this->assertStringContainsString('for attempt in {1..12}', $rollback);
         $this->assertStringContainsString('SIGCONT', $rollback);
         $this->assertStringContainsString('php /www/artisan horizon:continue', $rollback);

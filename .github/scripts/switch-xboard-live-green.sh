@@ -149,7 +149,8 @@ for attempt in {1..12}; do
   [[ "$(docker inspect -f '{{.State.Running}}' "$green")" == true ]]
   sleep 5
 done
-if [[ "$(grep -Rho '127\.0\.0\.1:7002' /etc/caddy 2>/dev/null | wc -l)" != 1 ]]; then
+if [[ "$(grep -o '127\.0\.0\.1:7002' "$proxy_file" | wc -l)" != 1 ]] || \
+   grep -q '127\.0\.0\.1:7001' "$proxy_file"; then
   echo 'RELEASE_SWITCH_FAIL=caddy_route_not_committed'
   exit 1
 fi
