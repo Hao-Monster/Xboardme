@@ -81,6 +81,19 @@ else
   cp -p -- "$proxy_file" "$caddy_backup"
   chmod 600 "$caddy_backup"
 fi
+set_state() {
+  local key=$1 value=$2 temporary
+  temporary=$(mktemp "${state_file}.XXXXXX")
+  awk -F= -v key="$key" '$1 != key {print}' "$state_file" > "$temporary"
+  printf '%s=%q\n' "$key" "$value" >> "$temporary"
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$state_file"
+}
+# Persist the exact recovery paths before the first configuration mutation so
+# an independent rollback remains possible even if the cutover exits early.
+set_state CADDY_CONFIG "$proxy_file"
+set_state CADDY_BACKUP "$caddy_backup"
+
 candidate=$(mktemp "${proxy_file}.codex-${RELEASE_ID}.XXXXXX")
 cleanup_candidate() { rm -f -- "$candidate"; }
 trap cleanup_candidate EXIT
@@ -122,7 +135,15 @@ esac
 
 for attempt in {1..12}; do
   docker exec "$green" wget -q -O /dev/null http://127.0.0.1:7001/
-  curl --silent --show-error --fail --location --max-time 10 --output /dev/null "$app_url/"
+  public_ready=0
+  for public_attempt in {1..3}; do
+    if curl --silent --show-error --fail --location --max-time 10 --output /dev/null "$app_url/"; then
+      public_ready=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$public_ready" == 1 ]]
   [[ "$(docker inspect -f '{{.State.Running}}' "$green")" == true ]]
   sleep 5
 done
@@ -131,16 +152,6 @@ if [[ "$(grep -Rho '127\.0\.0\.1:7002' /etc/caddy 2>/dev/null | wc -l)" != 1 ]];
   exit 1
 fi
 
-set_state() {
-  local key=$1 value=$2 temporary
-  temporary=$(mktemp "${state_file}.XXXXXX")
-  awk -F= -v key="$key" '$1 != key {print}' "$state_file" > "$temporary"
-  printf '%s=%q\n' "$key" "$value" >> "$temporary"
-  chmod 600 "$temporary"
-  mv -f -- "$temporary" "$state_file"
-}
-set_state CADDY_CONFIG "$proxy_file"
-set_state CADDY_BACKUP "$caddy_backup"
 set_state SWITCHED_AT "$(date -u +%FT%TZ)"
 set_state TRAFFIC_STATE green
 

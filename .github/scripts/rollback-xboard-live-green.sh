@@ -21,9 +21,29 @@ if [[ ! -f "$state_file" ]]; then
 fi
 # shellcheck disable=SC1090
 source "$state_file"
-if [[ "$BLUE_CONTAINER" != "$blue" || ! -f "${CADDY_BACKUP:-}" ]]; then
+if [[ "$BLUE_CONTAINER" != "$blue" ]]; then
   echo 'RELEASE_ROLLBACK_FAIL=invalid_release_state'
   exit 1
+fi
+
+# A cutover can fail after creating the backup but before recording its paths.
+# Recover only the deterministic release-local backup and one exact Caddy file.
+caddy_backup=${CADDY_BACKUP:-$workdir/.codex-release/$RELEASE_ID/backups/caddy-before-switch.conf}
+if [[ ! -f "$caddy_backup" ]] || [[ "$(grep -o '127\.0\.0\.1:7001' "$caddy_backup" | wc -l)" != 1 ]]; then
+  echo 'RELEASE_ROLLBACK_FAIL=invalid_caddy_backup'
+  exit 1
+fi
+caddy_config=${CADDY_CONFIG:-}
+if [[ -z "$caddy_config" ]]; then
+  mapfile -t caddy_candidates < <(
+    grep -RIlE --include='*.conf' --include='Caddyfile' \
+      -- '127\.0\.0\.1:700[12]' /etc/caddy 2>/dev/null || true
+  )
+  if ((${#caddy_candidates[@]} != 1)); then
+    echo "RELEASE_ROLLBACK_FAIL=ambiguous_caddy_file count=${#caddy_candidates[@]}"
+    exit 1
+  fi
+  caddy_config=${caddy_candidates[0]}
 fi
 
 if [[ "$ROLE_STATE" == green ]]; then
@@ -49,11 +69,9 @@ if ((blue_healthy != 1)); then
   exit 1
 fi
 
-if [[ "$TRAFFIC_STATE" == green ]]; then
-  cp -p -- "$CADDY_BACKUP" "$CADDY_CONFIG"
-  caddy validate --config "$CADDY_CONFIG" --adapter caddyfile >/dev/null
-  systemctl reload caddy
-fi
+cp -p -- "$caddy_backup" "$caddy_config"
+caddy validate --config "$caddy_config" --adapter caddyfile >/dev/null
+systemctl reload caddy
 if [[ "$(grep -Rho '127\.0\.0\.1:7001' /etc/caddy 2>/dev/null | wc -l)" != 1 ]]; then
   echo 'RELEASE_ROLLBACK_FAIL=caddy_not_blue'
   exit 1
@@ -65,7 +83,18 @@ $app = require "/www/bootstrap/app.php";
 $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 echo rtrim((string) config("app.url"), "/");
 ')
-curl --silent --show-error --fail --location --max-time 10 --output /dev/null "$app_url/"
+public_ready=0
+for attempt in {1..12}; do
+  if curl --silent --show-error --fail --location --max-time 10 --output /dev/null "$app_url/"; then
+    public_ready=1
+    break
+  fi
+  sleep 2
+done
+if ((public_ready != 1)); then
+  echo 'RELEASE_ROLLBACK_FAIL=public_blue_unhealthy'
+  exit 1
+fi
 
 set_state() {
   local key=$1 value=$2 temporary
@@ -77,5 +106,7 @@ set_state() {
 }
 set_state TRAFFIC_STATE blue
 set_state ROLE_STATE blue
+set_state CADDY_CONFIG "$caddy_config"
+set_state CADDY_BACKUP "$caddy_backup"
 set_state ROLLED_BACK_AT "$(date -u +%FT%TZ)"
 echo "RELEASE_ROLLBACK=PASS id=$RELEASE_ID upstream=127.0.0.1:7001"
