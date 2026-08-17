@@ -20,14 +20,20 @@ if ((${#containers[@]} > 1)); then
   exit 1
 fi
 
-mapfile -t production_ids < <(
-  docker ps --format '{{.ID}} {{.Image}}' |
-    awk 'tolower($2) ~ /xboard/ {print $1}'
+mapfile -t candidates < <(
+  {
+    docker ps --format '{{.ID}} {{.Image}}' |
+      awk 'tolower($2) ~ /xboard/ {print $1}'
+    docker ps -q --filter label=com.docker.compose.service=xboard
+  } | sort -u
 )
+production_ids=()
+for container_id in "${candidates[@]}"; do
+  is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
+  [[ "$is_stage" == true ]] || production_ids+=("$container_id")
+done
 workdir=''
 for container_id in "${production_ids[@]}"; do
-  is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
-  [[ "$is_stage" == true ]] && continue
   candidate_workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_id")
   if [[ -n "$candidate_workdir" ]]; then
     if [[ -n "$workdir" && "$workdir" != "$candidate_workdir" ]]; then
@@ -60,5 +66,6 @@ if [[ -d "$stage_dir" ]]; then
     -c 'find /stage -mindepth 1 -delete' >/dev/null
   rmdir -- "$stage_dir"
 fi
+docker exec "${production_ids[0]}" rm -f "/www/.docker/.data/.codex-stage-$STAGE_RUN_ID.sqlite"
 
 echo "STAGE_CLEANUP=PASS run=$STAGE_RUN_ID"

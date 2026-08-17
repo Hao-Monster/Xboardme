@@ -22,14 +22,12 @@ command -v docker >/dev/null
 docker info >/dev/null
 
 mapfile -t candidates < <(
-  docker ps --format '{{.ID}} {{.Image}}' |
-    awk 'tolower($2) ~ /xboard/ {print $1}'
-)
-if ((${#candidates[@]} == 0)); then
-  mapfile -t candidates < <(
+  {
+    docker ps --format '{{.ID}} {{.Image}}' |
+      awk 'tolower($2) ~ /xboard/ {print $1}'
     docker ps -q --filter label=com.docker.compose.service=xboard
-  )
-fi
+  } | sort -u
+)
 production_candidates=()
 for container_id in "${candidates[@]}"; do
   is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
@@ -164,7 +162,11 @@ if [[ -e "$stage_dir" ]]; then
 fi
 
 container_name="xboard-stage-$STAGE_RUN_ID"
-snapshot_path="/tmp/codex-stage-$STAGE_RUN_ID.sqlite"
+snapshot_path="${db_path%/*}/.codex-stage-$STAGE_RUN_ID.sqlite"
+if docker exec "$primary" test -e "$snapshot_path"; then
+  echo 'STAGE_FAIL=snapshot_path_exists'
+  exit 1
+fi
 created_stage_dir=0
 stage_started=0
 remove_stage_files() {
