@@ -52,20 +52,48 @@ for name in "$horizon_name" "$scheduler_name"; do
   fi
 done
 
-blue_horizon_stopped=0
 blue_horizon_paused=0
 blue_octane_stopped=0
+blue_octane_pgid=''
 rollback_roles() {
   status=$?
   if ((status != 0)); then
     docker rm -f "$scheduler_name" "$horizon_name" >/dev/null 2>&1 || true
-    ((blue_octane_stopped == 0)) || docker exec "$blue" supervisorctl start octane >/dev/null 2>&1 || true
-    ((blue_horizon_stopped == 0)) || docker exec "$blue" supervisorctl start horizon >/dev/null 2>&1 || true
-    ((blue_horizon_paused == 0)) || docker exec "$blue" supervisorctl signal CONT horizon >/dev/null 2>&1 || true
+    if ((blue_octane_stopped == 1)) && [[ "$blue_octane_pgid" =~ ^[1-9][0-9]*$ ]]; then
+      docker exec "$blue" php -r 'posix_kill(-((int) $argv[1]), SIGCONT);' "$blue_octane_pgid" >/dev/null 2>&1 || true
+    fi
+    ((blue_horizon_paused == 0)) || docker exec "$blue" php /www/artisan horizon:continue >/dev/null 2>&1 || true
   fi
   exit "$status"
 }
 trap rollback_roles EXIT
+
+# Pause the registered Laravel 12 Horizon masters before the new master starts.
+# Existing workers are allowed to drain; queued jobs remain durable in Redis.
+docker exec "$blue" php /www/artisan horizon:pause >/dev/null
+blue_horizon_paused=1
+zero_reserved_samples=0
+for attempt in {1..35}; do
+  reserved_jobs=$(docker exec "$blue" php -r '
+  require "/www/vendor/autoload.php";
+  $app = require "/www/bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  $queue = app("queue")->connection("redis");
+  $names = ["traffic_fetch", "stat", "user_alive_sync", "default", "order_handle", "send_email", "send_telegram", "send_email_mass", "node_sync"];
+  echo array_sum(array_map(fn ($name) => $queue->reservedSize($name), $names));
+  ')
+  if [[ "$reserved_jobs" == 0 ]]; then
+    ((zero_reserved_samples += 1))
+    ((zero_reserved_samples >= 3)) && break
+  else
+    zero_reserved_samples=0
+  fi
+  sleep 2
+done
+if ((zero_reserved_samples < 3)); then
+  echo 'RELEASE_ROLES_FAIL=blue_horizon_drain_timeout'
+  exit 1
+fi
 
 docker run -d \
   --name "$horizon_name" \
@@ -88,53 +116,52 @@ docker run -d \
   -e ENABLE_SCHEDULER=false \
   "$RELEASE_IMAGE" >/dev/null
 
-horizon_ready=0
+horizon_ready_samples=0
 for attempt in {1..30}; do
-  if docker exec "$horizon_name" supervisorctl status horizon 2>/dev/null | grep -q RUNNING && \
-     docker exec "$horizon_name" php /www/artisan horizon:status 2>/dev/null | grep -qi running; then
-    horizon_ready=1
-    break
+  horizon_supervisor_state=$(docker exec "$horizon_name" supervisorctl status 2>&1 || true)
+  if grep -Eq '^horizon:horizon_00[[:space:]]+RUNNING([[:space:]]|$)' <<< "$horizon_supervisor_state"; then
+    ((horizon_ready_samples += 1))
+    ((horizon_ready_samples >= 3)) && break
+  else
+    horizon_ready_samples=0
   fi
   sleep 2
 done
-if ((horizon_ready != 1)); then
+if ((horizon_ready_samples < 3)); then
   docker logs --tail 100 "$horizon_name" >&2 || true
   echo 'RELEASE_ROLES_FAIL=green_horizon_unhealthy'
   exit 1
 fi
 
-# Pause only the Laravel 12 Horizon master through its local supervisor. New
-# Laravel 13 workers keep consuming queued jobs while old in-flight work gets
-# up to the configured 60-second maximum to finish before the old master stops.
-docker exec "$blue" supervisorctl signal USR2 horizon >/dev/null
-blue_horizon_paused=1
-zero_reserved_samples=0
-for attempt in {1..35}; do
-  reserved_jobs=$(docker exec "$blue" php -r '
-  require "/www/vendor/autoload.php";
-  $app = require "/www/bootstrap/app.php";
-  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-  $queue = app("queue")->connection("redis");
-  $names = ["traffic_fetch", "stat", "user_alive_sync", "default", "order_handle", "send_email", "send_telegram", "send_email_mass", "node_sync"];
-  echo array_sum(array_map(fn ($name) => $queue->reservedSize($name), $names));
-  ')
-  if [[ "$reserved_jobs" == 0 ]]; then
-    ((zero_reserved_samples += 1))
-    ((zero_reserved_samples >= 3)) && break
-  else
-    zero_reserved_samples=0
-  fi
-  sleep 2
-done
-docker exec "$blue" supervisorctl stop horizon >/dev/null
-blue_horizon_stopped=1
-blue_horizon_paused=0
-
-# Stop the Laravel 12 Octane scheduler owner before starting the dedicated
-# Laravel 13 scheduler. Public HTTP is already on green, so this has no traffic
-# interruption and preserves a single scheduler owner.
-docker exec "$blue" supervisorctl stop octane >/dev/null
+# Freeze only the Laravel 12 Octane process group. Supervisor keeps the stopped
+# process registered (so it does not restart), Redis remains live, and rollback
+# can resume the exact group before restoring blue traffic.
+blue_octane_pid=$(docker exec "$blue" sh -c '
+  for proc in /proc/[0-9]*; do
+    [ -r "$proc/cmdline" ] || continue
+    executable=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "1p")
+    argument1=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "2p")
+    argument2=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "3p")
+    if [ "${executable##*/}" = php ] && [ "$argument1" = /www/artisan ] && [ "$argument2" = octane:start ]; then
+      printf "%s\n" "${proc#/proc/}"
+    fi
+  done
+' | head -n 1)
+if [[ ! "$blue_octane_pid" =~ ^[1-9][0-9]*$ ]]; then
+  echo 'RELEASE_ROLES_FAIL=blue_octane_master_missing'
+  exit 1
+fi
+blue_octane_pgid=$(docker exec "$blue" sh -c 'awk "{print \$5}" "/proc/$1/stat"' sh "$blue_octane_pid")
+if [[ ! "$blue_octane_pgid" =~ ^[1-9][0-9]*$ ]]; then
+  echo 'RELEASE_ROLES_FAIL=blue_octane_group_missing'
+  exit 1
+fi
+docker exec "$blue" php -r 'exit(posix_kill(-((int) $argv[1]), SIGSTOP) ? 0 : 1);' "$blue_octane_pgid"
 blue_octane_stopped=1
+if ! docker exec "$blue" sh -c 'grep -q "^State:[[:space:]]*T" "/proc/$1/status"' sh "$blue_octane_pid"; then
+  echo 'RELEASE_ROLES_FAIL=blue_octane_not_stopped'
+  exit 1
+fi
 docker run -d \
   --name "$scheduler_name" \
   --hostname "$scheduler_name" \
@@ -192,6 +219,8 @@ set_state() {
 }
 set_state HORIZON_CONTAINER "$horizon_name"
 set_state SCHEDULER_CONTAINER "$scheduler_name"
+set_state BLUE_OCTANE_PID "$blue_octane_pid"
+set_state BLUE_OCTANE_PGID "$blue_octane_pgid"
 set_state ROLE_STATE green
 set_state ROLES_ACTIVATED_AT "$(date -u +%FT%TZ)"
 

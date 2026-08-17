@@ -8,6 +8,25 @@ use Tests\TestCase;
 
 class ZeroDowntimeReleaseSafetyTest extends TestCase
 {
+    public function test_supervisor_control_socket_is_unique_per_runtime_instance(): void
+    {
+        $entrypoint = file_get_contents(base_path('.docker/entrypoint.sh'));
+        $supervisor = file_get_contents(base_path('.docker/supervisor/supervisord.conf'));
+        $dockerfile = file_get_contents(base_path('Dockerfile'));
+
+        $this->assertStringContainsString('SUPERVISOR_SOCKET_FILE:=/tmp/xboard-supervisor-${RUNTIME_INSTANCE_ID}.sock', $entrypoint);
+        $this->assertStringContainsString('"${SUPERVISOR_SOCKET_FILE}"', $entrypoint);
+        $this->assertStringContainsString('[unix_http_server]', $supervisor);
+        $this->assertStringContainsString('file=/tmp/xboard-supervisor-%(ENV_RUNTIME_INSTANCE_ID)s.sock', $supervisor);
+        $this->assertStringContainsString('[rpcinterface:supervisor]', $supervisor);
+        $this->assertStringContainsString('[supervisorctl]', $supervisor);
+        $this->assertStringContainsString('serverurl=unix:///tmp/xboard-supervisor-%(ENV_RUNTIME_INSTANCE_ID)s.sock', $supervisor);
+        $this->assertStringContainsString('ENV RUNTIME_INSTANCE_ID=default', $dockerfile);
+        $this->assertStringContainsString('COPY .docker/supervisor/supervisord.conf /etc/supervisord.conf', $dockerfile);
+        $this->assertStringContainsString('CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]', $dockerfile);
+        $this->assertStringNotContainsString('/etc/supervisor/conf.d/supervisord.conf', $dockerfile);
+    }
+
     public function test_file_sessions_are_not_active_on_public_route_groups(): void
     {
         $kernel = $this->app->make(\Illuminate\Contracts\Http\Kernel::class);
@@ -30,8 +49,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('-e ENABLE_HORIZON=false', $script);
         $this->assertStringContainsString('-e ENABLE_REDIS=false', $script);
         $this->assertStringContainsString('-e ENABLE_SCHEDULER=false', $script);
-        $this->assertStringContainsString('supervisorctl status redis 2>&1 || true', $script);
-        $this->assertStringContainsString('redis_supervisor_state" != *STOPPED*', $script);
+        $this->assertStringContainsString('supervisorctl status 2>&1 || true', $script);
+        $this->assertStringContainsString('^redis:redis_00[[:space:]]+STOPPED', $script);
+        $this->assertStringContainsString('^horizon:horizon_00[[:space:]]+STOPPED', $script);
         $this->assertStringContainsString('for proc in /proc/[0-9]*', $script);
         $this->assertStringContainsString('[ "$executable" = redis-server ]', $script);
         $this->assertStringContainsString('horizon|horizon:work)', $script);
@@ -49,6 +69,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('caddy validate --config "$candidate" --adapter caddyfile', $switch);
         $this->assertStringContainsString("systemctl reload caddy", $switch);
         $this->assertStringContainsString('cp -p -- "$CADDY_BACKUP" "$CADDY_CONFIG"', $rollback);
+        $this->assertStringContainsString('SIGCONT', $rollback);
+        $this->assertStringContainsString('php /www/artisan horizon:continue', $rollback);
         $this->assertStringContainsString("RELEASE_ROLLBACK=PASS", $rollback);
     }
 
@@ -57,8 +79,14 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $script = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
 
         $this->assertStringContainsString('-e ENABLE_REDIS=false', $script);
-        $this->assertStringContainsString('supervisorctl stop horizon', $script);
-        $this->assertStringContainsString('supervisorctl stop octane', $script);
+        $this->assertStringContainsString('php /www/artisan horizon:pause', $script);
+        $this->assertStringContainsString('php /www/artisan horizon:continue', $script);
+        $this->assertStringContainsString('horizon_ready_samples >= 3', $script);
+        $this->assertStringNotContainsString('php /www/artisan horizon:status', $script);
+        $this->assertStringContainsString('SIGSTOP', $script);
+        $this->assertStringContainsString('BLUE_OCTANE_PGID', $script);
+        $this->assertStringNotContainsString('supervisorctl stop horizon', $script);
+        $this->assertStringNotContainsString('supervisorctl stop octane', $script);
         $this->assertStringContainsString('php /www/artisan schedule:work', $script);
     }
 }

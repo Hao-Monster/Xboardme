@@ -39,7 +39,7 @@ RUN --mount=type=secret,id=github_token \
 COPY .docker /
 COPY . /www
 
-COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY .docker/supervisor/supervisord.conf /etc/supervisord.conf
 COPY .docker/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY .docker/php/zz-xboard.ini /usr/local/etc/php/conf.d/zz-xboard.ini
 
@@ -51,7 +51,8 @@ RUN composer dump-autoload --no-dev --no-interaction --classmap-authoritative \
     && mkdir -p /data \
     && chown redis:redis /data
     
-ENV ENABLE_WEB=true \
+ENV RUNTIME_INSTANCE_ID=default \
+    ENABLE_WEB=true \
     ENABLE_HORIZON=true \
     ENABLE_REDIS=true \
     ENABLE_WS_SERVER=true \
@@ -62,4 +63,4 @@ EXPOSE 7001
 COPY .docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]

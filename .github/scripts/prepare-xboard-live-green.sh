@@ -307,11 +307,10 @@ fi
 # supervisorctl intentionally returns a non-zero status for STOPPED programs;
 # capture its text and assert the exact desired state below instead of letting
 # errexit mistake a disabled state owner for a script failure.
-redis_supervisor_state=$(docker exec "$green_name" supervisorctl status redis 2>&1 || true)
-horizon_supervisor_state=$(docker exec "$green_name" supervisorctl status horizon 2>&1 || true)
-if [[ "$redis_supervisor_state" != *STOPPED* || "$horizon_supervisor_state" != *STOPPED* ]]; then
-  printf 'RELEASE_PREPARE_FAIL=unexpected_supervisor_state redis=%q horizon=%q\n' \
-    "$redis_supervisor_state" "$horizon_supervisor_state"
+supervisor_state=$(docker exec "$green_name" supervisorctl status 2>&1 || true)
+if ! grep -Eq '^redis:redis_00[[:space:]]+STOPPED([[:space:]]|$)' <<< "$supervisor_state" || \
+   ! grep -Eq '^horizon:horizon_00[[:space:]]+STOPPED([[:space:]]|$)' <<< "$supervisor_state"; then
+  printf 'RELEASE_PREPARE_FAIL=unexpected_supervisor_state state=%q\n' "$supervisor_state"
   exit 1
 fi
 # Read argv directly from /proc so the probe cannot match its own shell command

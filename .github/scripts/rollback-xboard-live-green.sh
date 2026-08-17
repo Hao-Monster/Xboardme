@@ -28,11 +28,13 @@ fi
 
 if [[ "$ROLE_STATE" == green ]]; then
   docker rm -f "${SCHEDULER_CONTAINER:?}" "${HORIZON_CONTAINER:?}" >/dev/null 2>&1 || true
-  docker exec "$blue" supervisorctl start horizon >/dev/null
-  docker exec "$blue" supervisorctl start octane >/dev/null
+  if [[ ! "${BLUE_OCTANE_PGID:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo 'RELEASE_ROLLBACK_FAIL=invalid_blue_octane_group'
+    exit 1
+  fi
+  docker exec "$blue" php -r 'exit(posix_kill(-((int) $argv[1]), SIGCONT) ? 0 : 1);' "$BLUE_OCTANE_PGID"
+  docker exec "$blue" php /www/artisan horizon:continue >/dev/null
 fi
-docker exec "$blue" supervisorctl start ws-server >/dev/null 2>&1 || true
-docker exec "$blue" supervisorctl start caddy >/dev/null 2>&1 || true
 
 blue_healthy=0
 for attempt in {1..30}; do

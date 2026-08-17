@@ -35,7 +35,8 @@ esac
 : "${OCTANE_STATE_FILE:=/tmp/xboard-octane-${RUNTIME_INSTANCE_ID}.json}"
 : "${WS_PID_FILE:=/tmp/xboard-ws-${RUNTIME_INSTANCE_ID}.pid}"
 : "${SUPERVISOR_PID_FILE:=/tmp/xboard-supervisord-${RUNTIME_INSTANCE_ID}.pid}"
-export RUNTIME_INSTANCE_ID OCTANE_STATE_FILE WS_PID_FILE SUPERVISOR_PID_FILE
+: "${SUPERVISOR_SOCKET_FILE:=/tmp/xboard-supervisor-${RUNTIME_INSTANCE_ID}.sock}"
+export RUNTIME_INSTANCE_ID OCTANE_STATE_FILE WS_PID_FILE SUPERVISOR_PID_FILE SUPERVISOR_SOCKET_FILE
 
 # Keep knowledge attachments on a private, writable filesystem. The directory
 # is mounted by the Compose templates and remains outside the public web root.
@@ -191,7 +192,7 @@ fi
 echo "[entrypoint] Starting services (caddy=${ENABLE_CADDY} web=${ENABLE_WEB} horizon=${ENABLE_HORIZON} ws=${ENABLE_WS_SERVER} scheduler=${ENABLE_SCHEDULER})..."
 # Drop stale Octane/WorkerMan state files so the new master does not signal
 # PIDs left over from a previous container run (causes Swoole kill EPERM).
-rm -f "${OCTANE_STATE_FILE}" "${WS_PID_FILE}" "${SUPERVISOR_PID_FILE}" 2>/dev/null || true
+rm -f "${OCTANE_STATE_FILE}" "${WS_PID_FILE}" "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_SOCKET_FILE}" 2>/dev/null || true
 for runtime_dir in /www/storage/logs /www/storage/framework /www/storage/theme /www/bootstrap/cache /www/plugins /www/.docker/.data; do
     mkdir -p "$runtime_dir"
     chown -R www:www "$runtime_dir" 2>/dev/null || true
