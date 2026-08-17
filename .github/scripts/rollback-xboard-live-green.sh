@@ -85,9 +85,25 @@ $app = require "/www/bootstrap/app.php";
 $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 echo rtrim((string) config("app.url"), "/");
 ')
+case "$app_url" in
+  http://*) app_port=80 ;;
+  https://*) app_port=443 ;;
+  *) echo 'RELEASE_ROLLBACK_FAIL=invalid_app_url'; exit 1 ;;
+esac
+app_host=$(docker exec "$blue" php -r '
+require "/www/vendor/autoload.php";
+$app = require "/www/bootstrap/app.php";
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+echo (string) parse_url((string) config("app.url"), PHP_URL_HOST);
+')
+if [[ ! "$app_host" =~ ^[A-Za-z0-9.-]+$ ]]; then
+  echo 'RELEASE_ROLLBACK_FAIL=invalid_app_host'
+  exit 1
+fi
 public_ready=0
 for attempt in {1..12}; do
-  if curl --silent --show-error --fail --location --max-time 10 --output /dev/null "$app_url/"; then
+  if curl --silent --show-error --fail --location --max-time 10 --output /dev/null \
+       --resolve "$app_host:$app_port:127.0.0.1" "$app_url/"; then
     public_ready=1
     break
   fi

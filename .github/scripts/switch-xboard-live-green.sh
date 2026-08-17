@@ -131,15 +131,27 @@ $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 echo rtrim((string) config("app.url"), "/");
 ')
 case "$app_url" in
-  http://*|https://*) ;;
+  http://*) app_port=80 ;;
+  https://*) app_port=443 ;;
   *) echo 'RELEASE_SWITCH_FAIL=invalid_app_url'; exit 1 ;;
 esac
+app_host=$(docker exec "$green" php -r '
+require "/www/vendor/autoload.php";
+$app = require "/www/bootstrap/app.php";
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+echo (string) parse_url((string) config("app.url"), PHP_URL_HOST);
+')
+if [[ ! "$app_host" =~ ^[A-Za-z0-9.-]+$ ]]; then
+  echo 'RELEASE_SWITCH_FAIL=invalid_app_host'
+  exit 1
+fi
 
 for attempt in {1..12}; do
   docker exec "$green" wget -q -O /dev/null http://127.0.0.1:7001/
   public_ready=0
   for public_attempt in {1..3}; do
-    if curl --silent --show-error --fail --location --max-time 10 --output /dev/null "$app_url/"; then
+    if curl --silent --show-error --fail --location --max-time 10 --output /dev/null \
+         --resolve "$app_host:$app_port:127.0.0.1" "$app_url/"; then
       public_ready=1
       break
     fi

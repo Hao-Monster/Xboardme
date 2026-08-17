@@ -71,6 +71,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
             strpos($switch, 'set_state CADDY_BACKUP "$caddy_backup"') < strpos($switch, 'mv -f -- "$candidate" "$proxy_file"')
         );
         $this->assertStringContainsString('for public_attempt in {1..3}', $switch);
+        $this->assertStringContainsString('--resolve "$app_host:$app_port:127.0.0.1"', $switch);
         $this->assertStringContainsString('chmod 0644 "$proxy_file"', $switch);
         $this->assertStringContainsString("systemctl reload caddy", $switch);
         $this->assertStringContainsString('caddy_backup=${CADDY_BACKUP:-$workdir/.codex-release/', $rollback);
@@ -79,6 +80,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('grep -o \'127\\.0\\.0\\.1:7001\' "$caddy_config"', $rollback);
         $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001' /etc/caddy", $rollback);
         $this->assertStringContainsString('for attempt in {1..12}', $rollback);
+        $this->assertStringContainsString('--resolve "$app_host:$app_port:127.0.0.1"', $rollback);
         $this->assertStringContainsString('SIGCONT', $rollback);
         $this->assertStringContainsString('php /www/artisan horizon:continue', $rollback);
         $this->assertStringContainsString("RELEASE_ROLLBACK=PASS", $rollback);
@@ -98,5 +100,14 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringNotContainsString('supervisorctl stop horizon', $script);
         $this->assertStringNotContainsString('supervisorctl stop octane', $script);
         $this->assertStringContainsString('php /www/artisan schedule:work', $script);
+    }
+
+    public function test_smoke_test_checks_the_public_route_from_the_runner(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/distributor-smoke.yml'));
+
+        $this->assertStringContainsString('public_url=$(sshpass -e ssh', $workflow);
+        $this->assertStringContainsString('--output /dev/null "$public_url/"', $workflow);
+        $this->assertStringContainsString('test "$public_ready" = \'1\'', $workflow);
     }
 }

@@ -170,4 +170,26 @@ jobs:
           test "$restricted_status" = '403'
           jq -e '.message == "分销商账号无权访问该功能"' restricted.json >/dev/null
 
+          public_url=$(sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker exec \$(docker ps -q --filter label=com.docker.compose.service=xboard | head -n 1) php -r '
+              require \"/www/vendor/autoload.php\";
+              \$app = require \"/www/bootstrap/app.php\";
+              \$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();
+              echo rtrim((string) config(\"app.url\"), \"/\");
+            '")
+          case "$public_url" in
+            http://*|https://*) ;;
+            *) echo 'Invalid public application URL.' >&2; exit 1 ;;
+          esac
+          public_ready=0
+          for attempt in $(seq 1 6); do
+            if curl --silent --show-error --fail --location --max-time 15 \
+              --output /dev/null "$public_url/"; then
+              public_ready=1
+              break
+            fi
+            sleep 3
+          done
+          test "$public_ready" = '1'
+
           echo 'Distributor production smoke test passed.'
