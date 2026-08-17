@@ -38,6 +38,10 @@ return [
 
     'server' => env('OCTANE_SERVER', 'swoole'),
 
+    // Keep process state container-local so blue/green instances sharing the
+    // application log volume cannot signal or overwrite each other.
+    'state_file' => env('OCTANE_STATE_FILE', storage_path('logs/octane-server-state.json')),
+
     /*
     |--------------------------------------------------------------------------
     | Force HTTPS

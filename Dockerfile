@@ -20,7 +20,9 @@ COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY .docker/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY .docker/php/zz-xboard.ini /usr/local/etc/php/conf.d/zz-xboard.ini
 
-RUN composer install --no-cache --no-dev --no-interaction --no-progress --prefer-dist --classmap-authoritative \
+RUN --mount=type=secret,id=composer_auth \
+    if [ -f /run/secrets/composer_auth ]; then export COMPOSER_AUTH="$(cat /run/secrets/composer_auth)"; fi \
+    && composer install --no-cache --no-dev --no-interaction --no-progress --prefer-dist --classmap-authoritative \
     && composer check-platform-reqs --no-dev \
     && php artisan storage:link \
     && chown -R www:www /www \

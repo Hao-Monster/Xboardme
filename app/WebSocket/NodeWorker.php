@@ -53,7 +53,7 @@ class NodeWorker
             mkdir($logPath, 0777, true);
         }
         Worker::$logFile = $logPath . '/xboard-ws-server.log';
-        Worker::$pidFile = $logPath . '/xboard-ws-server.pid';
+        Worker::$pidFile = (string) config('app.ws_pid_file', $logPath . '/xboard-ws-server.pid');
     }
 
     private function setupCallbacks(): void

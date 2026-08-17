@@ -12,11 +12,19 @@ The release baseline is:
 - PHP 8.3 in production; PHP 8.3 and 8.4 in CI.
 - Laravel 13.x resolved by the committed `composer.lock`.
 - Swoole 6.1.0 / PHP 8.3 using the pinned multi-architecture image digest.
-- MySQL and an external Redis service for a zero-downtime production rollout.
-- At least two web instances behind a load balancer.
+- The existing persistent SQLite database in WAL mode. Moving production data
+  to MySQL is explicitly excluded from this framework release because it would
+  add an unrelated, higher-risk data migration.
+- The existing Redis data remains authoritative during the initial web
+  cutover. Redis ownership is separated in a later infrastructure phase before
+  the old all-in-one container is retired.
+- Two web runtimes on the same host during cutover, with host Caddy switching
+  atomically between loopback ports 7001 (blue) and 7002 (green).
 
-SQLite and the all-in-one embedded Redis topology remain supported for normal
-operation, but they are not eligible for a zero-downtime rollout.
+This topology is eligible only while SQLite remains on the same local host,
+uses a persistent bind mount, passes `PRAGMA integrity_check`, and remains in
+WAL mode. SQLite must never be placed on a network filesystem. Only one Redis,
+Horizon, and Scheduler owner may run during the first cutover phase.
 
 ## Release artifacts and invariants
 
@@ -30,7 +38,9 @@ The following values must be identical in blue and green environments:
 - database connection and credentials;
 - `REDIS_PREFIX`, `CACHE_PREFIX`, queue names and Horizon prefix;
 - `SESSION_COOKIE` and `SESSION_SERIALIZATION=php`;
-- shared plugin and private attachment storage.
+- shared plugin and private attachment storage;
+- a persistent shared session path. The live cutover is blocked until existing
+  file sessions have been migrated and continuity has been rehearsed.
 
 Each release must have separate code, `vendor`, bootstrap cache and local
 runtime files. Do not share `bootstrap/cache` or Octane state files.
@@ -51,7 +61,8 @@ All applicable gates must pass before traffic is sent to green:
 9. Redis cache-prefix, settings cache and lock behavior.
 10. Octane request isolation and graceful shutdown.
 11. Workerman WebSocket handshake, connection drain and automatic reconnect.
-12. MySQL 5.7 and MySQL 8.x upgrade tests against production-shaped data.
+12. SQLite WAL rehearsal from a production snapshot, plus MySQL 5.7 and MySQL
+    8.x compatibility tests to preserve supported installation modes.
 13. amd64 and arm64 image builds from the same commit and lock file.
 14. Built-in plugins, all eleven subscription protocols, and every production
     third-party plugin listed in the release inventory.
@@ -64,7 +75,7 @@ production approval, but does not block local framework development.
 1. Take a transactionally consistent, encrypted backup and record its checksum.
 2. Restore it into an isolated rehearsal database with external integrations
    disabled and secrets replaced.
-3. Run the current Laravel 12 release against the restored database and capture
+3. Run the current Laravel 12 release against the restored SQLite database and capture
    table row counts plus critical aggregates for users, tokens, orders,
    payments, commissions, subscriptions, servers and statistics.
 4. Run `php artisan migrate --pretend --no-interaction` from the Laravel 13
@@ -79,28 +90,56 @@ production approval, but does not block local framework development.
 Do not run destructive restore tests against production. A database restore is
 reserved for a separately authorized disaster-recovery event.
 
+## Isolated green rehearsal on the production host
+
+The rehearsal is not a traffic deployment. It is started by
+`.github/scripts/stage-xboard-green.sh` and must satisfy all of these controls:
+
+1. Locate exactly one non-stage Compose project and reject an occupied port
+   7002 or another stage container.
+2. Require an immutable GHCR digest, sufficient measured disk/memory, active
+   host Caddy, persistent SQLite WAL, and all required mounts.
+3. Use SQLite online backup, copy sessions and private attachments, and mount
+   production environment/theme/plugin files read-only.
+4. Start isolated Redis, logs, attachments and database storage. Disable
+   Horizon, outbound mail and Telescope, and skip application update so
+   production data, queues and notification channels cannot be mutated.
+5. Verify HTTP health, Laravel 13, migration status, database integrity, core
+   data counts, attachment status and the authenticated distributor smoke test.
+6. Automatically remove the container and cloned files on a failed smoke test.
+   A successful stage remains isolated for inspection and is removed explicitly
+   after approval or rollback rehearsal through the manual
+   `distributor-stage-cleanup.yml` workflow using the recorded stage run ID.
+
+Use `STAGE_DRY_RUN=true` first. A dry run performs discovery and resource
+checks only; it does not create directories, copy data, pull images or start a
+container.
+
 ## Blue-green deployment
 
 1. Verify blue is healthy and record its immutable image digest.
-2. Disable Scheduler in green. Blue remains the only Scheduler owner.
-3. Start green web and WebSocket instances with the same external MySQL,
-   Redis, application key and shared storage.
-4. Run platform checks, `artisan about`, configuration continuity checks,
+2. Persist and rehearse file-session continuity before any traffic switch.
+3. Disable Redis, Horizon and Scheduler in green. Blue remains their only owner.
+4. Start green web and WebSocket instances with the same persistent SQLite,
+   Redis socket, application key, session path and shared storage.
+5. Run platform checks, `artisan about`, configuration continuity checks,
    read-only database checks and internal smoke tests on green.
-5. Confirm there are no pending migrations. Do not run a business migration as
+6. Confirm there are no pending migrations. Do not run a business migration as
    part of this release.
-6. Send a small canary share of stateless HTTP traffic to green. Do not send
+7. Send a small canary share of stateless HTTP traffic to green. Do not send
    payment callbacks until normal API and authentication metrics are healthy.
-7. Observe HTTP 5xx, latency, authentication failures, Redis errors, database
+8. Observe HTTP 5xx, latency, authentication failures, Redis errors, database
    errors, queue depth and Octane worker health for the agreed canary window.
-8. Increase traffic in controlled steps. Stop immediately on a rollback trigger.
-9. Stop old Horizon supervisors from accepting new jobs and let active jobs
-   finish. Start green Horizon and verify queue depth and failed-job counts.
+9. Atomically switch the host Caddy upstream from 7001 to 7002, validate the
+   configuration before reload, and keep blue running for immediate rollback.
 10. Route new WebSocket connections to green while blue drains existing
     connections. Verify client reconnect behavior before terminating blue.
-11. Transfer Scheduler ownership from blue to green exactly once.
-12. Route all HTTP traffic to green, retain blue without traffic for the full
-    rollback window, then terminate it only after final approval.
+11. Extract Redis with a separately rehearsed replication/promotion procedure.
+    Only after that succeeds may Horizon move to Laravel 13 and blue stop
+    owning Redis. Verify queue depth and failed-job counts.
+12. Transfer Scheduler ownership from blue to green exactly once, retain blue
+    without traffic for the full rollback window, then terminate it only after
+    final approval.
 
 ## Rollback triggers
 
@@ -132,7 +171,9 @@ release, preserve evidence and require explicit disaster-recovery authorization.
 
 ## Approval record
 
-Production release remains a separate high-risk action. Approval must identify
+Production release remains a high-risk action. Approval must identify
 the environment, Git commit, image digest, maintenance owner, observation
-window, rollback owner, plugin inventory and database snapshot. Passing local
-and CI gates prepares the artifact; it does not authorize deployment.
+window, rollback owner, plugin inventory and database snapshot. The operator
+must record the user's production authorization and the exact approved commit.
+Authorization does not waive any quality gate: a failed or missing gate stops
+the affected release phase.

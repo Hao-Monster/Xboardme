@@ -19,6 +19,16 @@ on:
         required: true
         default: false
         type: boolean
+      stage_production_green:
+        description: Start an isolated Laravel 13 green container on production port 7002
+        required: true
+        default: false
+        type: boolean
+      stage_production_dry_run:
+        description: Validate isolated green staging prerequisites without changing production
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: xboard-${{ github.ref }}
@@ -40,6 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         php: ['8.3', '8.4']
     permissions:
@@ -59,7 +70,15 @@ jobs:
           coverage: none
 
       - name: Install PHP dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        env:
+          COMPOSER_AUTH: >-
+            {"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}
+        run: |
+          for attempt in 1 2 3; do
+            composer install --prefer-dist --no-interaction --no-progress && exit 0
+            test "$attempt" -eq 3 && exit 1
+            sleep $((attempt * 20))
+          done
 
       - name: Validate dependency metadata and security advisories
         run: |
@@ -90,11 +109,15 @@ jobs:
           bash -n update.sh
           sh -n .docker/entrypoint.sh
           bash -n .github/scripts/deploy-xboard-compose.sh
+          bash -n .github/scripts/preflight-xboard-compose.sh
+          bash -n .github/scripts/stage-xboard-green.sh
+          bash -n .github/scripts/cleanup-xboard-stage.sh
 
   database-compatibility:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         mysql: ['5.7', '8.4']
     permissions:
@@ -127,7 +150,15 @@ jobs:
           coverage: none
 
       - name: Install PHP dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        env:
+          COMPOSER_AUTH: >-
+            {"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}
+        run: |
+          for attempt in 1 2 3; do
+            composer install --prefer-dist --no-interaction --no-progress && exit 0
+            test "$attempt" -eq 3 && exit 1
+            sleep $((attempt * 20))
+          done
 
       - name: Run database compatibility regression
         env:
@@ -243,6 +274,8 @@ jobs:
           outputs: type=registry,push=true
           allow: |
             network.host
+          secrets: |
+            composer_auth={"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}
 
   deploy-distributor:
     if: >-
@@ -321,6 +354,139 @@ jobs:
         run: |
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  stage-distributor-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          (inputs.stage_production_green == true || inputs.stage_production_dry_run == true) &&
+          inputs.deploy_production == false }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-server
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Verify exact staging commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+
+      - name: Checkout staging script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Login server to GHCR for isolated staging
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | sshpass -e ssh -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+
+      - name: Start isolated green staging container
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+          STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          STAGE_DRY_RUN: ${{ inputs.stage_production_dry_run }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "STAGE_IMAGE='$STAGE_IMAGE' STAGE_RUN_ID='$STAGE_RUN_ID' STAGE_DRY_RUN='$STAGE_DRY_RUN' bash -s" \
+            < .github/scripts/stage-xboard-green.sh
+
+      - name: Logout server from GHCR
+        if: ${{ always() }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  smoke-staged-distributor:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.stage_production_green == true &&
+          inputs.deploy_production == false }}
+    needs: stage-distributor-green
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7002
+    secrets: inherit
+
+  cleanup-failed-green-stage:
+    if: >-
+      ${{ always() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.stage_production_green == true &&
+          needs.smoke-staged-distributor.result != 'success' }}
+    needs:
+      - stage-distributor-green
+      - smoke-staged-distributor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout staging cleanup script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Remove failed isolated stage
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-stage.sh
 
   smoke-distributor:
     if: ${{ github.ref == 'refs/heads/codex/distributor' }}

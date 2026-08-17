@@ -28,6 +28,12 @@ if ((${#candidate_ids[@]} == 0)); then
     docker ps -q --filter label=com.docker.compose.service=xboard
   )
 fi
+production_candidate_ids=()
+for container_id in "${candidate_ids[@]}"; do
+  is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
+  [[ "$is_stage" == true ]] || production_candidate_ids+=("$container_id")
+done
+candidate_ids=("${production_candidate_ids[@]}")
 
 if ((${#candidate_ids[@]} == 0)); then
   echo "No running Xboard Compose container was found; deployment stopped before changing anything." >&2
@@ -195,6 +201,9 @@ write_override() {
       else
         echo "    image: $DEPLOY_IMAGE"
       fi
+      echo '    environment:'
+      echo '      SKIP_XBOARD_UPDATE: "true"'
+      echo "      RUNTIME_INSTANCE_ID: \"release-${DEPLOY_RUN_ID}-${service}\""
       echo '    volumes:'
       echo "      - \"$ATTACHMENT_VOLUME_SOURCE:$ATTACHMENT_DEST\""
     done
@@ -247,7 +256,11 @@ if ((all_running != 1)); then
 fi
 
 PRIMARY_CONTAINER=$("${COMPOSE[@]}" -p "$PROJECT" "${COMPOSE_FILES[@]}" -f "$OVERRIDE_FILE" ps -q "$PRIMARY_SERVICE")
-docker exec "$PRIMARY_CONTAINER" php /www/artisan migrate --force --no-interaction
+# The entrypoint is deliberately prevented from updating before the pre-release
+# backup exists. Run the complete application updater exactly once here after
+# the replacement container is alive so migrations, core plugins, version
+# cache, and theme refresh retain their established deployment behaviour.
+docker exec "$PRIMARY_CONTAINER" php /www/artisan xboard:update --no-interaction
 docker exec \
   -e CACHE_DRIVER=array \
   -e CACHE_SETTINGS_STORE=array \

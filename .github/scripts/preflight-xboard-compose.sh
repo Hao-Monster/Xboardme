@@ -13,6 +13,12 @@ if ((${#candidates[@]} == 0)); then
     docker ps -q --filter label=com.docker.compose.service=xboard
   )
 fi
+production_candidates=()
+for container_id in "${candidates[@]}"; do
+  is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
+  [[ "$is_stage" == true ]] || production_candidates+=("$container_id")
+done
+candidates=("${production_candidates[@]}")
 if ((${#candidates[@]} == 0)); then
   echo 'PREFLIGHT_FAIL=no_running_xboard_container'
   exit 1

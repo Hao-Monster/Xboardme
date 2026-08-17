@@ -42,6 +42,9 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertSame('laravel_database_', config('database.redis.options.prefix'));
         $this->assertSame('laravel_session', config('session.cookie'));
         $this->assertSame('php', config('session.serialization'));
+        $this->assertSame(storage_path('framework/sessions'), config('session.files'));
+        $this->assertSame(storage_path('logs/octane-server-state.json'), config('octane.state_file'));
+        $this->assertSame(storage_path('logs/xboard-ws-server.pid'), config('app.ws_pid_file'));
         $this->assertNull(config('cache.serializable_classes'));
         $this->assertTrue(is_subclass_of(VerifyCsrfToken::class, PreventRequestForgery::class));
     }
