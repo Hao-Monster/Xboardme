@@ -48,13 +48,34 @@ jobs:
 
   verify:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        php: ['8.3', '8.4']
+    timeout-minutes: 60
     permissions:
       contents: read
+    services:
+      mysql57:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: xboard-test
+          MYSQL_DATABASE: xboard_test
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxboard-test --silent"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=30
+      mysql84:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: xboard-test
+          MYSQL_DATABASE: xboard_test
+        ports:
+          - 3308:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxboard-test --silent"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=30
 
     steps:
       - name: Checkout code
@@ -62,34 +83,92 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up PHP
+      - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
         with:
-          php-version: ${{ matrix.php }}
-          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pcntl, posix
+          php-version: '8.3'
+          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pdo_mysql, pcntl, posix
           coverage: none
 
-      - name: Install PHP dependencies
+      - name: Install locked PHP dependencies once
         env:
           COMPOSER_AUTH: >-
             {"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}
+          COMPOSER_PROCESS_TIMEOUT: 1800
         run: |
-          for attempt in 1 2 3; do
-            composer install --prefer-dist --no-interaction --no-progress && exit 0
-            test "$attempt" -eq 3 && exit 1
+          for attempt in 1 2; do
+            if composer install --prefer-dist --no-interaction --no-progress; then
+              exit 0
+            fi
             sleep $((attempt * 20))
           done
+          composer install --prefer-source --no-interaction --no-progress
 
       - name: Validate dependency metadata and security advisories
         run: |
           composer validate --no-check-publish
           composer audit --locked --no-interaction
 
-      - name: Run static analysis without new baseline violations
-        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+      - name: Run PHP 8.3 static analysis without new baseline violations
+        run: php vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
-      - name: Run backend regression tests
-        run: vendor/bin/phpunit
+      - name: Run PHP 8.3 SQLite regression tests
+        run: php vendor/bin/phpunit
+
+      - name: Run MySQL 5.7 compatibility regression
+        env:
+          APP_ENV: testing
+          APP_DEBUG: 'true'
+          APP_KEY: base64:YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3307
+          DB_DATABASE: xboard_test
+          DB_USERNAME: root
+          DB_PASSWORD: xboard-test
+          CACHE_STORE: array
+          CACHE_DRIVER: array
+          CACHE_SETTINGS_STORE: array
+          SESSION_DRIVER: array
+          QUEUE_CONNECTION: sync
+          MAIL_MAILER: array
+          TELESCOPE_ENABLED: 'false'
+        run: php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php tests
+
+      - name: Run MySQL 8.4 compatibility regression
+        env:
+          APP_ENV: testing
+          APP_DEBUG: 'true'
+          APP_KEY: base64:YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3308
+          DB_DATABASE: xboard_test
+          DB_USERNAME: root
+          DB_PASSWORD: xboard-test
+          CACHE_STORE: array
+          CACHE_DRIVER: array
+          CACHE_SETTINGS_STORE: array
+          SESSION_DRIVER: array
+          QUEUE_CONNECTION: sync
+          MAIL_MAILER: array
+          TELESCOPE_ENABLED: 'false'
+        run: php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php tests
+
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pdo_mysql, pcntl, posix
+          coverage: none
+
+      - name: Validate PHP 8.4 platform and static analysis
+        run: |
+          composer check-platform-reqs
+          php vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
+      - name: Run PHP 8.4 SQLite regression tests
+        run: php vendor/bin/phpunit
 
       - name: Validate companion JavaScript
         run: |
@@ -113,75 +192,8 @@ jobs:
           bash -n .github/scripts/stage-xboard-green.sh
           bash -n .github/scripts/cleanup-xboard-stage.sh
 
-  database-compatibility:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        mysql: ['5.7', '8.4']
-    permissions:
-      contents: read
-    services:
-      mysql:
-        image: mysql:${{ matrix.mysql }}
-        env:
-          MYSQL_ROOT_PASSWORD: xboard-test
-          MYSQL_DATABASE: xboard_test
-        ports:
-          - 3306:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxboard-test --silent"
-          --health-interval=2s
-          --health-timeout=2s
-          --health-retries=30
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Set up PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.3'
-          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_mysql, pcntl, posix
-          coverage: none
-
-      - name: Install PHP dependencies
-        env:
-          COMPOSER_AUTH: >-
-            {"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}
-        run: |
-          for attempt in 1 2 3; do
-            composer install --prefer-dist --no-interaction --no-progress && exit 0
-            test "$attempt" -eq 3 && exit 1
-            sleep $((attempt * 20))
-          done
-
-      - name: Run database compatibility regression
-        env:
-          APP_ENV: testing
-          APP_DEBUG: 'true'
-          APP_KEY: base64:YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
-          DB_CONNECTION: mysql
-          DB_HOST: 127.0.0.1
-          DB_PORT: 3306
-          DB_DATABASE: xboard_test
-          DB_USERNAME: root
-          DB_PASSWORD: xboard-test
-          CACHE_STORE: array
-          CACHE_DRIVER: array
-          CACHE_SETTINGS_STORE: array
-          SESSION_DRIVER: array
-          QUEUE_CONNECTION: sync
-          MAIL_MAILER: array
-          TELESCOPE_ENABLED: 'false'
-        run: vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php tests
-
   build:
-    needs: [verify, database-compatibility]
+    needs: verify
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.image.outputs.name }}
