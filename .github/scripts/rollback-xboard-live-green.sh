@@ -110,6 +110,8 @@ for attempt in {1..12}; do
   sleep 2
 done
 if ((public_ready != 1)); then
+  systemctl status caddy --no-pager --full >&2 || true
+  journalctl --unit caddy --no-pager --lines 120 >&2 || true
   echo 'RELEASE_ROLLBACK_FAIL=public_blue_unhealthy'
   exit 1
 fi
