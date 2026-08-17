@@ -248,8 +248,11 @@ jobs:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
           github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_preflight == true &&
           inputs.deploy_production == true }}
-    needs: build
+    needs:
+      - build
+      - production-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: distributor-server
