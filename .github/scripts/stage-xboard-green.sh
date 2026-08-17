@@ -225,6 +225,17 @@ docker exec -u 0 "$primary" rm -f "$snapshot_path"
 docker cp "$primary:/www/storage/framework/sessions/." "$stage_dir/data/sessions/" >/dev/null
 cp -a -- "$attachments_source/." "$stage_dir/attachments/"
 
+# Apply ownership from inside the same image/user namespace that will run the
+# stage. Host-side ownership is not reliable when Docker user namespaces or a
+# rootless daemon are enabled. The stage root remains host-private (0700).
+docker run --rm --entrypoint sh \
+  -v "$stage_dir:/stage" "$STAGE_IMAGE" \
+  -c 'chown -R www:www /stage/data /stage/logs /stage/attachments &&
+      chown -R redis:redis /stage/redis &&
+      chmod 0750 /stage/data /stage/logs /stage/attachments &&
+      chmod 0755 /stage/redis &&
+      chmod 0700 /stage/data/sessions'
+
 docker run -d \
   --name "$container_name" \
   --hostname "$container_name" \
