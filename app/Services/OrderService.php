@@ -224,7 +224,7 @@ class OrderService
             $lastOneTimeOrder = Order::where('user_id', $user->id)
                 ->where('period', Plan::PERIOD_ONETIME)
                 ->where('status', Order::STATUS_COMPLETED)
-                ->orderBy('id', 'DESC')
+                ->orderBy('id', 'desc')
                 ->first();
             if (!$lastOneTimeOrder)
                 return;

@@ -35,7 +35,7 @@ class KnowledgeController extends Controller
             return $this->success($this->withShareUrl($data));
         }
         $data = Knowledge::select(['title', 'id', 'updated_at', 'category', 'show'])
-            ->orderBy('sort', 'ASC')
+            ->orderBy('sort', 'asc')
             ->get();
         return $this->success($data->map(
             fn(Knowledge $knowledge) => $this->withShareUrl($knowledge->toArray())

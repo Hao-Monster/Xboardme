@@ -3,7 +3,7 @@
 <div align="center">
 
 [![Telegram](https://img.shields.io/badge/Telegram-Channel-blue)](https://t.me/XboardOfficial)
-![PHP](https://img.shields.io/badge/PHP-8.2+-green.svg)
+![PHP](https://img.shields.io/badge/PHP-8.3+-green.svg)
 ![MySQL](https://img.shields.io/badge/MySQL-5.7+-blue.svg)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -11,11 +11,11 @@
 
 ## 📖 Introduction
 
-Xboard is a modern panel system built on Laravel 11, focusing on providing a clean and efficient user experience.
+Xboard is a modern panel system built on Laravel 13, focusing on providing a clean and efficient user experience.
 
 ## ✨ Features
 
-- 🚀 Built with Laravel 12 + Octane for significant performance gains
+- 🚀 Built with Laravel 13 + Octane for significant performance gains
 - 🎨 Redesigned admin interface (React + Shadcn UI)
 - 📱 Modern user frontend (Vue3 + TypeScript)
 - 🐳 Ready-to-use Docker deployment solution

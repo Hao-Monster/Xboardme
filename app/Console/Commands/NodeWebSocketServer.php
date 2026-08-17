@@ -25,8 +25,8 @@ class NodeWebSocketServer extends Command
             $argv[2] = '-d';
         }
 
-        $host = $this->option('host');
-        $port = $this->option('port');
+        $host = (string) ($this->option('host') ?? '0.0.0.0');
+        $port = (int) ($this->option('port') ?? 8076);
 
         $worker = new NodeWorker($host, $port);
         $worker->run();

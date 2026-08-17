@@ -131,7 +131,7 @@ class StatController extends Controller
             $query->where('record_at', '<=', strtotime($request->input('end_date') . ' 23:59:59'));
         }
 
-        $statistics = $query->orderBy('record_at', 'DESC')
+        $statistics = $query->orderBy('record_at', 'desc')
             ->get();
 
         $summary = [
@@ -237,7 +237,7 @@ class StatController extends Controller
         ]);
 
         $pageSize = $request->input('pageSize', 10);
-        $records = StatUser::orderBy('record_at', 'DESC')
+        $records = StatUser::orderBy('record_at', 'desc')
             ->where('user_id', $request->input('user_id'))
             ->paginate($pageSize);
 
@@ -455,7 +455,7 @@ class StatController extends Controller
                 ->where('record_at', '>=', $startDate)
                 ->where('record_at', '<=', $endDate)
                 ->groupBy('server_id')
-                ->orderBy('value', 'DESC')
+                ->orderBy('value', 'desc')
                 ->limit(10)
                 ->get();
 
@@ -474,7 +474,7 @@ class StatController extends Controller
                 ->where('record_at', '>=', $startDate)
                 ->where('record_at', '<=', $endDate)
                 ->groupBy('user_id')
-                ->orderBy('value', 'DESC')
+                ->orderBy('value', 'desc')
                 ->limit(10)
                 ->get();
 

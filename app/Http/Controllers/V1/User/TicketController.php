@@ -34,7 +34,7 @@ class TicketController extends Controller
             return $this->success(TicketResource::make($ticket)->additional(['message' => true]));
         }
         $ticket = Ticket::where('user_id', $request->user()->id)
-            ->orderBy('created_at', 'DESC')
+            ->orderBy('created_at', 'desc')
             ->get();
         return $this->success(TicketResource::collection($ticket));
     }
@@ -109,7 +109,7 @@ class TicketController extends Controller
     private function getLastMessage($ticketId)
     {
         return TicketMessage::where('ticket_id', $ticketId)
-            ->orderBy('id', 'DESC')
+            ->orderBy('id', 'desc')
             ->first();
     }
 

@@ -21,7 +21,7 @@ class ServerService
      */
     public static function getAllServers(): Collection
     {
-        $query = Server::orderBy('sort', 'ASC');
+        $query = Server::orderBy('sort', 'asc');
 
         return $query->get()->append([
             'last_check_at',
@@ -43,7 +43,7 @@ class ServerService
     {
         return Server::where('machine_id', $machine->id)
             ->where('enabled', true)
-            ->orderBy('sort', 'ASC')
+            ->orderBy('sort', 'asc')
             ->get();
     }
 
@@ -61,7 +61,7 @@ class ServerService
                     ->orWhere('transfer_enable', 0)
                     ->orWhereRaw('u + d < transfer_enable');
             })
-            ->orderBy('sort', 'ASC')
+            ->orderBy('sort', 'asc')
             ->get()
             ->append(['last_check_at', 'last_push_at', 'online', 'is_online', 'available_status', 'cache_key', 'server_key']);
 

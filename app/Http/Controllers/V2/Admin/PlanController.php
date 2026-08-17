@@ -15,7 +15,7 @@ class PlanController extends Controller
 {
     public function fetch(Request $request)
     {
-        $plans = Plan::orderBy('sort', 'ASC')
+        $plans = Plan::orderBy('sort', 'asc')
             ->with([
                 'group:id,name'
             ])

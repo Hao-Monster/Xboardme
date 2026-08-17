@@ -1,0 +1,211 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Cannot cast Carbon\\Carbon to int\.$#'
+			identifier: cast.int
+			count: 1
+			path: app/Http/Controllers/PublicKnowledgeController.php
+
+		-
+			message: '#^Cannot access property \$headers on class\-string\|object\.$#'
+			identifier: property.nonObject
+			count: 1
+			path: app/Http/Controllers/V1/Client/ClientController.php
+
+		-
+			message: '#^Cannot call method getContent\(\) on class\-string\|object\.$#'
+			identifier: method.nonObject
+			count: 1
+			path: app/Http/Controllers/V1/Client/ClientController.php
+
+		-
+			message: '#^Using nullsafe property access on non\-nullable type App\\Models\\Order\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Controllers/V1/Client/ClientController.php
+
+		-
+			message: '#^Using nullsafe property access on non\-nullable type App\\Models\\User\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Controllers/V1/User/DistributorController.php
+
+		-
+			message: '#^Parameter &\$body by\-ref type of method App\\Http\\Controllers\\V1\\User\\KnowledgeController\:\:applyReplacementRules\(\) expects string, string\|null given\.$#'
+			identifier: parameterByRef.type
+			count: 1
+			path: app/Http/Controllers/V1/User/KnowledgeController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>content" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Controllers/V2/Admin/MailTemplateController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>subject" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Controllers/V2/Admin/MailTemplateController.php
+
+		-
+			message: '#^Property App\\Models\\Server\:\:\$show \(bool\) does not accept int\.$#'
+			identifier: assign.propertyType
+			count: 1
+			path: app/Http/Controllers/V2/Admin/Server/ManageController.php
+
+		-
+			message: '#^Relation ''admin'' is not found in App\\Models\\AdminAuditLog model\.$#'
+			identifier: larastan.relationExistence
+			count: 1
+			path: app/Http/Controllers/V2/Admin/SystemController.php
+
+		-
+			message: '#^Using nullsafe property access "\?\-\>name" on left side of \?\? is unnecessary\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Controllers/V2/Admin/UserController.php
+
+		-
+			message: '#^Variable \$config on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.variable
+			count: 1
+			path: app/Http/Controllers/V2/Client/AppController.php
+
+		-
+			message: '#^Using nullsafe property access on non\-nullable type App\\Models\\DistributorOrder\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Resources/OrderResource.php
+
+		-
+			message: '#^Using nullsafe property access on non\-nullable type App\\Models\\User\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: app/Http/Resources/OrderResource.php
+
+		-
+			message: '#^Left side of && is always true\.$#'
+			identifier: booleanAnd.leftAlwaysTrue
+			count: 2
+			path: app/Models/TicketMessage.php
+
+		-
+			message: '#^Variable \$extra in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 3
+			path: app/Protocols/General.php
+
+		-
+			message: '#^Parameter \#1 \$array \(list\{0\: non\-falsy\-string, 1\: non\-falsy\-string, 2\: ''udp\-relay\=true'', 3\: non\-falsy\-string, 4\: ''over\-tls\=true'', 5\?\: non\-falsy\-string, 6\?\: non\-falsy\-string\}\) to function array_filter does not contain falsy values, the array will always stay the same\.$#'
+			identifier: arrayFilter.same
+			count: 1
+			path: app/Protocols/QuantumultX.php
+
+		-
+			message: '#^Call to function is_array\(\) with string\|null will always evaluate to false\.$#'
+			identifier: function.impossibleType
+			count: 1
+			path: app/Protocols/SingBox.php
+
+		-
+			message: '#^Trait App\\Scope\\FilterScope is used zero times and is not analysed\.$#'
+			identifier: trait.unused
+			count: 1
+			path: app/Scope/FilterScope.php
+
+		-
+			message: '#^Binary operation "\-" between int\<1, max\> and string results in an error\.$#'
+			identifier: binaryOp.invalid
+			count: 2
+			path: app/Services/DeviceStateService.php
+
+		-
+			message: '#^Constant App\\Services\\DeviceStateService\:\:DB_THROTTLE is unused\.$#'
+			identifier: classConstant.unused
+			count: 1
+			path: app/Services/DeviceStateService.php
+
+		-
+			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$body\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Services/KnowledgeAttachmentAccessService.php
+
+		-
+			message: '#^Strict comparison using \=\=\= between resource\|null and false will always evaluate to false\.$#'
+			identifier: identical.alwaysFalse
+			count: 1
+			path: app/Services/KnowledgeAttachmentUploadService.php
+
+		-
+			message: '#^Call to function is_array\(\) with array\<mixed, mixed\> will always evaluate to true\.$#'
+			identifier: function.alreadyNarrowedType
+			count: 1
+			path: app/Services/MailService.php
+
+		-
+			message: '#^Offset 1 on array\{0\: non\-falsy\-string, 1\: non\-empty\-string, 2\?\: string\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: app/Services/MailService.php
+
+		-
+			message: '#^Access to an undefined property Workerman\\Connection\\TcpConnection\:\:\$machineNodeIds\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/Services/NodeRegistry.php
+
+		-
+			message: '#^Right side of && is always true\.$#'
+			identifier: booleanAnd.rightAlwaysTrue
+			count: 1
+			path: app/Services/PlanService.php
+
+		-
+			message: '#^Strict comparison using \=\=\= between 2 and 2 will always evaluate to true\.$#'
+			identifier: identical.alwaysTrue
+			count: 1
+			path: app/Services/Plugin/HookManager.php
+
+		-
+			message: '#^Instanceof between DOMElement and DOMElement will always evaluate to true\.$#'
+			identifier: instanceof.alwaysTrue
+			count: 1
+			path: app/Services/PublicKnowledgeService.php
+
+		-
+			message: '#^PHPDoc tag @param references unknown parameter\: \$groupIds$#'
+			identifier: parameter.notFound
+			count: 1
+			path: app/Services/ServerService.php
+
+		-
+			message: '#^Offset 0 on non\-empty\-list\<string\> on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 2
+			path: app/Utils/Helper.php
+
+		-
+			message: '#^Access to an undefined property Workerman\\Connection\\TcpConnection\:\:\$authTimer\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/WebSocket/NodeWorker.php
+
+		-
+			message: '#^Access to an undefined property Workerman\\Connection\\TcpConnection\:\:\$machineId\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/WebSocket/NodeWorker.php
+
+		-
+			message: '#^Access to an undefined property Workerman\\Connection\\TcpConnection\:\:\$machineNodeIds\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/WebSocket/NodeWorker.php
+
+		-
+			message: '#^Access to an undefined property Workerman\\Connection\\TcpConnection\:\:\$nodeId\.$#'
+			identifier: property.notFound
+			count: 1
+			path: app/WebSocket/NodeWorker.php

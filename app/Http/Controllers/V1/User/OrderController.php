@@ -54,8 +54,8 @@ class OrderController extends Controller
             ->when($request->input('status') !== null, function ($query) use ($request) {
                 $query->where('status', $request->input('status'));
             })
-            ->orderBy('created_at', 'DESC')
-            ->orderBy('id', 'DESC')
+            ->orderBy('created_at', 'desc')
+            ->orderBy('id', 'desc')
             ->get();
 
         return $this->success(OrderResource::collection($orders));
@@ -285,7 +285,7 @@ class OrderController extends Controller
             'handling_fee_percent'
         ])
             ->where('enable', 1)
-            ->orderBy('sort', 'ASC')
+            ->orderBy('sort', 'asc')
             ->get();
 
         return $this->success($methods);

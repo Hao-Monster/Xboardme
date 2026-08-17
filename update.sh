@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -Eeuo pipefail
+
 if [ ! -d ".git" ]; then
   echo "Please deploy using Git."
   exit 1
@@ -21,11 +23,14 @@ add_safe_directory() {
 add_safe_directory "$repo_root"
 add_safe_directory "$repo_root/public/assets/admin"
 
-git fetch --all && git reset --hard origin/master && git pull origin master
-rm -rf composer.lock composer.phar
+git fetch origin master
+git pull --ff-only origin master
+rm -f composer.phar
 wget https://github.com/composer/composer/releases/latest/download/composer.phar -O composer.phar
-php composer.phar update -vvv
 git submodule update --init --recursive --force
+php composer.phar install --no-dev --no-interaction --no-progress --prefer-dist --classmap-authoritative
+php composer.phar check-platform-reqs --no-dev
+php composer.phar audit --locked --no-interaction
 php artisan xboard:update
 
 if [ -f "/etc/init.d/bt" ] || [ -f "/.dockerenv" ]; then

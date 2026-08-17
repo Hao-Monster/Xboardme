@@ -1,12 +1,11 @@
-FROM phpswoole/swoole:php8.2-alpine
+FROM phpswoole/swoole:6.1.0-php8.3-alpine@sha256:895033ef1b965458c81ed55a22eaf9b9ec2e2b0b8694942c7fdd731ff6f099d9
 
-COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
+COPY --from=mlocati/php-extension-installer:2.11.12@sha256:b6d3fa381b9ba5cf051117c1c601d6a523b590e534bf3d56eb4fbe352949c138 /usr/bin/install-php-extensions /usr/local/bin/
 
-# Install PHP extensions one by one with lower optimization level for ARM64 compatibility
-RUN CFLAGS="-O0" install-php-extensions pcntl && \
-    CFLAGS="-O0 -g0" install-php-extensions bcmath && \
-    install-php-extensions zip dom xmlreader && \
-    install-php-extensions redis && \
+# Install only extensions missing from the pinned Swoole image. Building them
+# in one transaction avoids repeatedly downloading the compiler toolchain;
+# conservative optimization keeps the existing ARM64 compatibility posture.
+RUN CFLAGS="-O0 -g0" install-php-extensions pcntl bcmath zip && \
     apk --no-cache add shadow sqlite mysql-client mysql-dev mariadb-connector-c git patch supervisor redis caddy su-exec && \
     addgroup -S -g 1000 www && adduser -S -G www -u 1000 www && \
     (getent group redis || addgroup -S redis) && \
@@ -15,24 +14,14 @@ RUN CFLAGS="-O0" install-php-extensions pcntl && \
 WORKDIR /www
 
 COPY .docker /
-
-# Add build arguments
-ARG CACHEBUST=1
-ARG REPO_URL=https://github.com/cedar2025/Xboard
-ARG BRANCH_NAME=master
-
-RUN echo "Attempting to clone branch: ${BRANCH_NAME} from ${REPO_URL} with CACHEBUST: ${CACHEBUST}" && \
-    rm -rf ./* && \
-    rm -rf .git && \
-    git config --global --add safe.directory /www && \
-    git clone --depth 1 --branch ${BRANCH_NAME} ${REPO_URL} . && \
-    git submodule update --init --recursive --force
+COPY . /www
 
 COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY .docker/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY .docker/php/zz-xboard.ini /usr/local/etc/php/conf.d/zz-xboard.ini
 
-RUN composer install --no-cache --no-dev --no-security-blocking \
+RUN composer install --no-cache --no-dev --no-interaction --no-progress --prefer-dist --classmap-authoritative \
+    && composer check-platform-reqs --no-dev \
     && php artisan storage:link \
     && chown -R www:www /www \
     && chmod -R 775 /www \

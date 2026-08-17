@@ -138,7 +138,7 @@ class UserController extends Controller
 
         collect($request->input('sort'))->each(function ($sort) use ($builder) {
             $field = $sort['id'];
-            $direction = $sort['desc'] ? 'DESC' : 'ASC';
+            $direction = $sort['desc'] ? 'desc' : 'asc';
             $builder->orderBy($field, $direction);
         });
     }

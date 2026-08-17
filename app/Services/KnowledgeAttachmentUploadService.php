@@ -5,7 +5,7 @@ namespace App\Services;
 use App\Exceptions\ApiException;
 use App\Models\KnowledgeAttachment;
 use App\Models\KnowledgeAttachmentUpload;
-use Illuminate\Cache\LockTimeoutException;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Cache;

@@ -218,7 +218,7 @@ class StatisticalService
                 ])
                     ->where('record_at', '>=', $this->startAt)
                     ->where('record_at', '<', $this->endAt)
-                    ->orderBy('record_at', 'ASC')
+                    ->orderBy('record_at', 'asc')
                     ->get();
             }
             case "commission_total": {
@@ -228,13 +228,13 @@ class StatisticalService
                 ])
                     ->where('record_at', '>=', $this->startAt)
                     ->where('record_at', '<', $this->endAt)
-                    ->orderBy('record_at', 'ASC')
+                    ->orderBy('record_at', 'asc')
                     ->get();
             }
             case "register_count": {
                 return Stat::where('record_at', '>=', $this->startAt)
                     ->where('record_at', '<', $this->endAt)
-                    ->orderBy('record_at', 'ASC')
+                    ->orderBy('record_at', 'asc')
                     ->get();
             }
         }
@@ -323,7 +323,7 @@ class StatisticalService
             ->where('created_at', '<', $this->endAt)
             ->whereNotNull('invite_user_id')
             ->groupBy('invite_user_id')
-            ->orderBy('count', 'DESC')
+            ->orderBy('count', 'desc')
             ->limit($limit)
             ->get();
 
@@ -347,7 +347,7 @@ class StatisticalService
             ->where('record_at', '>=', $this->startAt)
             ->where('record_at', '<', $this->endAt)
             ->groupBy('user_id')
-            ->orderBy('total', 'DESC')
+            ->orderBy('total', 'desc')
             ->limit($limit)
             ->get();
         $users = User::whereIn('id', $stats->pluck('user_id')->toArray())->get()->keyBy('id');
@@ -371,7 +371,7 @@ class StatisticalService
             ->where('record_at', '>=', $this->startAt)
             ->where('record_at', '<', $this->endAt)
             ->groupBy('server_id', 'server_type')
-            ->orderBy('total', 'DESC')
+            ->orderBy('total', 'desc')
             ->limit($limit)
             ->get();
     }

@@ -104,7 +104,7 @@ class SystemController extends Controller
         $pageSize = max(10, (int) $request->input('page_size', 10));
 
         $builder = AdminAuditLog::with('admin:id,email')
-            ->orderBy('id', 'DESC')
+            ->orderBy('id', 'desc')
             ->when($request->input('action'), fn($q, $v) => $q->where('action', $v))
             ->when($request->input('admin_id'), fn($q, $v) => $q->where('admin_id', $v))
             ->when($request->input('keyword'), function ($q, $keyword) {
