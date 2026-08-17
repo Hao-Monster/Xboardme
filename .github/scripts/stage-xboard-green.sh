@@ -25,6 +25,11 @@ mapfile -t candidates < <(
   docker ps --format '{{.ID}} {{.Image}}' |
     awk 'tolower($2) ~ /xboard/ {print $1}'
 )
+if ((${#candidates[@]} == 0)); then
+  mapfile -t candidates < <(
+    docker ps -q --filter label=com.docker.compose.service=xboard
+  )
+fi
 production_candidates=()
 for container_id in "${candidates[@]}"; do
   is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
