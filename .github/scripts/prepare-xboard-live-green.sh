@@ -304,8 +304,11 @@ if [[ "$(docker exec "$green_name" sqlite3 "$db_path" 'PRAGMA integrity_check;')
   echo 'RELEASE_PREPARE_FAIL=live_database_integrity'
   exit 1
 fi
-redis_supervisor_state=$(docker exec "$green_name" supervisorctl status redis)
-horizon_supervisor_state=$(docker exec "$green_name" supervisorctl status horizon)
+# supervisorctl intentionally returns a non-zero status for STOPPED programs;
+# capture its text and assert the exact desired state below instead of letting
+# errexit mistake a disabled state owner for a script failure.
+redis_supervisor_state=$(docker exec "$green_name" supervisorctl status redis 2>&1 || true)
+horizon_supervisor_state=$(docker exec "$green_name" supervisorctl status horizon 2>&1 || true)
 if [[ "$redis_supervisor_state" != *STOPPED* || "$horizon_supervisor_state" != *STOPPED* ]] || \
    docker exec "$green_name" sh -c 'pgrep redis-server >/dev/null || pgrep -f "artisan horizon" >/dev/null'; then
   echo 'RELEASE_PREPARE_FAIL=duplicate_state_owner'
