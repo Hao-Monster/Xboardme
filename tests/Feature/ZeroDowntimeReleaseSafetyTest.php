@@ -84,6 +84,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('for attempt in {1..12}', $rollback);
         $this->assertStringContainsString("curl --noproxy '*'", $rollback);
         $this->assertStringContainsString('--resolve "$app_host:$app_port:127.0.0.1"', $rollback);
+        $this->assertStringContainsString('external_smoke_required', $rollback);
         $this->assertStringNotContainsString('journalctl', $rollback);
         $this->assertStringContainsString('SIGCONT', $rollback);
         $this->assertStringContainsString('php /www/artisan horizon:continue', $rollback);

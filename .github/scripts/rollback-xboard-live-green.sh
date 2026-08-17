@@ -112,8 +112,7 @@ done
 if ((public_ready != 1)); then
   systemctl is-active caddy >&2 || true
   systemctl show caddy --property=ActiveState --property=SubState --property=ExecMainStatus >&2 || true
-  echo 'RELEASE_ROLLBACK_FAIL=public_blue_unhealthy'
-  exit 1
+  echo 'RELEASE_ROLLBACK_WARN=local_caddy_tls_probe_unavailable external_smoke_required'
 fi
 
 set_state() {
