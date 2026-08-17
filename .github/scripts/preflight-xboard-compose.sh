@@ -170,10 +170,15 @@ fi
 current_container_cpu=$(docker stats --no-stream --format '{{.CPUPerc}}' "$primary")
 current_container_memory=$(docker stats --no-stream --format '{{.MemUsage}}' "$primary")
 proxy_reference_count=0
+proxy_upstream_tokens=()
 for proxy_root in /etc/caddy /etc/nginx /www/server/panel/vhost/nginx /opt/1panel/apps/openresty/openresty/conf; do
   if [[ -d "$proxy_root" ]]; then
-    count=$( (grep -RIl --include='*.conf' -- '127.0.0.1:7001' "$proxy_root" 2>/dev/null || true) | wc -l )
+    count=$( (grep -RIlE --include='*.conf' --include='Caddyfile' -- '(^|[^0-9])7001([^0-9]|$)' "$proxy_root" 2>/dev/null || true) | wc -l )
     proxy_reference_count=$((proxy_reference_count + count))
+    while IFS= read -r upstream_token; do
+      [[ -n "$upstream_token" ]] && proxy_upstream_tokens+=("$upstream_token")
+    done < <(grep -RhoE --include='*.conf' --include='Caddyfile' \
+      '[[:alnum:].:_-]+:7001' "$proxy_root" 2>/dev/null | sort -u || true)
   fi
 done
 
@@ -211,6 +216,7 @@ echo "PREFLIGHT_PROXY_PROCESSES=${proxy_processes:-none}"
 echo "PREFLIGHT_ACTIVE_PROXY_UNITS=${active_proxy_units[*]:-none}"
 echo "PREFLIGHT_FRONTEND_IMAGES=${frontend_images:-none}"
 echo "PREFLIGHT_PROXY_REFERENCE_COUNT=$proxy_reference_count"
+echo "PREFLIGHT_PROXY_UPSTREAMS=${proxy_upstream_tokens[*]:-none}"
 echo "PREFLIGHT_CURRENT_CONTAINER_CPU=$current_container_cpu"
 echo "PREFLIGHT_CURRENT_CONTAINER_MEMORY=$current_container_memory"
 echo "PREFLIGHT_PENDING_MIGRATIONS=$pending_migrations"
