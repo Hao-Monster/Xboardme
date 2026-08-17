@@ -110,6 +110,7 @@ rollback_caddy() {
   status=$?
   if ((status != 0 && config_changed == 1)); then
     cp -p -- "$caddy_backup" "$proxy_file"
+    chmod 0644 "$proxy_file"
     caddy validate --config "$proxy_file" --adapter caddyfile >/dev/null 2>&1 || true
     systemctl reload caddy >/dev/null 2>&1 || true
   fi
@@ -118,6 +119,7 @@ rollback_caddy() {
 }
 trap rollback_caddy EXIT
 mv -f -- "$candidate" "$proxy_file"
+chmod 0644 "$proxy_file"
 config_changed=1
 caddy validate --config "$proxy_file" --adapter caddyfile >/dev/null
 systemctl reload caddy

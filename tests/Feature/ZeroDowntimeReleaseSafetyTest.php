@@ -71,9 +71,11 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
             strpos($switch, 'set_state CADDY_BACKUP "$caddy_backup"') < strpos($switch, 'mv -f -- "$candidate" "$proxy_file"')
         );
         $this->assertStringContainsString('for public_attempt in {1..3}', $switch);
+        $this->assertStringContainsString('chmod 0644 "$proxy_file"', $switch);
         $this->assertStringContainsString("systemctl reload caddy", $switch);
         $this->assertStringContainsString('caddy_backup=${CADDY_BACKUP:-$workdir/.codex-release/', $rollback);
         $this->assertStringContainsString('cp -p -- "$caddy_backup" "$caddy_config"', $rollback);
+        $this->assertStringContainsString('chmod 0644 "$caddy_config"', $rollback);
         $this->assertStringContainsString('for attempt in {1..12}', $rollback);
         $this->assertStringContainsString('SIGCONT', $rollback);
         $this->assertStringContainsString('php /www/artisan horizon:continue', $rollback);

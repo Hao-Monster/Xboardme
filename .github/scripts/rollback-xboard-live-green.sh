@@ -70,6 +70,7 @@ if ((blue_healthy != 1)); then
 fi
 
 cp -p -- "$caddy_backup" "$caddy_config"
+chmod 0644 "$caddy_config"
 caddy validate --config "$caddy_config" --adapter caddyfile >/dev/null
 systemctl reload caddy
 if [[ "$(grep -Rho '127\.0\.0\.1:7001' /etc/caddy 2>/dev/null | wc -l)" != 1 ]]; then
