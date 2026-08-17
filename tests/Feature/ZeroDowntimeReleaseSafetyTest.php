@@ -24,7 +24,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
     {
         $script = file_get_contents(base_path('.github/scripts/prepare-xboard-live-green.sh'));
 
-        $this->assertStringContainsString('image_must_be_an_immutable_ghcr_digest', $script);
+        $this->assertStringContainsString('stage_image_is_not_an_immutable_ghcr_digest', $script);
+        $this->assertStringContainsString('stage_image_revision_mismatch', $script);
         $this->assertStringContainsString('--volumes-from "$blue"', $script);
         $this->assertStringContainsString('-e ENABLE_HORIZON=false', $script);
         $this->assertStringContainsString('-e ENABLE_REDIS=false', $script);

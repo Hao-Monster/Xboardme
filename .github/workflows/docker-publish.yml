@@ -119,8 +119,7 @@ jobs:
     if: >-
       ${{ github.event_name != 'workflow_dispatch' ||
           (inputs.cleanup_stage_run_id == '' &&
-           (inputs.production_release_action == 'none' ||
-            inputs.production_release_action == 'prepare')) }}
+           inputs.production_release_action == 'none') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -589,7 +588,6 @@ jobs:
           inputs.stage_production_green == false &&
           inputs.stage_production_dry_run == false &&
           inputs.cleanup_stage_run_id == '' }}
-    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: distributor-server
@@ -643,13 +641,12 @@ jobs:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
-          RELEASE_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
           RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_IMAGE='$RELEASE_IMAGE' RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s" \
+            "RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s" \
             < .github/scripts/prepare-xboard-live-green.sh
 
       - name: Logout server from GHCR

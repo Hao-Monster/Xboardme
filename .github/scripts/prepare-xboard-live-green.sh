@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-: "${RELEASE_IMAGE:?RELEASE_IMAGE is required}"
 : "${RELEASE_ID:?RELEASE_ID is required}"
 : "${STAGE_RUN_ID:?STAGE_RUN_ID is required}"
 : "${RELEASE_SHA:?RELEASE_SHA is required}"
 
-if [[ ! "$RELEASE_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
-  echo 'RELEASE_PREPARE_FAIL=image_must_be_an_immutable_ghcr_digest'
-  exit 1
-fi
 if [[ ! "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
   echo 'RELEASE_PREPARE_FAIL=invalid_commit_sha'
   exit 1
@@ -34,8 +29,14 @@ if ((${#stage_ids[@]} != 1)); then
   exit 1
 fi
 stage=${stage_ids[0]}
-if [[ "$(docker inspect -f '{{.Config.Image}}' "$stage")" != "$RELEASE_IMAGE" ]]; then
-  echo 'RELEASE_PREPARE_FAIL=stage_image_mismatch'
+RELEASE_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$stage")
+if [[ ! "$RELEASE_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
+  echo 'RELEASE_PREPARE_FAIL=stage_image_is_not_an_immutable_ghcr_digest'
+  exit 1
+fi
+image_revision=$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$RELEASE_IMAGE")
+if [[ "$image_revision" != "$RELEASE_SHA" ]]; then
+  echo 'RELEASE_PREPARE_FAIL=stage_image_revision_mismatch'
   exit 1
 fi
 stage_runtime=$(docker exec "$stage" php -r '
