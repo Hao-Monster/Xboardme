@@ -203,7 +203,16 @@ chmod 700 "$stage_root" "$stage_dir" "$stage_dir/data" "$stage_dir/redis" "$stag
 created_stage_dir=1
 
 docker pull "$STAGE_IMAGE"
-docker exec -u 0 "$primary" sqlite3 "$db_path" ".backup '$snapshot_path'"
+if ! docker exec -u 0 "$primary" sh -c 'umask 077; : > "$1"' sh "$snapshot_path"; then
+  echo 'STAGE_FAIL=snapshot_target_create'
+  exit 1
+fi
+if ! docker exec -u 0 "$primary" sqlite3 "$db_path" ".backup '$snapshot_path'"; then
+  source_check=$(docker exec -u 0 "$primary" sqlite3 "$db_path" 'PRAGMA quick_check;' 2>/dev/null || echo failed)
+  target_check=$(docker exec -u 0 "$primary" sqlite3 "$snapshot_path" 'PRAGMA quick_check;' 2>/dev/null || echo failed)
+  echo "STAGE_FAIL=sqlite_online_backup source_check=$source_check target_check=$target_check"
+  exit 1
+fi
 docker cp "$primary:$snapshot_path" "$stage_dir/data/database.sqlite" >/dev/null
 docker exec -u 0 "$primary" rm -f "$snapshot_path"
 snapshot_counts=$(docker run --rm --entrypoint sqlite3 \
