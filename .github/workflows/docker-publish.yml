@@ -33,6 +33,19 @@ on:
         description: Remove one exact isolated stage run (digits-digits); does not affect production
         required: false
         type: string
+      production_release_action:
+        description: Zero-downtime release phase (none, prepare, switch, activate_roles, rollback, cleanup)
+        required: true
+        default: none
+        type: string
+      release_id:
+        description: Existing zero-downtime release identifier for switch/roles/rollback/cleanup
+        required: false
+        type: string
+      approved_stage_run_id:
+        description: Successful isolated stage identifier required by the prepare phase
+        required: false
+        type: string
 
 concurrency:
   group: xboard-${{ github.ref }}
@@ -56,7 +69,8 @@ jobs:
           inputs.cleanup_stage_run_id != '' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
-          inputs.stage_production_dry_run == false }}
+          inputs.stage_production_dry_run == false &&
+          inputs.production_release_action == 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: distributor-server
@@ -102,7 +116,11 @@ jobs:
             < .github/scripts/cleanup-xboard-stage.sh
 
   verify:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.cleanup_stage_run_id == '' }}
+    if: >-
+      ${{ github.event_name != 'workflow_dispatch' ||
+          (inputs.cleanup_stage_run_id == '' &&
+           (inputs.production_release_action == 'none' ||
+            inputs.production_release_action == 'prepare')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -247,6 +265,11 @@ jobs:
           bash -n .github/scripts/preflight-xboard-compose.sh
           bash -n .github/scripts/stage-xboard-green.sh
           bash -n .github/scripts/cleanup-xboard-stage.sh
+          bash -n .github/scripts/prepare-xboard-live-green.sh
+          bash -n .github/scripts/switch-xboard-live-green.sh
+          bash -n .github/scripts/activate-xboard-green-roles.sh
+          bash -n .github/scripts/rollback-xboard-live-green.sh
+          bash -n .github/scripts/cleanup-xboard-live-release.sh
 
   build:
     needs: verify
@@ -350,7 +373,8 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' &&
           github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_preflight == true &&
-          inputs.deploy_production == true }}
+          inputs.deploy_production == true &&
+          inputs.production_release_action == 'none' }}
     needs:
       - build
       - production-preflight
@@ -427,7 +451,8 @@ jobs:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
           (inputs.stage_production_green == true || inputs.stage_production_dry_run == true) &&
-          inputs.deploy_production == false }}
+          inputs.deploy_production == false &&
+          inputs.production_release_action == 'none' }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -555,6 +580,323 @@ jobs:
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
             < .github/scripts/cleanup-xboard-stage.sh
+
+  prepare-live-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'prepare' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false &&
+          inputs.cleanup_stage_run_id == '' }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-server
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Verify exact approved release commit and stage
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          APPROVED_STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$APPROVED_STAGE_RUN_ID" = "$(printf '%s' "$APPROVED_STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Checkout live release script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Login server to GHCR for live candidate
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | sshpass -e ssh -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+
+      - name: Prepare live green without switching traffic
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+          RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_IMAGE='$RELEASE_IMAGE' RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s" \
+            < .github/scripts/prepare-xboard-live-green.sh
+
+      - name: Logout server from GHCR
+        if: ${{ always() }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  smoke-live-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'prepare' }}
+    needs: prepare-live-green
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7002
+    secrets: inherit
+
+  cleanup-failed-live-green:
+    if: >-
+      ${{ always() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'prepare' &&
+          needs.prepare-live-green.result == 'success' &&
+          needs.smoke-live-green.result != 'success' }}
+    needs:
+      - prepare-live-green
+      - smoke-live-green
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Remove failed live candidate only
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-live-release.sh
+
+  pre-switch-smoke:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'switch' }}
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7002
+    secrets: inherit
+
+  switch-live-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'switch' &&
+          inputs.deploy_production == false }}
+    needs: pre-switch-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Verify release identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Atomically switch Caddy to green
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s" \
+            < .github/scripts/switch-xboard-live-green.sh
+
+  smoke-switched-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'switch' }}
+    needs: switch-live-green
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7002
+    secrets: inherit
+
+  activate-green-roles:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'activate_roles' &&
+          inputs.deploy_production == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Verify release identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Transfer Horizon and scheduler ownership to Laravel 13
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s" \
+            < .github/scripts/activate-xboard-green-roles.sh
+
+  rollback-live-release:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'rollback' &&
+          inputs.deploy_production == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Restore blue traffic and role ownership
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' bash -s" \
+            < .github/scripts/rollback-xboard-live-green.sh
+
+  smoke-rolled-back-blue:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'rollback' }}
+    needs: rollback-live-release
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7001
+    secrets: inherit
+
+  cleanup-live-release:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'cleanup' &&
+          inputs.deploy_production == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Remove exact release candidates after rollback
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-live-release.sh
 
   smoke-distributor:
     if: ${{ github.ref == 'refs/heads/codex/distributor' }}

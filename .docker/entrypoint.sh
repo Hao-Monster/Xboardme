@@ -188,7 +188,7 @@ else
     fi
 fi
 
-echo "[entrypoint] Starting services (caddy=${ENABLE_CADDY} web=${ENABLE_WEB} horizon=${ENABLE_HORIZON} ws=${ENABLE_WS_SERVER})..."
+echo "[entrypoint] Starting services (caddy=${ENABLE_CADDY} web=${ENABLE_WEB} horizon=${ENABLE_HORIZON} ws=${ENABLE_WS_SERVER} scheduler=${ENABLE_SCHEDULER})..."
 # Drop stale Octane/WorkerMan state files so the new master does not signal
 # PIDs left over from a previous container run (causes Swoole kill EPERM).
 rm -f "${OCTANE_STATE_FILE}" "${WS_PID_FILE}" "${SUPERVISOR_PID_FILE}" 2>/dev/null || true

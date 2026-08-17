@@ -27,6 +27,10 @@ class OctaneServiceProvider extends ServiceProvider
                 HookManager::reset();
             });
         }
+        if (! config('app.scheduler_enabled', true)) {
+            return;
+        }
+
         // 每半钟执行一次调度检查
         Octane::tick('scheduler', function () {
             $lock = Cache::lock('scheduler-lock', 30);

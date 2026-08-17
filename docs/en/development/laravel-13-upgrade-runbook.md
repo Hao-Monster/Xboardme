@@ -39,8 +39,12 @@ The following values must be identical in blue and green environments:
 - `REDIS_PREFIX`, `CACHE_PREFIX`, queue names and Horizon prefix;
 - `SESSION_COOKIE` and `SESSION_SERIALIZATION=php`;
 - shared plugin and private attachment storage;
-- a persistent shared session path. The live cutover is blocked until existing
-  file sessions have been migrated and continuity has been rehearsed.
+- session continuity. XBoard currently does not register `StartSession` in the
+  public `web` or `api` middleware groups and authenticates API users with
+  persisted Sanctum tokens. The live prepare script verifies that invariant
+  on the running blue container and blocks if file sessions become active. If
+  a future release enables session middleware, a shared session store and a
+  rehearsed migration become mandatory before cutover.
 
 Each release must have separate code, `vendor`, bootstrap cache and local
 runtime files. Do not share `bootstrap/cache` or Octane state files.
@@ -117,11 +121,25 @@ container.
 
 ## Blue-green deployment
 
+The workflow input `production_release_action` exposes deliberately separate
+phases. The `prepare` phase consumes the exact successful isolated stage run,
+creates and checksums an online SQLite backup, records the blue image, and
+starts the live green candidate on loopback port 7002 without changing Caddy.
+The `switch` phase runs authenticated smoke first, validates a candidate Caddy
+configuration, reloads Caddy atomically, observes public and direct health for
+one minute, and restores the exact saved Caddy file automatically on failure.
+The `activate_roles` phase moves Horizon and scheduler ownership only after
+green traffic is healthy. `rollback` is independent from build/test jobs so it
+can restore blue immediately. `cleanup` is allowed only while traffic is blue
+and preserves backups and state evidence.
+
 1. Verify blue is healthy and record its immutable image digest.
-2. Persist and rehearse file-session continuity before any traffic switch.
+2. Verify public route groups do not use file sessions; otherwise stop until a
+   shared session store has been migrated and rehearsed.
 3. Disable Redis, Horizon and Scheduler in green. Blue remains their only owner.
 4. Start green web and WebSocket instances with the same persistent SQLite,
-   Redis socket, application key, session path and shared storage.
+   Redis socket, application key and shared storage through the blue
+   container's already-proven persistent mounts.
 5. Run platform checks, `artisan about`, configuration continuity checks,
    read-only database checks and internal smoke tests on green.
 6. Confirm there are no pending migrations. Do not run a business migration as
@@ -134,12 +152,14 @@ container.
    configuration before reload, and keep blue running for immediate rollback.
 10. Route new WebSocket connections to green while blue drains existing
     connections. Verify client reconnect behavior before terminating blue.
-11. Extract Redis with a separately rehearsed replication/promotion procedure.
-    Only after that succeeds may Horizon move to Laravel 13 and blue stop
-    owning Redis. Verify queue depth and failed-job counts.
-12. Transfer Scheduler ownership from blue to green exactly once, retain blue
-    without traffic for the full rollback window, then terminate it only after
-    final approval.
+11. Start a Laravel 13 Horizon-only container against the existing authoritative
+    Redis socket, prove it is running, and then stop blue Horizon. Redis itself
+    remains the single process inside the retained blue container, avoiding a
+    data-plane migration in the framework release.
+12. Stop blue Octane (and therefore its scheduler tick), then start one Laravel
+    13 `schedule:work` container. Retain blue, its Redis process and the old
+    image for the full rollback window. A later Redis extraction is a separate
+    infrastructure release with its own replication rehearsal.
 
 ## Rollback triggers
 

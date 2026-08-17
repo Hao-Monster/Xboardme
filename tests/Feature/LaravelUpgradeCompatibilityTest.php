@@ -49,6 +49,15 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertTrue(is_subclass_of(VerifyCsrfToken::class, PreventRequestForgery::class));
     }
 
+    public function test_scheduler_is_enabled_by_default_and_can_be_disabled_for_green_web_instances(): void
+    {
+        $this->assertTrue(config('app.scheduler_enabled'));
+
+        $provider = file_get_contents(app_path('Providers/OctaneServiceProvider.php'));
+        $this->assertStringContainsString("config('app.scheduler_enabled', true)", $provider);
+        $this->assertStringContainsString('return;', $provider);
+    }
+
     public function test_framework_upgrade_adds_no_business_database_migrations(): void
     {
         $migrations = collect(glob(database_path('migrations/*.php')))

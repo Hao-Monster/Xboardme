@@ -56,6 +56,11 @@ return [
 
     'asset_url' => env('ASSET_URL', null),
 
+    // A blue/green release must have exactly one scheduler owner. Web-only
+    // candidates disable the Octane tick until scheduler ownership is moved
+    // explicitly after the traffic switch.
+    'scheduler_enabled' => env('ENABLE_SCHEDULER', true),
+
     /*
     |--------------------------------------------------------------------------
     | Application Timezone

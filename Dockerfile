@@ -55,7 +55,8 @@ ENV ENABLE_WEB=true \
     ENABLE_HORIZON=true \
     ENABLE_REDIS=true \
     ENABLE_WS_SERVER=true \
-    ENABLE_CADDY=true
+    ENABLE_CADDY=true \
+    ENABLE_SCHEDULER=true
 
 EXPOSE 7001
 COPY .docker/entrypoint.sh /entrypoint.sh
