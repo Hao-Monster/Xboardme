@@ -310,7 +310,7 @@ fi
 redis_supervisor_state=$(docker exec "$green_name" supervisorctl status redis 2>&1 || true)
 horizon_supervisor_state=$(docker exec "$green_name" supervisorctl status horizon 2>&1 || true)
 if [[ "$redis_supervisor_state" != *STOPPED* || "$horizon_supervisor_state" != *STOPPED* ]] || \
-   docker exec "$green_name" sh -c 'pgrep redis-server >/dev/null || pgrep -f "artisan horizon" >/dev/null'; then
+   docker exec "$green_name" sh -c 'pgrep redis-server >/dev/null || pgrep -f "[a]rtisan horizon" >/dev/null'; then
   echo 'RELEASE_PREPARE_FAIL=duplicate_state_owner'
   exit 1
 fi
