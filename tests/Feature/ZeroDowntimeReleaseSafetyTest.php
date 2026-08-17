@@ -116,6 +116,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('caddy adapt --config', $resolver);
         $this->assertStringContainsString('tls_connection_policies', $resolver);
         $this->assertStringContainsString('ambiguous_caddy_origin', $resolver);
+        $this->assertStringContainsString('bash -n .github/scripts/resolve-xboard-public-url.sh', file_get_contents(base_path('.github/workflows/docker-publish.yml')));
     }
 
     public function test_failed_external_green_smoke_automatically_restores_and_verifies_blue(): void
