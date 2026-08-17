@@ -772,6 +772,57 @@ jobs:
       target_port: 7002
     secrets: inherit
 
+  auto-rollback-failed-switch:
+    if: >-
+      ${{ always() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'switch' &&
+          inputs.deploy_production == false &&
+          needs.switch-live-green.result == 'success' &&
+          needs.smoke-switched-green.result != 'success' }}
+    needs:
+      - switch-live-green
+      - smoke-switched-green
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Restore blue after failed external green smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' bash -s" \
+            < .github/scripts/rollback-xboard-live-green.sh
+
+  smoke-auto-rolled-back-blue:
+    if: >-
+      ${{ always() &&
+          needs.auto-rollback-failed-switch.result == 'success' }}
+    needs: auto-rollback-failed-switch
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7001
+    secrets: inherit
+
   activate-green-roles:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&

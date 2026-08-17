@@ -123,46 +123,13 @@ chmod 0644 "$proxy_file"
 config_changed=1
 caddy validate --config "$proxy_file" --adapter caddyfile >/dev/null
 systemctl reload caddy
-
-app_url=$(docker exec "$green" php -r '
-require "/www/vendor/autoload.php";
-$app = require "/www/bootstrap/app.php";
-$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-echo rtrim((string) config("app.url"), "/");
-')
-case "$app_url" in
-  http://*) app_port=80 ;;
-  https://*) app_port=443 ;;
-  *) echo 'RELEASE_SWITCH_FAIL=invalid_app_url'; exit 1 ;;
-esac
-app_host=$(docker exec "$green" php -r '
-require "/www/vendor/autoload.php";
-$app = require "/www/bootstrap/app.php";
-$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
-echo (string) parse_url((string) config("app.url"), PHP_URL_HOST);
-')
-if [[ ! "$app_host" =~ ^[A-Za-z0-9.-]+$ ]]; then
-  echo 'RELEASE_SWITCH_FAIL=invalid_app_host'
+if [[ "$(systemctl is-active caddy)" != active ]]; then
+  echo 'RELEASE_SWITCH_FAIL=caddy_inactive'
   exit 1
 fi
 
 for attempt in {1..12}; do
   docker exec "$green" wget -q -O /dev/null http://127.0.0.1:7001/
-  public_ready=0
-  for public_attempt in {1..3}; do
-    if curl --noproxy '*' --silent --show-error --fail --location --max-time 10 --output /dev/null \
-         --resolve "$app_host:$app_port:127.0.0.1" "$app_url/"; then
-      public_ready=1
-      break
-    fi
-    sleep 1
-  done
-  if [[ "$public_ready" != 1 ]]; then
-    systemctl is-active caddy >&2 || true
-    systemctl show caddy --property=ActiveState --property=SubState --property=ExecMainStatus >&2 || true
-    echo 'RELEASE_SWITCH_FAIL=local_caddy_tls_unhealthy'
-    exit 1
-  fi
   [[ "$(docker inspect -f '{{.State.Running}}' "$green")" == true ]]
   sleep 5
 done
@@ -177,4 +144,4 @@ set_state TRAFFIC_STATE green
 
 config_changed=0
 trap - EXIT
-echo "RELEASE_SWITCH=PASS id=$RELEASE_ID upstream=127.0.0.1:7002 app_url=$app_url"
+echo "RELEASE_SWITCH=PASS id=$RELEASE_ID upstream=127.0.0.1:7002 external_smoke_required"

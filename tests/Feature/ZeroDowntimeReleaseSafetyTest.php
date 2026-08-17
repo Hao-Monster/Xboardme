@@ -70,9 +70,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertTrue(
             strpos($switch, 'set_state CADDY_BACKUP "$caddy_backup"') < strpos($switch, 'mv -f -- "$candidate" "$proxy_file"')
         );
-        $this->assertStringContainsString('for public_attempt in {1..3}', $switch);
-        $this->assertStringContainsString("curl --noproxy '*'", $switch);
-        $this->assertStringContainsString('--resolve "$app_host:$app_port:127.0.0.1"', $switch);
+        $this->assertStringContainsString('systemctl is-active caddy', $switch);
+        $this->assertStringContainsString('external_smoke_required', $switch);
         $this->assertStringNotContainsString('journalctl', $switch);
         $this->assertStringContainsString('chmod 0644 "$proxy_file"', $switch);
         $this->assertStringContainsString("systemctl reload caddy", $switch);
@@ -81,9 +80,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('chmod 0644 "$caddy_config"', $rollback);
         $this->assertStringContainsString('grep -o \'127\\.0\\.0\\.1:7001\' "$caddy_config"', $rollback);
         $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001' /etc/caddy", $rollback);
-        $this->assertStringContainsString('for attempt in {1..12}', $rollback);
-        $this->assertStringContainsString("curl --noproxy '*'", $rollback);
-        $this->assertStringContainsString('--resolve "$app_host:$app_port:127.0.0.1"', $rollback);
+        $this->assertStringContainsString('systemctl is-active caddy', $rollback);
         $this->assertStringContainsString('external_smoke_required', $rollback);
         $this->assertStringNotContainsString('journalctl', $rollback);
         $this->assertStringContainsString('SIGCONT', $rollback);
@@ -111,8 +108,25 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
     {
         $workflow = file_get_contents(base_path('.github/workflows/distributor-smoke.yml'));
 
-        $this->assertStringContainsString('public_url=$(sshpass -e ssh', $workflow);
+        $resolver = file_get_contents(base_path('.github/scripts/resolve-xboard-public-url.sh'));
+
+        $this->assertStringContainsString('< .github/scripts/resolve-xboard-public-url.sh', $workflow);
         $this->assertStringContainsString('--output /dev/null "$public_url/"', $workflow);
         $this->assertStringContainsString('test "$public_ready" = \'1\'', $workflow);
+        $this->assertStringContainsString('caddy adapt --config', $resolver);
+        $this->assertStringContainsString('tls_connection_policies', $resolver);
+        $this->assertStringContainsString('ambiguous_caddy_origin', $resolver);
+    }
+
+    public function test_failed_external_green_smoke_automatically_restores_and_verifies_blue(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+
+        $this->assertStringContainsString('auto-rollback-failed-switch:', $workflow);
+        $this->assertStringContainsString("needs.smoke-switched-green.result != 'success'", $workflow);
+        $this->assertStringContainsString('Restore blue after failed external green smoke', $workflow);
+        $this->assertStringContainsString('smoke-auto-rolled-back-blue:', $workflow);
+        $this->assertStringContainsString('needs.auto-rollback-failed-switch.result == \'success\'', $workflow);
+        $this->assertStringContainsString('target_port: 7001', $workflow);
     }
 }
