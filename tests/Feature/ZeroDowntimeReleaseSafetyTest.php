@@ -130,4 +130,15 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('needs.auto-rollback-failed-switch.result == \'success\'', $workflow);
         $this->assertStringContainsString('target_port: 7001', $workflow);
     }
+
+    public function test_release_cleanup_requires_the_exact_active_blue_caddy_config(): void
+    {
+        $script = file_get_contents(base_path('.github/scripts/cleanup-xboard-live-release.sh'));
+
+        $this->assertStringContainsString("grep -RIlE --include='*.conf' --include='Caddyfile'", $script);
+        $this->assertStringContainsString('ambiguous_caddy_file', $script);
+        $this->assertStringContainsString('caddy validate --config "$caddy_config"', $script);
+        $this->assertStringContainsString("grep -o '127\\.0\\.0\\.1:7001' \"\$caddy_config\"", $script);
+        $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001'", $script);
+    }
 }
