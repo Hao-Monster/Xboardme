@@ -69,6 +69,14 @@ $db = (string) config("database.default");
 $dbConfig = (array) config("database.connections.".$db, []);
 $redisHost = (string) config("database.redis.default.host", "");
 $plugins = App\Models\Plugin::query()->orderBy("code")->get(["code", "version", "is_enabled"])->toArray();
+$pluginManager = app(App\Services\Plugin\PluginManager::class);
+$pluginSources = [];
+foreach ($plugins as $plugin) {
+    $path = $pluginManager->resolvePluginPath((string) $plugin["code"]);
+    $pluginSources[$plugin["code"]] = $path === null
+        ? "missing"
+        : (str_starts_with($path, base_path("plugins-core")) ? "core" : "user");
+}
 $counts = [
     "users" => App\Models\User::query()->count(),
     "orders" => App\Models\Order::query()->count(),
@@ -88,6 +96,7 @@ echo json_encode([
     "app_key_configured" => is_string(config("app.key")) && config("app.key") !== "",
     "counts" => $counts,
     "plugins" => $plugins,
+    "plugin_sources" => $pluginSources,
 ], JSON_UNESCAPED_SLASHES);
 ')
 
@@ -122,11 +131,14 @@ redis_version=$(docker exec "$primary" sh -lc \
 redis_persistence=$(docker exec "$primary" sh -lc \
   'redis-cli -s /data/redis.sock INFO persistence 2>/dev/null | sed -n "s/^rdb_last_bgsave_status:\\(.*\\)\\r$/\\1/p"' || true)
 
-plugin_php_files=$(docker exec "$primary" sh -lc \
+plugin_user_php_files=$(docker exec "$primary" sh -lc \
   'find /www/plugins -type f -name "*.php" 2>/dev/null | wc -l')
+plugin_core_php_files=$(docker exec "$primary" sh -lc \
+  'find /www/plugins-core -type f -name "*.php" 2>/dev/null | wc -l')
+plugin_php_files=$((plugin_user_php_files + plugin_core_php_files))
 plugin_syntax=pass
 if ! docker exec "$primary" sh -lc \
-  'find /www/plugins -type f -name "*.php" -exec php -l {} \; >/dev/null'; then
+  'find /www/plugins /www/plugins-core -type f -name "*.php" -exec php -l {} \; >/dev/null'; then
   plugin_syntax=fail
 fi
 
@@ -141,6 +153,22 @@ proxy_processes=$(ps -eo comm= | awk '
   /^(nginx|openresty|caddy|cloudflared)$/ {seen[$1]=1}
   END {for (process in seen) printf "%s ", process}
 ')
+active_proxy_units=()
+if command -v systemctl >/dev/null 2>&1; then
+  for proxy_unit in nginx openresty caddy cloudflared; do
+    if systemctl is-active --quiet "$proxy_unit" 2>/dev/null; then
+      active_proxy_units+=("$proxy_unit")
+    fi
+  done
+fi
+frontend_images=$(docker ps --format '{{.Image}}|{{.Ports}}' | awk -F'|' \
+  '$2 ~ /(^|[, ])(0\.0\.0\.0:|\[::\]:)?(80|443)->/ {print $1}' | sort -u | tr '\n' ' ')
+port_80_443_listeners=unknown
+if command -v ss >/dev/null 2>&1; then
+  port_80_443_listeners=$(ss -H -lnt 2>/dev/null | awk '$4 ~ /:(80|443)$/ {count++} END {print count+0}')
+fi
+current_container_cpu=$(docker stats --no-stream --format '{{.CPUPerc}}' "$primary")
+current_container_memory=$(docker stats --no-stream --format '{{.MemUsage}}' "$primary")
 proxy_reference_count=0
 for proxy_root in /etc/nginx /www/server/panel/vhost/nginx /opt/1panel/apps/openresty/openresty/conf; do
   if [[ -d "$proxy_root" ]]; then
@@ -174,10 +202,17 @@ echo "PREFLIGHT_SQLITE_JOURNAL_MODE=$sqlite_journal_mode"
 echo "PREFLIGHT_REDIS_VERSION=${redis_version:-unavailable}"
 echo "PREFLIGHT_REDIS_LAST_BGSAVE=${redis_persistence:-unavailable}"
 echo "PREFLIGHT_PLUGIN_PHP_FILES=$plugin_php_files"
+echo "PREFLIGHT_PLUGIN_CORE_PHP_FILES=$plugin_core_php_files"
+echo "PREFLIGHT_PLUGIN_USER_PHP_FILES=$plugin_user_php_files"
 echo "PREFLIGHT_PLUGIN_SYNTAX=$plugin_syntax"
 echo "PREFLIGHT_PORT_7002_LISTENERS=$port_7002_listeners"
+echo "PREFLIGHT_PORT_80_443_LISTENERS=$port_80_443_listeners"
 echo "PREFLIGHT_PROXY_PROCESSES=${proxy_processes:-none}"
+echo "PREFLIGHT_ACTIVE_PROXY_UNITS=${active_proxy_units[*]:-none}"
+echo "PREFLIGHT_FRONTEND_IMAGES=${frontend_images:-none}"
 echo "PREFLIGHT_PROXY_REFERENCE_COUNT=$proxy_reference_count"
+echo "PREFLIGHT_CURRENT_CONTAINER_CPU=$current_container_cpu"
+echo "PREFLIGHT_CURRENT_CONTAINER_MEMORY=$current_container_memory"
 echo "PREFLIGHT_PENDING_MIGRATIONS=$pending_migrations"
 echo "PREFLIGHT_BACKUP_COMMANDS=$backup_command"
 
