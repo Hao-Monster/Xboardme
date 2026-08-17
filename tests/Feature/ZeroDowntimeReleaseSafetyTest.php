@@ -71,8 +71,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
             strpos($switch, 'set_state CADDY_BACKUP "$caddy_backup"') < strpos($switch, 'mv -f -- "$candidate" "$proxy_file"')
         );
         $this->assertStringContainsString('for public_attempt in {1..3}', $switch);
+        $this->assertStringContainsString("curl --noproxy '*'", $switch);
         $this->assertStringContainsString('--resolve "$app_host:$app_port:127.0.0.1"', $switch);
-        $this->assertStringContainsString('journalctl --unit caddy --no-pager --lines 120', $switch);
+        $this->assertStringNotContainsString('journalctl', $switch);
         $this->assertStringContainsString('chmod 0644 "$proxy_file"', $switch);
         $this->assertStringContainsString("systemctl reload caddy", $switch);
         $this->assertStringContainsString('caddy_backup=${CADDY_BACKUP:-$workdir/.codex-release/', $rollback);
@@ -81,8 +82,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('grep -o \'127\\.0\\.0\\.1:7001\' "$caddy_config"', $rollback);
         $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001' /etc/caddy", $rollback);
         $this->assertStringContainsString('for attempt in {1..12}', $rollback);
+        $this->assertStringContainsString("curl --noproxy '*'", $rollback);
         $this->assertStringContainsString('--resolve "$app_host:$app_port:127.0.0.1"', $rollback);
-        $this->assertStringContainsString('systemctl status caddy --no-pager --full', $rollback);
+        $this->assertStringNotContainsString('journalctl', $rollback);
         $this->assertStringContainsString('SIGCONT', $rollback);
         $this->assertStringContainsString('php /www/artisan horizon:continue', $rollback);
         $this->assertStringContainsString("RELEASE_ROLLBACK=PASS", $rollback);

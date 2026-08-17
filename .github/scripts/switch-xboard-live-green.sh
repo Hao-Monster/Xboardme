@@ -150,7 +150,7 @@ for attempt in {1..12}; do
   docker exec "$green" wget -q -O /dev/null http://127.0.0.1:7001/
   public_ready=0
   for public_attempt in {1..3}; do
-    if curl --silent --show-error --fail --location --max-time 10 --output /dev/null \
+    if curl --noproxy '*' --silent --show-error --fail --location --max-time 10 --output /dev/null \
          --resolve "$app_host:$app_port:127.0.0.1" "$app_url/"; then
       public_ready=1
       break
@@ -158,8 +158,8 @@ for attempt in {1..12}; do
     sleep 1
   done
   if [[ "$public_ready" != 1 ]]; then
-    systemctl status caddy --no-pager --full >&2 || true
-    journalctl --unit caddy --no-pager --lines 120 >&2 || true
+    systemctl is-active caddy >&2 || true
+    systemctl show caddy --property=ActiveState --property=SubState --property=ExecMainStatus >&2 || true
     echo 'RELEASE_SWITCH_FAIL=local_caddy_tls_unhealthy'
     exit 1
   fi
