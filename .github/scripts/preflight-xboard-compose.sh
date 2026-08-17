@@ -170,7 +170,7 @@ fi
 current_container_cpu=$(docker stats --no-stream --format '{{.CPUPerc}}' "$primary")
 current_container_memory=$(docker stats --no-stream --format '{{.MemUsage}}' "$primary")
 proxy_reference_count=0
-for proxy_root in /etc/nginx /www/server/panel/vhost/nginx /opt/1panel/apps/openresty/openresty/conf; do
+for proxy_root in /etc/caddy /etc/nginx /www/server/panel/vhost/nginx /opt/1panel/apps/openresty/openresty/conf; do
   if [[ -d "$proxy_root" ]]; then
     count=$( (grep -RIl --include='*.conf' -- '127.0.0.1:7001' "$proxy_root" 2>/dev/null || true) | wc -l )
     ((proxy_reference_count += count))
