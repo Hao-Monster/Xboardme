@@ -1,6 +1,7 @@
 name: Distributor Production Preflight
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 permissions:

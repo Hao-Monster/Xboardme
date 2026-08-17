@@ -14,6 +14,11 @@ on:
         description: Full 40-character commit SHA required when deploying production
         required: false
         type: string
+      production_preflight:
+        description: Audit the current production host without changing it
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: xboard-${{ github.ref }}
@@ -24,6 +29,13 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  production-preflight:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_preflight == true }}
+    uses: ./.github/workflows/distributor-preflight.yml
+    secrets: inherit
+
   verify:
     runs-on: ubuntu-latest
     strategy:
