@@ -213,22 +213,17 @@ if ! docker exec -u 0 "$primary" sqlite3 "$db_path" ".backup '$snapshot_path'"; 
   echo "STAGE_FAIL=sqlite_online_backup source_check=$source_check target_check=$target_check"
   exit 1
 fi
-docker cp "$primary:$snapshot_path" "$stage_dir/data/database.sqlite" >/dev/null
-docker exec -u 0 "$primary" rm -f "$snapshot_path"
-snapshot_counts=$(docker run --rm --entrypoint sqlite3 \
-  -v "$stage_dir/data:/stage:ro" "$STAGE_IMAGE" \
-  -separator '|' /stage/database.sqlite \
+snapshot_counts=$(docker exec -u 0 "$primary" sqlite3 -separator '|' "$snapshot_path" \
   'SELECT (SELECT COUNT(*) FROM v2_user), (SELECT COUNT(*) FROM v2_order), (SELECT COUNT(*) FROM v2_plugins);')
-docker cp "$primary:/www/storage/framework/sessions/." "$stage_dir/data/sessions/" >/dev/null
-cp -a -- "$attachments_source/." "$stage_dir/attachments/"
-
-integrity=$(docker run --rm --entrypoint sqlite3 \
-  -v "$stage_dir/data:/stage:ro" "$STAGE_IMAGE" \
-  /stage/database.sqlite 'PRAGMA integrity_check;')
+integrity=$(docker exec -u 0 "$primary" sqlite3 "$snapshot_path" 'PRAGMA integrity_check;')
 if [[ "$integrity" != ok ]]; then
   echo 'STAGE_FAIL=database_integrity_check'
   exit 1
 fi
+docker cp "$primary:$snapshot_path" "$stage_dir/data/database.sqlite" >/dev/null
+docker exec -u 0 "$primary" rm -f "$snapshot_path"
+docker cp "$primary:/www/storage/framework/sessions/." "$stage_dir/data/sessions/" >/dev/null
+cp -a -- "$attachments_source/." "$stage_dir/attachments/"
 
 docker run -d \
   --name "$container_name" \
