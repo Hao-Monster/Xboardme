@@ -36,16 +36,21 @@ project=${project_key%%|*}
 workdir=${project_key#*|}
 primary=${candidates[0]}
 
-mapfile -t project_xboard < <(
-  docker ps --filter "label=com.docker.compose.project=$project" \
-    --format '{{.ID}} {{.Image}}' |
-    awk 'tolower($2) ~ /xboard/ {print $1}'
+mapfile -t project_containers < <(
+  docker ps -q --filter "label=com.docker.compose.project=$project"
 )
+project_xboard=()
 web_instances=0
-for container_id in "${project_xboard[@]}"; do
+service_inventory=()
+for container_id in "${project_containers[@]}"; do
+  image=$(docker inspect -f '{{.Config.Image}}' "$container_id")
   service=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$container_id")
-  if [[ "$service" == xboard || "$service" == web ]]; then
-    ((web_instances += 1))
+  if [[ "${image,,}" == *xboard* ]]; then
+    project_xboard+=("$container_id")
+    service_inventory+=("$service")
+    if [[ "$service" == xboard || "$service" == web ]]; then
+      ((web_instances += 1))
+    fi
   fi
 done
 
@@ -95,6 +100,7 @@ echo "PREFLIGHT_ARCHITECTURE=$architecture"
 echo "PREFLIGHT_PROJECT=$project"
 echo "PREFLIGHT_XBOARD_CONTAINERS=${#project_xboard[@]}"
 echo "PREFLIGHT_WEB_INSTANCES=$web_instances"
+echo "PREFLIGHT_XBOARD_SERVICES=${service_inventory[*]}"
 echo "PREFLIGHT_AVAILABLE_KIB=$available_kib"
 echo "PREFLIGHT_CURRENT_IMAGE=$current_image"
 echo "PREFLIGHT_RESTART_POLICY=$restart_policy"
