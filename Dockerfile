@@ -13,6 +13,29 @@ RUN CFLAGS="-O0 -g0" install-php-extensions pcntl bcmath zip && \
 
 WORKDIR /www
 
+COPY composer.json composer.lock /www/
+
+# Dependency downloads are keyed only by the locked manifests. The GitHub
+# token exists solely in this BuildKit secret mount and is converted to
+# COMPOSER_AUTH in the process environment, never written into an image layer.
+RUN --mount=type=secret,id=github_token \
+    if [ -f /run/secrets/github_token ]; then \
+        github_token="$(tr -d '\r\n' < /run/secrets/github_token)"; \
+        export COMPOSER_AUTH="$(printf '{\"github-oauth\":{\"github.com\":\"%s\"}}' "$github_token")"; \
+    fi; \
+    installed=false; \
+    for attempt in 1 2; do \
+        if composer install --no-cache --no-dev --no-interaction --no-progress --prefer-dist --no-scripts --no-autoloader; then \
+            installed=true; \
+            break; \
+        fi; \
+        sleep $((attempt * 20)); \
+    done; \
+    if [ "$installed" != true ]; then \
+        composer install --no-cache --no-dev --no-interaction --no-progress --prefer-source --no-scripts --no-autoloader; \
+    fi; \
+    find /www/vendor -type d -name .git -prune -exec rm -rf '{}' +
+
 COPY .docker /
 COPY . /www
 
@@ -20,9 +43,7 @@ COPY .docker/supervisor/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY .docker/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY .docker/php/zz-xboard.ini /usr/local/etc/php/conf.d/zz-xboard.ini
 
-RUN --mount=type=secret,id=composer_auth \
-    if [ -f /run/secrets/composer_auth ]; then export COMPOSER_AUTH="$(cat /run/secrets/composer_auth)"; fi \
-    && composer install --no-cache --no-dev --no-interaction --no-progress --prefer-dist --classmap-authoritative \
+RUN composer dump-autoload --no-dev --no-interaction --classmap-authoritative \
     && composer check-platform-reqs --no-dev \
     && php artisan storage:link \
     && chown -R www:www /www \
