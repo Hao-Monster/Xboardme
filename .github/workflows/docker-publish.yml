@@ -29,6 +29,10 @@ on:
         required: true
         default: false
         type: boolean
+      cleanup_stage_run_id:
+        description: Remove one exact isolated stage run (digits-digits); does not affect production
+        required: false
+        type: string
 
 concurrency:
   group: xboard-${{ github.ref }}
@@ -46,7 +50,59 @@ jobs:
     uses: ./.github/workflows/distributor-preflight.yml
     secrets: inherit
 
+  cleanup-requested-stage:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.cleanup_stage_run_id != '' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout staging cleanup script
+        uses: actions/checkout@v4
+
+      - name: Validate requested stage identifier
+        env:
+          STAGE_RUN_ID: ${{ inputs.cleanup_stage_run_id }}
+        run: test "$STAGE_RUN_ID" = "$(printf '%s' "$STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_PORT"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Remove the exact isolated stage
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_RUN_ID: ${{ inputs.cleanup_stage_run_id }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-stage.sh
+
   verify:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.cleanup_stage_run_id == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
