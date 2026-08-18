@@ -869,9 +869,6 @@ jobs:
             "docker logout ghcr.io >/dev/null 2>&1 || true"
 
   smoke-live-green:
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' &&
-          inputs.production_release_action == 'prepare' }}
     needs: prepare-live-green
     uses: ./.github/workflows/distributor-smoke.yml
     with:
@@ -884,7 +881,7 @@ jobs:
           github.event_name == 'workflow_dispatch' &&
           inputs.production_release_action == 'prepare' &&
           needs.prepare-live-green.result == 'success' &&
-          needs.smoke-live-green.result != 'success' }}
+          needs.smoke-live-green.result == 'failure' }}
     needs:
       - prepare-live-green
       - smoke-live-green

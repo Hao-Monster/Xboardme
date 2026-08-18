@@ -146,6 +146,35 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             );
         }
 
+        preg_match(
+            '/^  smoke-live-green:\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
+            $workflow,
+            $smokeLiveGreen
+        );
+        $this->assertArrayHasKey('body', $smokeLiveGreen, 'The prepared release smoke job must exist.');
+        $this->assertStringContainsString('needs: prepare-live-green', $smokeLiveGreen['body']);
+        $this->assertStringNotContainsString(
+            'if:',
+            $smokeLiveGreen['body'],
+            'The smoke job must inherit the prepare result instead of duplicating dispatch conditions.'
+        );
+
+        preg_match(
+            '/^  cleanup-failed-live-green:\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
+            $workflow,
+            $cleanupFailedLiveGreen
+        );
+        $this->assertArrayHasKey('body', $cleanupFailedLiveGreen, 'The failed release cleanup job must exist.');
+        $this->assertStringContainsString(
+            "needs.smoke-live-green.result == 'failure'",
+            $cleanupFailedLiveGreen['body'],
+            'A skipped smoke job must never delete a successfully prepared release.'
+        );
+        $this->assertStringNotContainsString(
+            "needs.smoke-live-green.result != 'success'",
+            $cleanupFailedLiveGreen['body']
+        );
+
         foreach (['distributor-preflight.yml', 'distributor-stage-cleanup.yml'] as $workflowName) {
             $standaloneWorkflow = file_get_contents(base_path('.github/workflows/' . $workflowName));
             $this->assertIsString($standaloneWorkflow);
