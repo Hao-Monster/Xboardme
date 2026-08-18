@@ -4,6 +4,7 @@ set -Eeuo pipefail
 : "${STAGE_IMAGE:?STAGE_IMAGE is required}"
 : "${STAGE_RUN_ID:?STAGE_RUN_ID is required}"
 : "${STAGE_DRY_RUN:=false}"
+: "${STAGE_PORT:=7002}"
 
 if [[ "$STAGE_DRY_RUN" != true && "$STAGE_DRY_RUN" != false ]]; then
   echo 'STAGE_FAIL=invalid_dry_run_flag'
@@ -11,6 +12,10 @@ if [[ "$STAGE_DRY_RUN" != true && "$STAGE_DRY_RUN" != false ]]; then
 fi
 if [[ ! "$STAGE_RUN_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
   echo 'STAGE_FAIL=invalid_run_id'
+  exit 1
+fi
+if [[ ! "$STAGE_PORT" =~ ^[0-9]+$ ]] || ((STAGE_PORT < 1024 || STAGE_PORT > 65535)); then
+  echo 'STAGE_FAIL=invalid_stage_port'
   exit 1
 fi
 if [[ ! "$STAGE_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
@@ -72,8 +77,8 @@ if docker ps -q --filter label=codex.xboard.stage=true | grep -q .; then
   echo 'STAGE_FAIL=another_stage_is_running'
   exit 1
 fi
-if command -v ss >/dev/null 2>&1 && ss -H -lnt '( sport = :7002 )' 2>/dev/null | grep -q .; then
-  echo 'STAGE_FAIL=port_7002_in_use'
+if command -v ss >/dev/null 2>&1 && ss -H -lnt "( sport = :$STAGE_PORT )" 2>/dev/null | grep -q .; then
+  echo "STAGE_FAIL=port_${STAGE_PORT}_in_use"
   exit 1
 fi
 
@@ -244,7 +249,7 @@ docker run -d \
   --restart no \
   --memory 768m \
   --cpus 2 \
-  -p 127.0.0.1:7002:7001 \
+  -p "127.0.0.1:$STAGE_PORT:7001" \
   -e SKIP_XBOARD_UPDATE=true \
   -e "RUNTIME_INSTANCE_ID=stage-$STAGE_RUN_ID" \
   -e RESOURCE_PROFILE=minimal \

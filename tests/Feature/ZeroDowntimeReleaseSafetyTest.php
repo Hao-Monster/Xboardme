@@ -163,6 +163,19 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('.admin-rolled-back-$HOTFIX_ID', $rollback);
     }
 
+    public function test_isolated_stage_port_can_avoid_the_active_green_slot(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $stage = file_get_contents(base_path('.github/scripts/stage-xboard-green.sh'));
+
+        $this->assertStringContainsString('stage_target_port:', $workflow);
+        $this->assertStringContainsString('STAGE_PORT: ${{ inputs.stage_target_port }}', $workflow);
+        $this->assertStringContainsString('target_port: ${{ inputs.stage_target_port }}', $workflow);
+        $this->assertStringContainsString(': "${STAGE_PORT:=7002}"', $stage);
+        $this->assertStringContainsString('STAGE_FAIL=invalid_stage_port', $stage);
+        $this->assertStringContainsString('"127.0.0.1:$STAGE_PORT:7001"', $stage);
+    }
+
     public function test_failed_external_green_smoke_automatically_restores_and_verifies_blue(): void
     {
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));

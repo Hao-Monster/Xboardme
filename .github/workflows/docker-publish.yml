@@ -29,6 +29,11 @@ on:
         required: true
         default: false
         type: boolean
+      stage_target_port:
+        description: Remote loopback port reserved for the isolated staging container
+        required: true
+        default: 7002
+        type: number
       cleanup_stage_run_id:
         description: Remove one exact isolated stage run (digits-digits); does not affect production
         required: false
@@ -631,9 +636,10 @@ jobs:
           STAGE_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
           STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           STAGE_DRY_RUN: ${{ inputs.stage_production_dry_run }}
+          STAGE_PORT: ${{ inputs.stage_target_port }}
         run: |
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "STAGE_IMAGE='$STAGE_IMAGE' STAGE_RUN_ID='$STAGE_RUN_ID' STAGE_DRY_RUN='$STAGE_DRY_RUN' bash -s" \
+            "STAGE_IMAGE='$STAGE_IMAGE' STAGE_RUN_ID='$STAGE_RUN_ID' STAGE_DRY_RUN='$STAGE_DRY_RUN' STAGE_PORT='$STAGE_PORT' bash -s" \
             < .github/scripts/stage-xboard-green.sh
 
       - name: Logout server from GHCR
@@ -655,7 +661,7 @@ jobs:
     needs: stage-distributor-green
     uses: ./.github/workflows/distributor-smoke.yml
     with:
-      target_port: 7002
+      target_port: ${{ inputs.stage_target_port }}
     secrets: inherit
 
   cleanup-failed-green-stage:
