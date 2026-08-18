@@ -252,4 +252,22 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertStringContainsString('ambiguous_active_web', $preflight);
         $this->assertStringContainsString('active_runtime_is_not_laravel_13', $preflight);
     }
+
+    public function test_role_activation_does_not_treat_stale_reserved_jobs_as_active_work(): void
+    {
+        $script = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
+
+        $this->assertIsString($script);
+        $this->assertStringContainsString('reservedSize', $script);
+        $this->assertStringContainsString(
+            'RELEASE_ROLES_WARN=reserved_jobs_remain_after_grace',
+            $script,
+            'Reserved Redis entries may outlive a paused worker until retry_after and must remain diagnostic.'
+        );
+        $this->assertStringNotContainsString(
+            'RELEASE_ROLES_FAIL=horizon_drain_timeout',
+            $script,
+            'A stale reserved entry must not block an otherwise safe role handoff.'
+        );
+    }
 }
