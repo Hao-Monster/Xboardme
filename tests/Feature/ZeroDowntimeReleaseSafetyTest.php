@@ -152,6 +152,10 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $remoteSmoke = file_get_contents(base_path('.github/scripts/smoke-admin-assets-remote.sh'));
 
         $this->assertStringContainsString("inputs.production_release_action == 'admin_assets'", $workflow);
+        $this->assertMatchesRegularExpression(
+            '/verify:\R\s+if:.*?production_release_action == \'admin_assets\'/s',
+            $workflow
+        );
         $this->assertStringContainsString('needs: deploy-admin-assets-hotfix', $workflow);
         $this->assertStringContainsString('TARGET_PORT: 7002', $workflow);
         $this->assertStringContainsString('run: bash .github/scripts/smoke-admin-assets-remote.sh', $workflow);
