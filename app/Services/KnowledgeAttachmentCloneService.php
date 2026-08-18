@@ -6,7 +6,7 @@ use App\Exceptions\ApiException;
 use App\Models\Knowledge;
 use App\Models\KnowledgeAttachment;
 use App\Models\KnowledgeAttachmentUpload;
-use Illuminate\Cache\LockTimeoutException;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;

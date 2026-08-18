@@ -14,8 +14,8 @@ class NoticeController extends Controller
     public function fetch(Request $request)
     {
         return $this->success(
-            Notice::orderBy('sort', 'ASC')
-                ->orderBy('id', 'DESC')
+            Notice::orderBy('sort', 'asc')
+                ->orderBy('id', 'desc')
                 ->get()
         );
     }

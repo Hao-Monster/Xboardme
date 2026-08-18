@@ -32,7 +32,7 @@ class InviteController extends Controller
         $pageSize = $request->input('page_size') >= 10 ? $request->input('page_size') : 10;
         $builder = CommissionLog::where('invite_user_id', $request->user()->id)
             ->where('get_amount', '>', 0)
-            ->orderBy('created_at', 'DESC');
+            ->orderBy('created_at', 'desc');
         $total = $builder->count();
         $details = $builder->forPage($current, $pageSize)
             ->get();

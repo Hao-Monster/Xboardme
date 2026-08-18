@@ -32,7 +32,7 @@ class CouponController extends Controller
         if ($request->has('sort')) {
             collect($request->input('sort'))->each(function ($sort) use ($builder) {
                 $key = $sort['id'];
-                $value = $sort['desc'] ? 'DESC' : 'ASC';
+                $value = $sort['desc'] ? 'desc' : 'asc';
                 $builder->orderBy($key, $value);
             });
         }

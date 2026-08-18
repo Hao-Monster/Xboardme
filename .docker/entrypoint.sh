@@ -25,6 +25,19 @@ fi
 export OCTANE_HOST OCTANE_PORT WS_HOST WS_PORT CADDY_LISTEN_PORT
 export OCTANE_INTERNAL_PORT="${OCTANE_PORT}"
 
+# Process-control files must be private to each container. Blue/green
+# instances intentionally share application data and logs, but never PIDs or
+# Octane state because those files are used for process signalling.
+: "${RUNTIME_INSTANCE_ID:=default}"
+case "${RUNTIME_INSTANCE_ID}" in
+    *[!A-Za-z0-9_.-]*) echo "[entrypoint] Invalid RUNTIME_INSTANCE_ID." >&2; exit 1 ;;
+esac
+: "${OCTANE_STATE_FILE:=/tmp/xboard-octane-${RUNTIME_INSTANCE_ID}.json}"
+: "${WS_PID_FILE:=/tmp/xboard-ws-${RUNTIME_INSTANCE_ID}.pid}"
+: "${SUPERVISOR_PID_FILE:=/tmp/xboard-supervisord-${RUNTIME_INSTANCE_ID}.pid}"
+: "${SUPERVISOR_SOCKET_FILE:=/tmp/xboard-supervisor-${RUNTIME_INSTANCE_ID}.sock}"
+export RUNTIME_INSTANCE_ID OCTANE_STATE_FILE WS_PID_FILE SUPERVISOR_PID_FILE SUPERVISOR_SOCKET_FILE
+
 # Keep knowledge attachments on a private, writable filesystem. The directory
 # is mounted by the Compose templates and remains outside the public web root.
 : "${KNOWLEDGE_ATTACHMENT_ROOT:=/www/storage/app/knowledge-attachments}"
@@ -159,7 +172,9 @@ redis_reachable() {
     esac
 }
 
-if [ ! -s /www/.env ] || ! grep -qE '^INSTALLED=(1|true)$' /www/.env || echo " $* " | grep -q ' xboard:install '; then
+if [ "${SKIP_XBOARD_UPDATE:-false}" = "true" ]; then
+    echo "[entrypoint] Skipping xboard:update by explicit release-stage request."
+elif [ ! -s /www/.env ] || ! grep -qE '^INSTALLED=(1|true)$' /www/.env || echo " $* " | grep -q ' xboard:install '; then
     echo "[entrypoint] Skipping xboard:update (not yet installed or running xboard:install)."
 else
     if redis_reachable; then
@@ -174,13 +189,22 @@ else
     fi
 fi
 
-echo "[entrypoint] Starting services (caddy=${ENABLE_CADDY} web=${ENABLE_WEB} horizon=${ENABLE_HORIZON} ws=${ENABLE_WS_SERVER})..."
+echo "[entrypoint] Starting services (caddy=${ENABLE_CADDY} web=${ENABLE_WEB} horizon=${ENABLE_HORIZON} ws=${ENABLE_WS_SERVER} scheduler=${ENABLE_SCHEDULER})..."
 # Drop stale Octane/WorkerMan state files so the new master does not signal
 # PIDs left over from a previous container run (causes Swoole kill EPERM).
-rm -f /www/storage/logs/octane-server-state.json /www/storage/logs/xboard-ws-server.pid 2>/dev/null || true
+rm -f "${OCTANE_STATE_FILE}" "${WS_PID_FILE}" "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_SOCKET_FILE}" 2>/dev/null || true
 for runtime_dir in /www/storage/logs /www/storage/framework /www/storage/theme /www/bootstrap/cache /www/plugins /www/.docker/.data; do
     mkdir -p "$runtime_dir"
     chown -R www:www "$runtime_dir" 2>/dev/null || true
 done
+if [ -n "${SESSION_FILES_PATH:-}" ]; then
+    case "${SESSION_FILES_PATH}" in
+        /*) ;;
+        *) echo "[entrypoint] SESSION_FILES_PATH must be absolute." >&2; exit 1 ;;
+    esac
+    mkdir -p "${SESSION_FILES_PATH}"
+    chown www:www "${SESSION_FILES_PATH}"
+    chmod 0700 "${SESSION_FILES_PATH}"
+fi
 chown redis:redis /data 2>/dev/null || true
 exec "$@"

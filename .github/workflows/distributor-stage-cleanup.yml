@@ -1,0 +1,54 @@
+name: Distributor Isolated Stage Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      stage_run_id:
+        description: Exact GitHub Actions run-attempt ID printed by the stage (digits-digits)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+
+    steps:
+      - name: Checkout cleanup script
+        uses: actions/checkout@v4
+
+      - name: Validate requested stage identifier
+        env:
+          STAGE_RUN_ID: ${{ inputs.stage_run_id }}
+        run: test "${STAGE_RUN_ID}" = "$(printf '%s' "${STAGE_RUN_ID}" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Remove the exact isolated stage
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_RUN_ID: ${{ inputs.stage_run_id }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-stage.sh

@@ -4,6 +4,53 @@ on:
   push:
     branches: ["master", "new-dev", "codex/distributor"]
   workflow_dispatch:
+    inputs:
+      deploy_production:
+        description: Deploy this exact codex/distributor commit to production
+        required: true
+        default: false
+        type: boolean
+      expected_sha:
+        description: Full 40-character commit SHA required when deploying production
+        required: false
+        type: string
+      production_preflight:
+        description: Audit the current production host without changing it
+        required: true
+        default: false
+        type: boolean
+      stage_production_green:
+        description: Start an isolated Laravel 13 green container on production port 7002
+        required: true
+        default: false
+        type: boolean
+      stage_production_dry_run:
+        description: Validate isolated green staging prerequisites without changing production
+        required: true
+        default: false
+        type: boolean
+      stage_target_port:
+        description: Remote loopback port reserved for the isolated staging container
+        required: true
+        default: 7002
+        type: number
+      cleanup_stage_run_id:
+        description: Remove one exact isolated stage run (digits-digits); does not affect production
+        required: false
+        type: string
+      production_release_action:
+        description: Release phase (none, prepare, switch, activate_roles, rollback, cleanup, admin_assets, admin_assets_rollback)
+        required: true
+        default: none
+        type: string
+      release_id:
+        description: Existing zero-downtime release identifier for switch/roles/rollback/cleanup
+        required: false
+        type: string
+      approved_stage_run_id:
+        description: Successful isolated stage identifier required by the prepare phase
+        required: false
+        type: string
 
 concurrency:
   group: xboard-${{ github.ref }}
@@ -14,10 +61,100 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  verify:
+  production-preflight:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_preflight == true }}
+    uses: ./.github/workflows/distributor-preflight.yml
+    secrets: inherit
+
+  cleanup-requested-stage:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.cleanup_stage_run_id != '' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false &&
+          inputs.production_release_action == 'none' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
     permissions:
       contents: read
+
+    steps:
+      - name: Checkout staging cleanup script
+        uses: actions/checkout@v4
+
+      - name: Validate requested stage identifier
+        env:
+          STAGE_RUN_ID: ${{ inputs.cleanup_stage_run_id }}
+        run: test "$STAGE_RUN_ID" = "$(printf '%s' "$STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_PORT"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Remove the exact isolated stage
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_RUN_ID: ${{ inputs.cleanup_stage_run_id }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-stage.sh
+
+  verify:
+    if: >-
+      ${{ github.event_name != 'workflow_dispatch' ||
+          (inputs.cleanup_stage_run_id == '' &&
+           (inputs.production_release_action == 'none' ||
+            inputs.production_release_action == 'admin_assets')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    services:
+      mysql57:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: xboard-test
+          MYSQL_DATABASE: xboard_test
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxboard-test --silent"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=30
+      mysql84:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: xboard-test
+          MYSQL_DATABASE: xboard_test
+        ports:
+          - 3308:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxboard-test --silent"
+          --health-interval=2s
+          --health-timeout=2s
+          --health-retries=30
 
     steps:
       - name: Checkout code
@@ -25,18 +162,92 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up PHP
+      - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pcntl, posix
+          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pdo_mysql, pcntl, posix
           coverage: none
 
-      - name: Install PHP dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+      - name: Install locked PHP dependencies once
+        env:
+          COMPOSER_AUTH: >-
+            {"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}
+          COMPOSER_PROCESS_TIMEOUT: 1800
+        run: |
+          for attempt in 1 2; do
+            if composer install --prefer-dist --no-interaction --no-progress; then
+              exit 0
+            fi
+            sleep $((attempt * 20))
+          done
+          composer install --prefer-source --no-interaction --no-progress
 
-      - name: Run backend regression tests
-        run: vendor/bin/phpunit
+      - name: Validate dependency metadata and security advisories
+        run: |
+          composer validate --no-check-publish
+          composer audit --locked --no-interaction
+
+      - name: Run PHP 8.3 static analysis without new baseline violations
+        run: php vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
+      - name: Run PHP 8.3 SQLite regression tests
+        run: php vendor/bin/phpunit
+
+      - name: Run MySQL 5.7 compatibility regression
+        env:
+          APP_ENV: testing
+          APP_DEBUG: 'true'
+          APP_KEY: base64:YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3307
+          DB_DATABASE: xboard_test
+          DB_USERNAME: root
+          DB_PASSWORD: xboard-test
+          CACHE_STORE: array
+          CACHE_DRIVER: array
+          CACHE_SETTINGS_STORE: array
+          SESSION_DRIVER: array
+          QUEUE_CONNECTION: sync
+          MAIL_MAILER: array
+          TELESCOPE_ENABLED: 'false'
+        run: php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php tests
+
+      - name: Run MySQL 8.4 compatibility regression
+        env:
+          APP_ENV: testing
+          APP_DEBUG: 'true'
+          APP_KEY: base64:YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3308
+          DB_DATABASE: xboard_test
+          DB_USERNAME: root
+          DB_PASSWORD: xboard-test
+          CACHE_STORE: array
+          CACHE_DRIVER: array
+          CACHE_SETTINGS_STORE: array
+          SESSION_DRIVER: array
+          QUEUE_CONNECTION: sync
+          MAIL_MAILER: array
+          TELESCOPE_ENABLED: 'false'
+        run: php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php tests
+
+      - name: Set up PHP 8.4
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pdo_mysql, pcntl, posix
+          coverage: none
+
+      - name: Validate PHP 8.4 platform and static analysis
+        run: |
+          composer check-platform-reqs
+          php vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+
+      - name: Run PHP 8.4 SQLite regression tests
+        run: php vendor/bin/phpunit
 
       - name: Validate companion JavaScript
         run: |
@@ -52,8 +263,23 @@ jobs:
       - name: Validate deployment scripts
         run: |
           bash -n deploy.sh
+          bash -n init.sh
+          bash -n update.sh
           sh -n .docker/entrypoint.sh
           bash -n .github/scripts/deploy-xboard-compose.sh
+          bash -n .github/scripts/preflight-xboard-compose.sh
+          bash -n .github/scripts/stage-xboard-green.sh
+          bash -n .github/scripts/cleanup-xboard-stage.sh
+          bash -n .github/scripts/prepare-xboard-live-green.sh
+          bash -n .github/scripts/switch-xboard-live-green.sh
+          bash -n .github/scripts/activate-xboard-green-roles.sh
+          bash -n .github/scripts/rollback-xboard-live-green.sh
+          bash -n .github/scripts/resolve-xboard-public-url.sh
+          bash -n .github/scripts/smoke-admin-assets.sh
+          bash -n .github/scripts/smoke-admin-assets-remote.sh
+          bash -n .github/scripts/cleanup-xboard-live-release.sh
+          bash -n .github/scripts/deploy-admin-assets-hotfix.sh
+          bash -n .github/scripts/rollback-admin-assets-hotfix.sh
 
   build:
     needs: verify
@@ -70,7 +296,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1 
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Verify admin frontend build context
+        run: php .github/scripts/verify-admin-assets.php
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -105,6 +335,10 @@ jobs:
         shell: bash
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Get version
+        id: get_version
+        run: echo "version=$(git describe --tags --always)" >> $GITHUB_OUTPUT
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -120,10 +354,6 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-
-      - name: Get version
-        id: get_version
-        run: echo "version=$(git describe --tags --always)" >> $GITHUB_OUTPUT
 
       - name: Update version in app.php
         run: |
@@ -145,17 +375,168 @@ jobs:
           build-args: |
             BUILDKIT_INLINE_CACHE=1
             BUILDKIT_MULTI_PLATFORM=1
-            CACHEBUST=${{ github.sha }}
-            REPO_URL=https://github.com/${{ github.repository }}
-            BRANCH_NAME=${{ github.ref_name }}
           provenance: false
           outputs: type=registry,push=true
           allow: |
             network.host
+          secrets: |
+            "github_token=${{ secrets.GITHUB_TOKEN }}"
+
+  deploy-admin-assets-hotfix:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'admin_assets' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false &&
+          inputs.cleanup_stage_run_id == '' }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Verify exact approved repair and stage
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          APPROVED_STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$APPROVED_STAGE_RUN_ID" = "$(printf '%s' "$APPROVED_STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Checkout admin asset deployment script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Install verified admin assets without restarting production
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          HOTFIX_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "HOTFIX_ID='$HOTFIX_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s" \
+            < .github/scripts/deploy-admin-assets-hotfix.sh
+
+  smoke-admin-assets-hotfix:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'admin_assets' }}
+    needs: deploy-admin-assets-hotfix
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify live admin assets without changing production
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: 7002
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
+  rollback-admin-assets-hotfix:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'admin_assets_rollback' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false &&
+          inputs.cleanup_stage_run_id == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Validate exact hotfix identifier
+        env:
+          HOTFIX_ID: ${{ inputs.release_id }}
+        run: test "$HOTFIX_ID" = "$(printf '%s' "$HOTFIX_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Checkout admin asset rollback script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Restore the exact pre-hotfix admin assets
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          HOTFIX_ID: ${{ inputs.release_id }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "HOTFIX_ID='$HOTFIX_ID' bash -s" \
+            < .github/scripts/rollback-admin-assets-hotfix.sh
 
   deploy-distributor:
-    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
-    needs: build
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_preflight == true &&
+          inputs.deploy_production == true &&
+          inputs.production_release_action == 'none' }}
+    needs:
+      - build
+      - production-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: distributor-server
@@ -164,6 +545,13 @@ jobs:
       packages: read
 
     steps:
+      - name: Verify explicit production release commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+
       - name: Checkout deployment script
         uses: actions/checkout@v4
 
@@ -217,6 +605,532 @@ jobs:
         run: |
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  stage-distributor-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          (inputs.stage_production_green == true || inputs.stage_production_dry_run == true) &&
+          inputs.deploy_production == false &&
+          inputs.production_release_action == 'none' }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-server
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Verify exact staging commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+
+      - name: Checkout staging script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Login server to GHCR for isolated staging
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | sshpass -e ssh -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+
+      - name: Start isolated green staging container
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+          STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          STAGE_DRY_RUN: ${{ inputs.stage_production_dry_run }}
+          STAGE_PORT: ${{ inputs.stage_target_port }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "STAGE_IMAGE='$STAGE_IMAGE' STAGE_RUN_ID='$STAGE_RUN_ID' STAGE_DRY_RUN='$STAGE_DRY_RUN' STAGE_PORT='$STAGE_PORT' bash -s" \
+            < .github/scripts/stage-xboard-green.sh
+
+      - name: Logout server from GHCR
+        if: ${{ always() }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  smoke-staged-distributor:
+    needs: stage-distributor-green
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify isolated admin assets without changing production
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: ${{ inputs.stage_target_port }}
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
+  cleanup-failed-green-stage:
+    if: >-
+      ${{ always() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.stage_production_green == true &&
+          needs.stage-distributor-green.result == 'success' &&
+          needs.smoke-staged-distributor.result == 'failure' }}
+    needs:
+      - stage-distributor-green
+      - smoke-staged-distributor
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout staging cleanup script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Remove failed isolated stage
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-stage.sh
+
+  prepare-live-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'prepare' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false &&
+          inputs.cleanup_stage_run_id == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-server
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Verify exact approved release commit and stage
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          APPROVED_STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$APPROVED_STAGE_RUN_ID" = "$(printf '%s' "$APPROVED_STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Checkout live release script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Login server to GHCR for live candidate
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | sshpass -e ssh -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+
+      - name: Prepare live green without switching traffic
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s" \
+            < .github/scripts/prepare-xboard-live-green.sh
+
+      - name: Logout server from GHCR
+        if: ${{ always() }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  smoke-live-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'prepare' }}
+    needs: prepare-live-green
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7002
+    secrets: inherit
+
+  cleanup-failed-live-green:
+    if: >-
+      ${{ always() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'prepare' &&
+          needs.prepare-live-green.result == 'success' &&
+          needs.smoke-live-green.result != 'success' }}
+    needs:
+      - prepare-live-green
+      - smoke-live-green
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Remove failed live candidate only
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-live-release.sh
+
+  pre-switch-smoke:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'switch' }}
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7002
+    secrets: inherit
+
+  switch-live-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'switch' &&
+          inputs.deploy_production == false }}
+    needs: pre-switch-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Verify release identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Atomically switch Caddy to green
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s" \
+            < .github/scripts/switch-xboard-live-green.sh
+
+  smoke-switched-green:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'switch' }}
+    needs: switch-live-green
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7002
+    secrets: inherit
+
+  auto-rollback-failed-switch:
+    if: >-
+      ${{ always() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'switch' &&
+          inputs.deploy_production == false &&
+          needs.switch-live-green.result == 'success' &&
+          needs.smoke-switched-green.result != 'success' }}
+    needs:
+      - switch-live-green
+      - smoke-switched-green
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Restore blue after failed external green smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' bash -s" \
+            < .github/scripts/rollback-xboard-live-green.sh
+
+  smoke-auto-rolled-back-blue:
+    if: >-
+      ${{ always() &&
+          needs.auto-rollback-failed-switch.result == 'success' }}
+    needs: auto-rollback-failed-switch
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7001
+    secrets: inherit
+
+  activate-green-roles:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'activate_roles' &&
+          inputs.deploy_production == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Verify release identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Transfer Horizon and scheduler ownership to Laravel 13
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s" \
+            < .github/scripts/activate-xboard-green-roles.sh
+
+  rollback-live-release:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'rollback' &&
+          inputs.deploy_production == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Restore blue traffic and role ownership
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' bash -s" \
+            < .github/scripts/rollback-xboard-live-green.sh
+
+  smoke-rolled-back-blue:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'rollback' }}
+    needs: rollback-live-release
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7001
+    secrets: inherit
+
+  cleanup-live-release:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'cleanup' &&
+          inputs.deploy_production == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+      - env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+      - name: Remove exact release candidates after rollback
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' bash -s" \
+            < .github/scripts/cleanup-xboard-live-release.sh
 
   smoke-distributor:
     if: ${{ github.ref == 'refs/heads/codex/distributor' }}

@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+: "${DEPLOY_HOST:?DEPLOY_HOST is required}"
+: "${DEPLOY_PORT:?DEPLOY_PORT is required}"
+: "${DEPLOY_USER:?DEPLOY_USER is required}"
+: "${SSHPASS:?SSHPASS is required}"
+: "${TARGET_PORT:?TARGET_PORT is required}"
+
+test "$TARGET_PORT" -ge 1
+test "$TARGET_PORT" -le 65535
+
+sshpass -e ssh -N \
+  -p "$DEPLOY_PORT" \
+  -o ExitOnForwardFailure=yes \
+  -L "17001:127.0.0.1:$TARGET_PORT" \
+  "$DEPLOY_USER@$DEPLOY_HOST" &
+tunnel_pid=$!
+cleanup_tunnel() {
+  kill "$tunnel_pid" >/dev/null 2>&1 || true
+  wait "$tunnel_pid" 2>/dev/null || true
+}
+trap cleanup_tunnel EXIT
+
+tunnel_ready=0
+for attempt in $(seq 1 10); do
+  if curl --silent --show-error \
+    --output /dev/null --connect-timeout 2 --max-time 3 \
+    'http://127.0.0.1:17001/'; then
+    tunnel_ready=1
+    break
+  fi
+  sleep 2
+done
+test "$tunnel_ready" = '1'
+
+work_dir=$(mktemp -d)
+cleanup_all() {
+  rm -rf -- "$work_dir"
+  cleanup_tunnel
+}
+trap cleanup_all EXIT
+
+curl --silent --show-error --fail --output "$work_dir/dashboard.html" \
+  'http://127.0.0.1:17001/'
+grep -q 'distributor-message-guard.js' "$work_dir/dashboard.html"
+
+curl --silent --show-error --fail --output "$work_dir/admin-distributor.js" \
+  'http://127.0.0.1:17001/assets/admin-distributor.js'
+grep -q '下单时间' "$work_dir/admin-distributor.js"
+
+bash .github/scripts/smoke-admin-assets.sh
+
+echo 'Remote admin asset smoke test passed.'

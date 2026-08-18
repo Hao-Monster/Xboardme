@@ -56,6 +56,11 @@ return [
 
     'asset_url' => env('ASSET_URL', null),
 
+    // A blue/green release must have exactly one scheduler owner. Web-only
+    // candidates disable the Octane tick until scheduler ownership is moved
+    // explicitly after the traffic switch.
+    'scheduler_enabled' => env('ENABLE_SCHEDULER', true),
+
     /*
     |--------------------------------------------------------------------------
     | Application Timezone
@@ -189,5 +194,7 @@ return [
     | The only modification by laravel config
     |
     */
-    'version' => '1.0.0'
+    'version' => '1.0.0',
+
+    'ws_pid_file' => env('WS_PID_FILE', storage_path('logs/xboard-ws-server.pid')),
 ];

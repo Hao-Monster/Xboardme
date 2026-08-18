@@ -44,7 +44,7 @@ class CheckOrder extends Command
     public function handle()
     {
         Order::whereIn('status', [Order::STATUS_PENDING, Order::STATUS_PROCESSING])
-            ->orderBy('created_at', 'ASC')
+            ->orderBy('created_at', 'asc')
             ->lazyById(200)
             ->each(function ($order) {
                 OrderHandleJob::dispatch($order->trade_no);

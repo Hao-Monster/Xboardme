@@ -17,7 +17,7 @@ class StatController extends Controller
         $records = StatUser::query()
             ->where('user_id', $request->user()->id)
             ->where('record_at', '>=', $startDate)
-            ->orderBy('record_at', 'DESC')
+            ->orderBy('record_at', 'desc')
             ->get();
 
         $data = TrafficLogResource::collection(collect($records));
