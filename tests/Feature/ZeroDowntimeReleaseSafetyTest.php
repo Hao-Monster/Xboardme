@@ -174,6 +174,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString(': "${STAGE_PORT:=7002}"', $stage);
         $this->assertStringContainsString('STAGE_FAIL=invalid_stage_port', $stage);
         $this->assertStringContainsString('"127.0.0.1:$STAGE_PORT:7001"', $stage);
+        $this->assertStringContainsString("'127\\.0\\.0\\.1:(7001|7002)'", $stage);
+        $this->assertStringContainsString('((${#proxy_files[@]} != 1 || proxy_references != 1))', $stage);
     }
 
     public function test_failed_external_green_smoke_automatically_restores_and_verifies_blue(): void

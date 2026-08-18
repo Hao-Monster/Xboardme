@@ -144,12 +144,18 @@ if ((available_kib < required_kib)); then
   exit 1
 fi
 
-proxy_references=$( (grep -RIlE --include='*.conf' --include='Caddyfile' \
-  -- '127\.0\.0\.1:7001' /etc/caddy 2>/dev/null || true) | wc -l )
+mapfile -t proxy_files < <(
+  grep -RIlE --include='*.conf' --include='Caddyfile' \
+    -- '127\.0\.0\.1:(7001|7002)' /etc/caddy 2>/dev/null || true
+)
+proxy_references=0
+if ((${#proxy_files[@]} == 1)); then
+  proxy_references=$(grep -Eo '127\.0\.0\.1:(7001|7002)' "${proxy_files[0]}" | wc -l)
+fi
 if ! command -v caddy >/dev/null 2>&1 ||
    ! systemctl is-active --quiet caddy 2>/dev/null ||
-   ((proxy_references != 1)); then
-  echo "STAGE_FAIL=unsupported_caddy_proxy references=$proxy_references"
+   ((${#proxy_files[@]} != 1 || proxy_references != 1)); then
+  echo "STAGE_FAIL=unsupported_caddy_proxy files=${#proxy_files[@]} references=$proxy_references"
   exit 1
 fi
 
