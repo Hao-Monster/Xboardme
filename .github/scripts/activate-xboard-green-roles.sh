@@ -137,6 +137,11 @@ if ((zero_reserved_samples < 3)); then
   echo "RELEASE_ROLES_WARN=reserved_jobs_remain_after_grace count=$reserved_jobs"
 fi
 
+if [[ "$role_mode" == release ]]; then
+  docker stop --time 20 "$previous_horizon" >/dev/null
+  old_horizon_stopped=1
+fi
+
 docker run -d \
   --name "$horizon_name" \
   --hostname "$horizon_name" \
@@ -249,11 +254,6 @@ for container in "$horizon_name" "$scheduler_name"; do
   [[ "$version" == 13.* ]] || { echo "RELEASE_ROLES_FAIL=unexpected_framework container=$container"; exit 1; }
 done
 docker exec "$green" wget -q -O /dev/null http://127.0.0.1:7001/
-
-if [[ "$role_mode" == release ]]; then
-  docker stop --time 20 "$previous_horizon" >/dev/null
-  old_horizon_stopped=1
-fi
 
 set_state() {
   local key=$1 value=$2 temporary

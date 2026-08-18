@@ -288,4 +288,24 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertStringContainsString('test "${#RELEASE_EXPECTED_SHA}" -eq 40', $activationJob['body']);
         $this->assertStringContainsString('EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}', $activationJob['body']);
     }
+
+    public function test_release_role_handoff_frees_previous_horizon_memory_before_starting_candidate(): void
+    {
+        $script = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
+
+        $this->assertIsString($script);
+        $stopPrevious = 'docker stop --time 20 "$previous_horizon" >/dev/null';
+        $startCandidate = 'docker run -d \\' . "\n" . '  --name "$horizon_name"';
+        $stopPosition = strpos($script, $stopPrevious);
+        $startPosition = strpos($script, $startCandidate);
+
+        $this->assertNotFalse($stopPosition);
+        $this->assertNotFalse($startPosition);
+        $this->assertSame(1, substr_count($script, $stopPrevious));
+        $this->assertLessThan(
+            $startPosition,
+            $stopPosition,
+            'The paused previous release must release its memory before the candidate Horizon starts.'
+        );
+    }
 }
