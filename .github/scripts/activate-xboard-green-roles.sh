@@ -81,6 +81,7 @@ old_horizon_paused=0
 old_scheduler_stopped=0
 old_horizon_stopped=0
 blue_octane_stopped=0
+blue_octane_pid=''
 blue_octane_pgid=''
 rollback_roles() {
   status=$?
