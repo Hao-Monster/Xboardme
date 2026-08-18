@@ -1,6 +1,12 @@
 name: Distributor smoke
 description: Verify the distributor release through an SSH tunnel.
 
+inputs:
+  validation_mode:
+    description: Use rollback mode when verifying a release that predates the current feature assets.
+    required: false
+    default: release
+
 runs:
   using: composite
   steps:
@@ -20,4 +26,6 @@ runs:
 
     - name: Verify distributor login and route isolation
       shell: bash
+      env:
+        SMOKE_VALIDATION_MODE: ${{ inputs.validation_mode }}
       run: bash "$GITHUB_WORKSPACE/.github/scripts/smoke-distributor-remote.sh"

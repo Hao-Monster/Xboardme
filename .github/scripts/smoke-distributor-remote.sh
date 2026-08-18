@@ -8,6 +8,12 @@ set -euo pipefail
 : "${DISTRIBUTOR_EMAIL:?DISTRIBUTOR_EMAIL is required}"
 : "${DISTRIBUTOR_PASSWORD:?DISTRIBUTOR_PASSWORD is required}"
 : "${TARGET_PORT:?TARGET_PORT is required}"
+: "${SMOKE_VALIDATION_MODE:=release}"
+
+case "$SMOKE_VALIDATION_MODE" in
+  release|rollback) ;;
+  *) echo 'Invalid smoke validation mode.' >&2; exit 1 ;;
+esac
 
 test "$TARGET_PORT" -ge 1
 test "$TARGET_PORT" -le 65535
@@ -90,12 +96,14 @@ grep -q '客户端管理' admin-client-catalog.js
 curl --silent --show-error --fail --output admin-distributor.js \
   'http://127.0.0.1:17001/assets/admin-distributor.js'
 grep -q '下单时间' admin-distributor.js
-curl --silent --show-error --fail --output admin-realtime-status.js \
-  'http://127.0.0.1:17001/assets/admin-realtime-status.js'
-grep -q 'getRealtimeStats' admin-realtime-status.js
-curl --silent --show-error --fail --output admin-realtime-status.css \
-  'http://127.0.0.1:17001/assets/admin-realtime-status.css'
-grep -q 'xboard-realtime-grid' admin-realtime-status.css
+if [ "$SMOKE_VALIDATION_MODE" = 'release' ]; then
+  curl --silent --show-error --fail --output admin-realtime-status.js \
+    'http://127.0.0.1:17001/assets/admin-realtime-status.js'
+  grep -q 'getRealtimeStats' admin-realtime-status.js
+  curl --silent --show-error --fail --output admin-realtime-status.css \
+    'http://127.0.0.1:17001/assets/admin-realtime-status.css'
+  grep -q 'xboard-realtime-grid' admin-realtime-status.css
+fi
 
 bash .github/scripts/smoke-admin-assets.sh
 

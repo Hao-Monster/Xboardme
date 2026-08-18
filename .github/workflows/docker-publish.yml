@@ -1076,6 +1076,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify blue after automatic rollback
         uses: ./.github/actions/distributor-smoke
+        with:
+          validation_mode: rollback
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -1179,6 +1181,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify blue after manual rollback
         uses: ./.github/actions/distributor-smoke
+        with:
+          validation_mode: rollback
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}

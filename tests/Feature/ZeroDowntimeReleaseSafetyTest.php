@@ -117,6 +117,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('--output /dev/null "$public_url/"', $smoke);
         $this->assertStringContainsString('test "$public_ready" = \'1\'', $smoke);
         $this->assertStringContainsString('caddy adapt --config', $resolver);
+        $this->assertStringContainsString("127\\.0\\.0\\.1:700[123]", $resolver);
         $this->assertStringContainsString('tls_connection_policies', $resolver);
         $this->assertStringContainsString('ambiguous_caddy_origin', $resolver);
         $this->assertStringContainsString('bash -n .github/scripts/resolve-xboard-public-url.sh', file_get_contents(base_path('.github/workflows/docker-publish.yml')));
@@ -218,6 +219,18 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('smoke-auto-rolled-back-blue:', $workflow);
         $this->assertStringContainsString('needs.auto-rollback-failed-switch.result == \'success\'', $workflow);
         $this->assertStringContainsString('TARGET_PORT: ${{ inputs.rollback_target_port }}', $workflow);
+        $this->assertSame(
+            2,
+            substr_count($workflow, 'validation_mode: rollback'),
+            'Both manual and automatic rollback smoke jobs must accept the previous release contract.'
+        );
+
+        $action = file_get_contents(base_path('.github/actions/distributor-smoke/action.yml'));
+        $smoke = file_get_contents(base_path('.github/scripts/smoke-distributor-remote.sh'));
+        $this->assertStringContainsString('validation_mode:', $action);
+        $this->assertStringContainsString('SMOKE_VALIDATION_MODE: ${{ inputs.validation_mode }}', $action);
+        $this->assertStringContainsString('SMOKE_VALIDATION_MODE:=release', $smoke);
+        $this->assertStringContainsString('if [ "$SMOKE_VALIDATION_MODE" = \'release\' ]; then', $smoke);
     }
 
     public function test_release_cleanup_requires_the_exact_active_blue_caddy_config(): void
