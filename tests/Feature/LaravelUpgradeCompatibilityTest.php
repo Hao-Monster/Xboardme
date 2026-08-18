@@ -270,4 +270,22 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             'A stale reserved entry must not block an otherwise safe role handoff.'
         );
     }
+
+    public function test_role_activation_verifies_workflow_and_candidate_identities_separately(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+
+        $this->assertIsString($workflow);
+        $this->assertStringContainsString('release_expected_sha:', $workflow);
+
+        preg_match(
+            '/^  activate-green-roles:\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
+            $workflow,
+            $activationJob
+        );
+        $this->assertArrayHasKey('body', $activationJob);
+        $this->assertStringContainsString('RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}', $activationJob['body']);
+        $this->assertStringContainsString('test "${#RELEASE_EXPECTED_SHA}" -eq 40', $activationJob['body']);
+        $this->assertStringContainsString('EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}', $activationJob['body']);
+    }
 }
