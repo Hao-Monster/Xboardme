@@ -131,8 +131,10 @@ for attempt in {1..35}; do
   sleep 2
 done
 if ((zero_reserved_samples < 3)); then
-  echo 'RELEASE_ROLES_FAIL=horizon_drain_timeout'
-  exit 1
+  # Redis keeps timed-out jobs in the reserved list until a worker migrates
+  # them after retry_after. Pausing Horizon prevents that migration, so the
+  # count is diagnostic after the bounded worker-timeout grace period.
+  echo "RELEASE_ROLES_WARN=reserved_jobs_remain_after_grace count=$reserved_jobs"
 fi
 
 docker run -d \
