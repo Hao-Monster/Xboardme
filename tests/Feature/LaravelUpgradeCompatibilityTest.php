@@ -103,6 +103,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
     {
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
         $this->assertIsString($workflow);
+        $workflow = str_replace("\r\n", "\n", $workflow);
         $this->assertStringContainsString('branches: ["codex/distributor"]', $workflow);
         $this->assertStringContainsString("pull_request:\n    branches: [\"codex/distributor\"]", $workflow);
         $this->assertStringNotContainsString('branches: ["master", "new-dev"', $workflow);
