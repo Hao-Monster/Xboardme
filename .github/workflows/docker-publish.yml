@@ -293,6 +293,7 @@ jobs:
           bash -n .github/scripts/resolve-xboard-public-url.sh
           bash -n .github/scripts/smoke-admin-assets.sh
           bash -n .github/scripts/smoke-admin-assets-remote.sh
+          bash -n .github/scripts/smoke-distributor-remote.sh
           bash -n .github/scripts/cleanup-xboard-live-release.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
@@ -879,29 +880,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install SSH password helper
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends sshpass
-
-      - name: Trust deployment host key
-        env:
-          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
-          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
-        run: |
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
-          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
-          chmod 600 "$HOME/.ssh/known_hosts"
-
       - name: Verify prepared live candidate without switching traffic
+        uses: ./.github/actions/distributor-smoke
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
           TARGET_PORT: ${{ inputs.candidate_target_port }}
-        run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   cleanup-failed-live-green:
     if: >-
@@ -947,10 +935,23 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' &&
           github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'switch' }}
-    uses: ./.github/workflows/distributor-smoke.yml
-    with:
-      target_port: ${{ inputs.candidate_target_port }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidate before switching traffic
+        uses: ./.github/actions/distributor-smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.candidate_target_port }}
 
   switch-live-green:
     if: >-
@@ -1002,10 +1003,23 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' &&
           inputs.production_release_action == 'switch' }}
     needs: switch-live-green
-    uses: ./.github/workflows/distributor-smoke.yml
-    with:
-      target_port: ${{ inputs.candidate_target_port }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify candidate after switching traffic
+        uses: ./.github/actions/distributor-smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.candidate_target_port }}
 
   auto-rollback-failed-switch:
     if: >-
@@ -1053,10 +1067,23 @@ jobs:
       ${{ always() &&
           needs.auto-rollback-failed-switch.result == 'success' }}
     needs: auto-rollback-failed-switch
-    uses: ./.github/workflows/distributor-smoke.yml
-    with:
-      target_port: ${{ inputs.rollback_target_port }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify blue after automatic rollback
+        uses: ./.github/actions/distributor-smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.rollback_target_port }}
 
   activate-green-roles:
     if: >-
@@ -1143,10 +1170,23 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' &&
           inputs.production_release_action == 'rollback' }}
     needs: rollback-live-release
-    uses: ./.github/workflows/distributor-smoke.yml
-    with:
-      target_port: ${{ inputs.rollback_target_port }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify blue after manual rollback
+        uses: ./.github/actions/distributor-smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.rollback_target_port }}
 
   cleanup-live-release:
     if: >-
@@ -1187,6 +1227,21 @@ jobs:
   smoke-distributor:
     if: ${{ github.ref == 'refs/heads/codex/distributor' }}
     needs: deploy-distributor
-    uses: ./.github/workflows/distributor-smoke.yml
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify distributor deployment
+        uses: ./.github/actions/distributor-smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: 7001
 

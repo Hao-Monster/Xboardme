@@ -146,30 +146,71 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             );
         }
 
+        $releaseSmokeJobs = [
+            'smoke-live-green',
+            'pre-switch-smoke',
+            'smoke-switched-green',
+            'smoke-auto-rolled-back-blue',
+            'smoke-rolled-back-blue',
+            'smoke-distributor',
+        ];
+        foreach ($releaseSmokeJobs as $job) {
+            preg_match(
+                '/^  ' . preg_quote($job, '/') . ':\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
+                $workflow,
+                $smokeJob
+            );
+            $this->assertArrayHasKey('body', $smokeJob, "Release smoke job {$job} must exist.");
+            $this->assertStringContainsString('runs-on: ubuntu-latest', $smokeJob['body']);
+            $this->assertStringContainsString('environment: distributor-server', $smokeJob['body']);
+            $this->assertStringContainsString(
+                'uses: ./.github/actions/distributor-smoke',
+                $smokeJob['body'],
+                "Release smoke job {$job} must be observable and inherit the deployment environment."
+            );
+            $this->assertStringContainsString('DISTRIBUTOR_EMAIL:', $smokeJob['body']);
+            $this->assertStringContainsString('DISTRIBUTOR_PASSWORD:', $smokeJob['body']);
+            $this->assertStringContainsString('TARGET_PORT:', $smokeJob['body']);
+            $this->assertStringNotContainsString(
+                'uses: ./.github/workflows/distributor-smoke.yml',
+                $smokeJob['body'],
+                'Dependent reusable workflow calls can fail before creating an observable job.'
+            );
+        }
+
         preg_match(
             '/^  smoke-live-green:\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
             $workflow,
             $smokeLiveGreen
         );
-        $this->assertArrayHasKey('body', $smokeLiveGreen, 'The prepared release smoke job must exist.');
         $this->assertStringContainsString('needs: prepare-live-green', $smokeLiveGreen['body']);
         $this->assertStringNotContainsString(
             'if:',
             $smokeLiveGreen['body'],
             'The smoke job must inherit the prepare result instead of duplicating dispatch conditions.'
         );
-        $this->assertStringContainsString('runs-on: ubuntu-latest', $smokeLiveGreen['body']);
-        $this->assertStringContainsString('environment: distributor-server', $smokeLiveGreen['body']);
-        $this->assertStringContainsString(
-            'bash .github/scripts/smoke-admin-assets-remote.sh',
-            $smokeLiveGreen['body'],
-            'The prepared release smoke must be an observable job that can use the deployment environment.'
-        );
-        $this->assertStringNotContainsString(
-            'uses: ./.github/workflows/distributor-smoke.yml',
-            $smokeLiveGreen['body'],
-            'The dependent reusable workflow call is not observable when GitHub rejects its startup.'
-        );
+
+        $standaloneSmoke = file_get_contents(base_path('.github/workflows/distributor-smoke.yml'));
+        $this->assertIsString($standaloneSmoke);
+        $this->assertStringContainsString('uses: ./.github/actions/distributor-smoke', $standaloneSmoke);
+        $this->assertFileExists(base_path('.github/actions/distributor-smoke/action.yml'));
+        $this->assertFileExists(base_path('.github/scripts/smoke-distributor-remote.sh'));
+        $smokeAction = file_get_contents(base_path('.github/actions/distributor-smoke/action.yml'));
+        $this->assertIsString($smokeAction);
+        $this->assertStringContainsString('using: composite', $smokeAction);
+        $this->assertStringContainsString('smoke-distributor-remote.sh', $smokeAction);
+        $smokeScript = file_get_contents(base_path('.github/scripts/smoke-distributor-remote.sh'));
+        $this->assertIsString($smokeScript);
+        foreach ([
+            'set -euo pipefail',
+            'api/v1/passport/auth/login',
+            'admin-realtime-status.js',
+            'api/v1/user/order/export',
+            'api/v1/user/getSubscribe',
+            'resolve-xboard-public-url.sh',
+        ] as $requiredSmokeCheck) {
+            $this->assertStringContainsString($requiredSmokeCheck, $smokeScript);
+        }
 
         preg_match(
             '/^  cleanup-failed-live-green:\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
