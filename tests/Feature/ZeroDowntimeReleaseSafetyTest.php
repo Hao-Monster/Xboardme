@@ -171,6 +171,12 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('stage_target_port:', $workflow);
         $this->assertStringContainsString('STAGE_PORT: ${{ inputs.stage_target_port }}', $workflow);
         $this->assertStringContainsString('target_port: ${{ inputs.stage_target_port }}', $workflow);
+        $this->assertMatchesRegularExpression(
+            '/smoke-staged-distributor:\R\s+needs: stage-distributor-green\R\s+uses:/',
+            $workflow
+        );
+        $this->assertStringContainsString("needs.smoke-staged-distributor.result == 'failure'", $workflow);
+        $this->assertStringNotContainsString("needs.smoke-staged-distributor.result != 'success'", $workflow);
         $this->assertStringContainsString(': "${STAGE_PORT:=7002}"', $stage);
         $this->assertStringContainsString('STAGE_FAIL=invalid_stage_port', $stage);
         $this->assertStringContainsString('"127.0.0.1:$STAGE_PORT:7001"', $stage);

@@ -654,10 +654,6 @@ jobs:
             "docker logout ghcr.io >/dev/null 2>&1 || true"
 
   smoke-staged-distributor:
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' &&
-          inputs.stage_production_green == true &&
-          inputs.deploy_production == false }}
     needs: stage-distributor-green
     uses: ./.github/workflows/distributor-smoke.yml
     with:
@@ -669,7 +665,8 @@ jobs:
       ${{ always() &&
           github.event_name == 'workflow_dispatch' &&
           inputs.stage_production_green == true &&
-          needs.smoke-staged-distributor.result != 'success' }}
+          needs.stage-distributor-green.result == 'success' &&
+          needs.smoke-staged-distributor.result == 'failure' }}
     needs:
       - stage-distributor-green
       - smoke-staged-distributor
