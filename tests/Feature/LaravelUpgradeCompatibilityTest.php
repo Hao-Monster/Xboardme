@@ -111,6 +111,14 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertStringContainsString('github_token=${{ secrets.GITHUB_TOKEN }}', $workflow);
         $this->assertStringNotContainsString('"github_token=${{ secrets.GITHUB_TOKEN }}"', $workflow);
 
+        $dockerfile = file_get_contents(base_path('Dockerfile'));
+        $this->assertIsString($dockerfile);
+        $this->assertStringContainsString(
+            'COPY --from=composer:2.9.8@sha256:b09bccd91a78fe8a9ab4b33d707b862e8fe54fec17782e32683ad2a69c46867d /usr/bin/composer /usr/local/bin/composer',
+            $dockerfile,
+            'The image build must use a Composer release that accepts current GitHub Actions tokens.'
+        );
+
         $productionJobs = [
             'production-preflight',
             'cleanup-requested-stage',
