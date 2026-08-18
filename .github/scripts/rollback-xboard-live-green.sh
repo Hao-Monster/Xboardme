@@ -7,13 +7,12 @@ if [[ ! "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
   exit 1
 fi
 
-mapfile -t blue_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
-if ((${#blue_ids[@]} != 1)); then
-  echo 'RELEASE_ROLLBACK_FAIL=blue_missing'
+mapfile -t compose_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
+if ((${#compose_ids[@]} != 1)); then
+  echo 'RELEASE_ROLLBACK_FAIL=compose_base_missing'
   exit 1
 fi
-blue=${blue_ids[0]}
-workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$blue")
+workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${compose_ids[0]}")
 state_file="$workdir/.codex-release/$RELEASE_ID/state.env"
 if [[ ! -f "$state_file" ]]; then
   echo 'RELEASE_ROLLBACK_FAIL=state_missing'
@@ -21,15 +20,16 @@ if [[ ! -f "$state_file" ]]; then
 fi
 # shellcheck disable=SC1090
 source "$state_file"
-if [[ "$BLUE_CONTAINER" != "$blue" ]]; then
+blue=$BLUE_CONTAINER
+if [[ "$(docker inspect -f '{{.State.Running}}' "$blue" 2>/dev/null || true)" != true ]] ||
+   [[ ! "$BLUE_PORT" =~ ^[0-9]+$ ]] || [[ ! "$GREEN_PORT" =~ ^[0-9]+$ ]]; then
   echo 'RELEASE_ROLLBACK_FAIL=invalid_release_state'
   exit 1
 fi
 
-# A cutover can fail after creating the backup but before recording its paths.
-# Recover only the deterministic release-local backup and one exact Caddy file.
 caddy_backup=${CADDY_BACKUP:-$workdir/.codex-release/$RELEASE_ID/backups/caddy-before-switch.conf}
-if [[ ! -f "$caddy_backup" ]] || [[ "$(grep -o '127\.0\.0\.1:7001' "$caddy_backup" | wc -l)" != 1 ]]; then
+if [[ ! -f "$caddy_backup" ]] ||
+   [[ "$(grep -o "127\\.0\\.0\\.1:$BLUE_PORT" "$caddy_backup" | wc -l)" != 1 ]]; then
   echo 'RELEASE_ROLLBACK_FAIL=invalid_caddy_backup'
   exit 1
 fi
@@ -37,7 +37,7 @@ caddy_config=${CADDY_CONFIG:-}
 if [[ -z "$caddy_config" ]]; then
   mapfile -t caddy_candidates < <(
     grep -RIlE --include='*.conf' --include='Caddyfile' \
-      -- '127\.0\.0\.1:700[12]' /etc/caddy 2>/dev/null || true
+      -- "127\\.0\\.0\\.1:($BLUE_PORT|$GREEN_PORT)" /etc/caddy 2>/dev/null || true
   )
   if ((${#caddy_candidates[@]} != 1)); then
     echo "RELEASE_ROLLBACK_FAIL=ambiguous_caddy_file count=${#caddy_candidates[@]}"
@@ -48,12 +48,34 @@ fi
 
 if [[ "$ROLE_STATE" == green ]]; then
   docker rm -f "${SCHEDULER_CONTAINER:?}" "${HORIZON_CONTAINER:?}" >/dev/null 2>&1 || true
-  if [[ ! "${BLUE_OCTANE_PGID:-}" =~ ^[1-9][0-9]*$ ]]; then
-    echo 'RELEASE_ROLLBACK_FAIL=invalid_blue_octane_group'
-    exit 1
+  if [[ "${ROLE_MODE:-compose}" == release ]]; then
+    : "${PREVIOUS_HORIZON_CONTAINER:?}"
+    : "${PREVIOUS_SCHEDULER_CONTAINER:?}"
+    docker start "$PREVIOUS_SCHEDULER_CONTAINER" >/dev/null
+    docker start "$PREVIOUS_HORIZON_CONTAINER" >/dev/null
+    previous_roles_ready=0
+    for attempt in {1..20}; do
+      horizon_state=$(docker exec "$PREVIOUS_HORIZON_CONTAINER" supervisorctl status 2>&1 || true)
+      if grep -Eq '^horizon:horizon_00[[:space:]]+RUNNING([[:space:]]|$)' <<< "$horizon_state" &&
+         [[ "$(docker inspect -f '{{.State.Running}}' "$PREVIOUS_SCHEDULER_CONTAINER")" == true ]]; then
+        previous_roles_ready=1
+        break
+      fi
+      sleep 2
+    done
+    if ((previous_roles_ready != 1)); then
+      echo 'RELEASE_ROLLBACK_FAIL=previous_release_roles_unhealthy'
+      exit 1
+    fi
+    docker exec "$PREVIOUS_HORIZON_CONTAINER" php /www/artisan horizon:continue >/dev/null
+  else
+    if [[ ! "${BLUE_OCTANE_PGID:-}" =~ ^[1-9][0-9]*$ ]]; then
+      echo 'RELEASE_ROLLBACK_FAIL=invalid_blue_octane_group'
+      exit 1
+    fi
+    docker exec "$blue" php -r 'exit(posix_kill(-((int) $argv[1]), SIGCONT) ? 0 : 1);' "$BLUE_OCTANE_PGID"
+    docker exec "$blue" php /www/artisan horizon:continue >/dev/null
   fi
-  docker exec "$blue" php -r 'exit(posix_kill(-((int) $argv[1]), SIGCONT) ? 0 : 1);' "$BLUE_OCTANE_PGID"
-  docker exec "$blue" php /www/artisan horizon:continue >/dev/null
 fi
 
 blue_healthy=0
@@ -65,7 +87,7 @@ for attempt in {1..30}; do
   sleep 2
 done
 if ((blue_healthy != 1)); then
-  echo 'RELEASE_ROLLBACK_FAIL=blue_not_healthy'
+  echo 'RELEASE_ROLLBACK_FAIL=previous_web_not_healthy'
   exit 1
 fi
 
@@ -77,12 +99,12 @@ if [[ "$(systemctl is-active caddy)" != active ]]; then
   echo 'RELEASE_ROLLBACK_FAIL=caddy_inactive'
   exit 1
 fi
-if [[ "$(grep -o '127\.0\.0\.1:7001' "$caddy_config" | wc -l)" != 1 ]] || \
-   grep -q '127\.0\.0\.1:7002' "$caddy_config"; then
-  echo 'RELEASE_ROLLBACK_FAIL=caddy_not_blue'
+if [[ "$(grep -o "127\\.0\\.0\\.1:$BLUE_PORT" "$caddy_config" | wc -l)" != 1 ]] ||
+   grep -q "127\\.0\\.0\\.1:$GREEN_PORT" "$caddy_config"; then
+  echo 'RELEASE_ROLLBACK_FAIL=caddy_not_on_previous_port'
   exit 1
 fi
-echo 'RELEASE_ROLLBACK_CHECK=local_blue_and_caddy_ready external_smoke_required'
+echo 'RELEASE_ROLLBACK_CHECK=previous_web_roles_and_caddy_ready external_smoke_required'
 
 set_state() {
   local key=$1 value=$2 temporary
@@ -97,4 +119,4 @@ set_state ROLE_STATE blue
 set_state CADDY_CONFIG "$caddy_config"
 set_state CADDY_BACKUP "$caddy_backup"
 set_state ROLLED_BACK_AT "$(date -u +%FT%TZ)"
-echo "RELEASE_ROLLBACK=PASS id=$RELEASE_ID upstream=127.0.0.1:7001"
+echo "RELEASE_ROLLBACK=PASS id=$RELEASE_ID upstream=127.0.0.1:$BLUE_PORT"

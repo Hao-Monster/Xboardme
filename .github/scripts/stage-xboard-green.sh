@@ -4,7 +4,7 @@ set -Eeuo pipefail
 : "${STAGE_IMAGE:?STAGE_IMAGE is required}"
 : "${STAGE_RUN_ID:?STAGE_RUN_ID is required}"
 : "${STAGE_DRY_RUN:=false}"
-: "${STAGE_PORT:=7002}"
+: "${STAGE_PORT:=7003}"
 
 if [[ "$STAGE_DRY_RUN" != true && "$STAGE_DRY_RUN" != false ]]; then
   echo 'STAGE_FAIL=invalid_dry_run_flag'
@@ -146,11 +146,15 @@ fi
 
 mapfile -t proxy_files < <(
   grep -RIlE --include='*.conf' --include='Caddyfile' \
-    -- '127\.0\.0\.1:(7001|7002)' /etc/caddy 2>/dev/null || true
+    -- 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' /etc/caddy 2>/dev/null || true
 )
 proxy_references=0
 if ((${#proxy_files[@]} == 1)); then
-  proxy_references=$(grep -Eo '127\.0\.0\.1:(7001|7002)' "${proxy_files[0]}" | wc -l)
+  mapfile -t active_upstreams < <(
+    grep -Eo 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' "${proxy_files[0]}" |
+      awk '{print $2}' | sort -u
+  )
+  proxy_references=${#active_upstreams[@]}
 fi
 if ! command -v caddy >/dev/null 2>&1 ||
    ! systemctl is-active --quiet caddy 2>/dev/null ||
@@ -158,11 +162,17 @@ if ! command -v caddy >/dev/null 2>&1 ||
   echo "STAGE_FAIL=unsupported_caddy_proxy files=${#proxy_files[@]} references=$proxy_references"
   exit 1
 fi
+active_port=${active_upstreams[0]##*:}
+if [[ "$active_port" == "$STAGE_PORT" ]]; then
+  echo "STAGE_FAIL=stage_port_is_active port=$STAGE_PORT"
+  exit 1
+fi
 
 if [[ "$STAGE_DRY_RUN" == true ]]; then
   echo "STAGE_DRY_RUN=PASS project=$project image=$STAGE_IMAGE"
   echo "STAGE_RESOURCES=available_kib:$available_kib required_kib:$required_kib memory_available_kib:$memory_available_kib"
   echo "STAGE_DATABASE=driver:$db_driver journal:$journal_mode"
+  echo "STAGE_ACTIVE_UPSTREAM=${active_upstreams[0]}"
   exit 0
 fi
 
@@ -252,6 +262,7 @@ docker run -d \
   --hostname "$container_name" \
   --label codex.xboard.stage=true \
   --label "codex.xboard.stage.run=$STAGE_RUN_ID" \
+  --label "codex.xboard.stage.port=$STAGE_PORT" \
   --restart no \
   --memory 768m \
   --cpus 2 \
@@ -307,8 +318,11 @@ if [[ "$runtime" != *'"laravel":"13.'* ]]; then
   echo "STAGE_FAIL=unexpected_runtime $runtime"
   exit 1
 fi
-if docker exec "$container_name" php /www/artisan migrate:status --no-interaction | grep -q Pending; then
-  echo 'STAGE_FAIL=pending_migrations'
+docker exec "$container_name" php /www/.github/scripts/validate-approved-migrations.php
+docker exec "$container_name" php /www/artisan migrate --force --no-interaction
+docker exec "$container_name" php /www/.github/scripts/validate-approved-migrations.php --require-clean
+if [[ "$(docker exec "$container_name" sqlite3 "$db_path" 'PRAGMA integrity_check;')" != ok ]]; then
+  echo 'STAGE_FAIL=post_migration_database_integrity'
   exit 1
 fi
 docker exec "$container_name" php /www/artisan knowledge-attachments:status --json >/dev/null

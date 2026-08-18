@@ -8,20 +8,19 @@ if [[ ! "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
   exit 1
 fi
 
-mapfile -t blue_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
+mapfile -t compose_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
 mapfile -t green_ids < <(
   docker ps -q \
     --filter label=codex.xboard.release=true \
     --filter label=codex.xboard.release.role=web \
     --filter "label=codex.xboard.release.run=$RELEASE_ID"
 )
-if ((${#blue_ids[@]} != 1 || ${#green_ids[@]} != 1)); then
-  echo 'RELEASE_ROLES_FAIL=blue_or_green_missing'
+if ((${#compose_ids[@]} != 1 || ${#green_ids[@]} != 1)); then
+  echo 'RELEASE_ROLES_FAIL=compose_base_or_candidate_missing'
   exit 1
 fi
-blue=${blue_ids[0]}
+workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${compose_ids[0]}")
 green=${green_ids[0]}
-workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$blue")
 state_file="$workdir/.codex-release/$RELEASE_ID/state.env"
 if [[ ! -f "$state_file" ]]; then
   echo 'RELEASE_ROLES_FAIL=state_missing'
@@ -29,6 +28,7 @@ if [[ ! -f "$state_file" ]]; then
 fi
 # shellcheck disable=SC1090
 source "$state_file"
+blue=$BLUE_CONTAINER
 if [[ "$RELEASE_SHA" != "$EXPECTED_RELEASE_SHA" ]]; then
   echo 'RELEASE_ROLES_FAIL=release_commit_mismatch'
   exit 1
@@ -37,9 +37,9 @@ if [[ "$TRAFFIC_STATE" != green || "$ROLE_STATE" != blue ]]; then
   echo "RELEASE_ROLES_FAIL=invalid_state traffic=$TRAFFIC_STATE roles=$ROLE_STATE"
   exit 1
 fi
-if [[ "$(grep -Rho '127\.0\.0\.1:7002' /etc/caddy 2>/dev/null | wc -l)" != 1 ]] || \
+if [[ "$(grep -Rho "127\\.0\\.0\\.1:$GREEN_PORT" /etc/caddy 2>/dev/null | wc -l)" != 1 ]] ||
    ! docker exec "$green" wget -q -O /dev/null http://127.0.0.1:7001/; then
-  echo 'RELEASE_ROLES_FAIL=green_not_serving_traffic'
+  echo 'RELEASE_ROLES_FAIL=candidate_not_serving_traffic'
   exit 1
 fi
 
@@ -52,26 +52,66 @@ for name in "$horizon_name" "$scheduler_name"; do
   fi
 done
 
-blue_horizon_paused=0
+role_mode=compose
+previous_horizon=''
+previous_scheduler=''
+if [[ -n "${PREVIOUS_RELEASE_ID:-}" ]]; then
+  role_mode=release
+  mapfile -t previous_horizon_ids < <(
+    docker ps -q \
+      --filter label=codex.xboard.release=true \
+      --filter label=codex.xboard.release.role=horizon \
+      --filter "label=codex.xboard.release.run=$PREVIOUS_RELEASE_ID"
+  )
+  mapfile -t previous_scheduler_ids < <(
+    docker ps -q \
+      --filter label=codex.xboard.release=true \
+      --filter label=codex.xboard.release.role=scheduler \
+      --filter "label=codex.xboard.release.run=$PREVIOUS_RELEASE_ID"
+  )
+  if ((${#previous_horizon_ids[@]} != 1 || ${#previous_scheduler_ids[@]} != 1)); then
+    echo 'RELEASE_ROLES_FAIL=previous_release_roles_missing'
+    exit 1
+  fi
+  previous_horizon=${previous_horizon_ids[0]}
+  previous_scheduler=${previous_scheduler_ids[0]}
+fi
+
+old_horizon_paused=0
+old_scheduler_stopped=0
+old_horizon_stopped=0
 blue_octane_stopped=0
 blue_octane_pgid=''
 rollback_roles() {
   status=$?
   if ((status != 0)); then
     docker rm -f "$scheduler_name" "$horizon_name" >/dev/null 2>&1 || true
-    if ((blue_octane_stopped == 1)) && [[ "$blue_octane_pgid" =~ ^[1-9][0-9]*$ ]]; then
-      docker exec "$blue" php -r 'posix_kill(-((int) $argv[1]), SIGCONT);' "$blue_octane_pgid" >/dev/null 2>&1 || true
+    if [[ "$role_mode" == release ]]; then
+      if ((old_scheduler_stopped == 1)); then
+        docker start "$previous_scheduler" >/dev/null 2>&1 || true
+      fi
+      if ((old_horizon_stopped == 1)); then
+        docker start "$previous_horizon" >/dev/null 2>&1 || true
+      fi
+      ((old_horizon_paused == 0)) || docker exec "$previous_horizon" php /www/artisan horizon:continue >/dev/null 2>&1 || true
+    else
+      if ((blue_octane_stopped == 1)) && [[ "$blue_octane_pgid" =~ ^[1-9][0-9]*$ ]]; then
+        docker exec "$blue" php -r 'posix_kill(-((int) $argv[1]), SIGCONT);' "$blue_octane_pgid" >/dev/null 2>&1 || true
+      fi
+      ((old_horizon_paused == 0)) || docker exec "$blue" php /www/artisan horizon:continue >/dev/null 2>&1 || true
     fi
-    ((blue_horizon_paused == 0)) || docker exec "$blue" php /www/artisan horizon:continue >/dev/null 2>&1 || true
   fi
   exit "$status"
 }
 trap rollback_roles EXIT
 
-# Pause the registered Laravel 12 Horizon masters before the new master starts.
-# Existing workers are allowed to drain; queued jobs remain durable in Redis.
-docker exec "$blue" php /www/artisan horizon:pause >/dev/null
-blue_horizon_paused=1
+horizon_owner=$blue
+if [[ "$role_mode" == release ]]; then
+  horizon_owner=$previous_horizon
+fi
+docker exec "$horizon_owner" php /www/artisan horizon:pause >/dev/null
+old_horizon_paused=1
+
 zero_reserved_samples=0
 for attempt in {1..35}; do
   reserved_jobs=$(docker exec "$blue" php -r '
@@ -91,7 +131,7 @@ for attempt in {1..35}; do
   sleep 2
 done
 if ((zero_reserved_samples < 3)); then
-  echo 'RELEASE_ROLES_FAIL=blue_horizon_drain_timeout'
+  echo 'RELEASE_ROLES_FAIL=horizon_drain_timeout'
   exit 1
 fi
 
@@ -129,39 +169,38 @@ for attempt in {1..30}; do
 done
 if ((horizon_ready_samples < 3)); then
   docker logs --tail 100 "$horizon_name" >&2 || true
-  echo 'RELEASE_ROLES_FAIL=green_horizon_unhealthy'
+  echo 'RELEASE_ROLES_FAIL=new_horizon_unhealthy'
   exit 1
 fi
 
-# Freeze only the Laravel 12 Octane process group. Supervisor keeps the stopped
-# process registered (so it does not restart), Redis remains live, and rollback
-# can resume the exact group before restoring blue traffic.
-blue_octane_pid=$(docker exec "$blue" sh -c '
-  for proc in /proc/[0-9]*; do
-    [ -r "$proc/cmdline" ] || continue
-    executable=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "1p")
-    argument1=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "2p")
-    argument2=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "3p")
-    if [ "${executable##*/}" = php ] && [ "$argument1" = /www/artisan ] && [ "$argument2" = octane:start ]; then
-      printf "%s\n" "${proc#/proc/}"
-    fi
-  done
-' | head -n 1)
-if [[ ! "$blue_octane_pid" =~ ^[1-9][0-9]*$ ]]; then
-  echo 'RELEASE_ROLES_FAIL=blue_octane_master_missing'
-  exit 1
+if [[ "$role_mode" == release ]]; then
+  docker stop --time 20 "$previous_scheduler" >/dev/null
+  old_scheduler_stopped=1
+else
+  blue_octane_pid=$(docker exec "$blue" sh -c '
+    for proc in /proc/[0-9]*; do
+      [ -r "$proc/cmdline" ] || continue
+      executable=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "1p")
+      argument1=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "2p")
+      argument2=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "3p")
+      if [ "${executable##*/}" = php ] && [ "$argument1" = /www/artisan ] && [ "$argument2" = octane:start ]; then
+        printf "%s\n" "${proc#/proc/}"
+      fi
+    done
+  ' | head -n 1)
+  if [[ ! "$blue_octane_pid" =~ ^[1-9][0-9]*$ ]]; then
+    echo 'RELEASE_ROLES_FAIL=blue_octane_master_missing'
+    exit 1
+  fi
+  blue_octane_pgid=$(docker exec "$blue" sh -c 'awk "{print \$5}" "/proc/$1/stat"' sh "$blue_octane_pid")
+  if [[ ! "$blue_octane_pgid" =~ ^[1-9][0-9]*$ ]]; then
+    echo 'RELEASE_ROLES_FAIL=blue_octane_group_missing'
+    exit 1
+  fi
+  docker exec "$blue" php -r 'exit(posix_kill(-((int) $argv[1]), SIGSTOP) ? 0 : 1);' "$blue_octane_pgid"
+  blue_octane_stopped=1
 fi
-blue_octane_pgid=$(docker exec "$blue" sh -c 'awk "{print \$5}" "/proc/$1/stat"' sh "$blue_octane_pid")
-if [[ ! "$blue_octane_pgid" =~ ^[1-9][0-9]*$ ]]; then
-  echo 'RELEASE_ROLES_FAIL=blue_octane_group_missing'
-  exit 1
-fi
-docker exec "$blue" php -r 'exit(posix_kill(-((int) $argv[1]), SIGSTOP) ? 0 : 1);' "$blue_octane_pgid"
-blue_octane_stopped=1
-if ! docker exec "$blue" sh -c 'grep -q "^State:[[:space:]]*T" "/proc/$1/status"' sh "$blue_octane_pid"; then
-  echo 'RELEASE_ROLES_FAIL=blue_octane_not_stopped'
-  exit 1
-fi
+
 docker run -d \
   --name "$scheduler_name" \
   --hostname "$scheduler_name" \
@@ -185,7 +224,7 @@ docker run -d \
 
 scheduler_ready=0
 for attempt in {1..15}; do
-  if [[ "$(docker inspect -f '{{.State.Running}}' "$scheduler_name")" == true ]] && \
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$scheduler_name")" == true ]] &&
      docker exec "$scheduler_name" php -r 'echo PHP_MAJOR_VERSION;' | grep -q '^8$'; then
     scheduler_ready=1
     break
@@ -194,7 +233,7 @@ for attempt in {1..15}; do
 done
 if ((scheduler_ready != 1)); then
   docker logs --tail 100 "$scheduler_name" >&2 || true
-  echo 'RELEASE_ROLES_FAIL=green_scheduler_unhealthy'
+  echo 'RELEASE_ROLES_FAIL=new_scheduler_unhealthy'
   exit 1
 fi
 
@@ -209,6 +248,11 @@ for container in "$horizon_name" "$scheduler_name"; do
 done
 docker exec "$green" wget -q -O /dev/null http://127.0.0.1:7001/
 
+if [[ "$role_mode" == release ]]; then
+  docker stop --time 20 "$previous_horizon" >/dev/null
+  old_horizon_stopped=1
+fi
+
 set_state() {
   local key=$1 value=$2 temporary
   temporary=$(mktemp "${state_file}.XXXXXX")
@@ -219,10 +263,13 @@ set_state() {
 }
 set_state HORIZON_CONTAINER "$horizon_name"
 set_state SCHEDULER_CONTAINER "$scheduler_name"
+set_state ROLE_MODE "$role_mode"
+set_state PREVIOUS_HORIZON_CONTAINER "$previous_horizon"
+set_state PREVIOUS_SCHEDULER_CONTAINER "$previous_scheduler"
 set_state BLUE_OCTANE_PID "$blue_octane_pid"
 set_state BLUE_OCTANE_PGID "$blue_octane_pgid"
 set_state ROLE_STATE green
 set_state ROLES_ACTIVATED_AT "$(date -u +%FT%TZ)"
 
 trap - EXIT
-echo "RELEASE_ROLES=PASS id=$RELEASE_ID horizon=$horizon_name scheduler=$scheduler_name"
+echo "RELEASE_ROLES=PASS id=$RELEASE_ID mode=$role_mode horizon=$horizon_name scheduler=$scheduler_name"

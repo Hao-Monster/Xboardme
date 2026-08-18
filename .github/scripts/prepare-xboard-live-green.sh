@@ -4,6 +4,7 @@ set -Eeuo pipefail
 : "${RELEASE_ID:?RELEASE_ID is required}"
 : "${STAGE_RUN_ID:?STAGE_RUN_ID is required}"
 : "${RELEASE_SHA:?RELEASE_SHA is required}"
+: "${RELEASE_PORT:?RELEASE_PORT is required}"
 
 if [[ ! "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]; then
   echo 'RELEASE_PREPARE_FAIL=invalid_commit_sha'
@@ -15,6 +16,10 @@ for identifier in "$RELEASE_ID" "$STAGE_RUN_ID"; do
     exit 1
   fi
 done
+if [[ ! "$RELEASE_PORT" =~ ^[0-9]+$ ]] || ((RELEASE_PORT < 1024 || RELEASE_PORT > 65535)); then
+  echo 'RELEASE_PREPARE_FAIL=invalid_release_port'
+  exit 1
+fi
 
 command -v docker >/dev/null
 docker info >/dev/null
@@ -29,6 +34,11 @@ if ((${#stage_ids[@]} != 1)); then
   exit 1
 fi
 stage=${stage_ids[0]}
+stage_port=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage.port" }}' "$stage")
+if [[ "$stage_port" != "$RELEASE_PORT" ]]; then
+  echo "RELEASE_PREPARE_FAIL=stage_port_mismatch stage=$stage_port release=$RELEASE_PORT"
+  exit 1
+fi
 RELEASE_IMAGE=$(docker inspect -f '{{.Config.Image}}' "$stage")
 if [[ ! "$RELEASE_IMAGE" =~ ^ghcr\.io/[a-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]]; then
   echo 'RELEASE_PREPARE_FAIL=stage_image_is_not_an_immutable_ghcr_digest'
@@ -50,34 +60,72 @@ if [[ "$stage_runtime" != 13.* ]] || ! docker exec "$stage" wget -q -O /dev/null
   exit 1
 fi
 
-mapfile -t candidates < <(
-  {
-    docker ps --format '{{.ID}} {{.Image}}' | awk 'tolower($2) ~ /xboard/ {print $1}'
-    docker ps -q --filter label=com.docker.compose.service=xboard
-  } | sort -u
-)
-production=()
-for container_id in "${candidates[@]}"; do
-  is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
-  is_release=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.release" }}' "$container_id")
-  [[ "$is_stage" == true || "$is_release" == true ]] || production+=("$container_id")
-done
-if ((${#production[@]} != 1)); then
-  echo "RELEASE_PREPARE_FAIL=ambiguous_blue count=${#production[@]}"
+mapfile -t compose_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
+if ((${#compose_ids[@]} != 1)); then
+  echo "RELEASE_PREPARE_FAIL=ambiguous_compose_base count=${#compose_ids[@]}"
   exit 1
 fi
-blue=${production[0]}
-project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$blue")
-workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$blue")
+compose_base=${compose_ids[0]}
+project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$compose_base")
+workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$compose_base")
 if [[ -z "$project" || -z "$workdir" || ! -d "$workdir" ]]; then
-  echo 'RELEASE_PREPARE_FAIL=invalid_blue_compose_metadata'
+  echo 'RELEASE_PREPARE_FAIL=invalid_compose_metadata'
   exit 1
 fi
 
-if docker ps -aq --filter label=codex.xboard.release=true | grep -q .; then
-  echo 'RELEASE_PREPARE_FAIL=another_release_exists'
+mapfile -t proxy_files < <(
+  grep -RIlE --include='*.conf' --include='Caddyfile' \
+    -- 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' /etc/caddy 2>/dev/null || true
+)
+if ((${#proxy_files[@]} != 1)); then
+  echo "RELEASE_PREPARE_FAIL=ambiguous_caddy_file count=${#proxy_files[@]}"
   exit 1
 fi
+mapfile -t active_upstreams < <(
+  grep -Eo 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' "${proxy_files[0]}" |
+    awk '{print $2}' | sort -u
+)
+if ((${#active_upstreams[@]} != 1)); then
+  echo "RELEASE_PREPARE_FAIL=ambiguous_active_upstream count=${#active_upstreams[@]}"
+  exit 1
+fi
+blue_port=${active_upstreams[0]##*:}
+if [[ "$blue_port" == "$RELEASE_PORT" ]]; then
+  echo 'RELEASE_PREPARE_FAIL=release_port_is_already_active'
+  exit 1
+fi
+
+mapfile -t web_candidates < <(
+  {
+    docker ps -q --filter label=com.docker.compose.service=xboard
+    docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=web
+  } | sort -u
+)
+active_web=()
+for container_id in "${web_candidates[@]}"; do
+  if docker inspect -f '{{range $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}' "$container_id" |
+      grep -qx "$blue_port"; then
+    active_web+=("$container_id")
+  fi
+done
+if ((${#active_web[@]} != 1)); then
+  echo "RELEASE_PREPARE_FAIL=ambiguous_active_web port=$blue_port count=${#active_web[@]}"
+  exit 1
+fi
+blue=${active_web[0]}
+blue_name=$(docker inspect -f '{{.Name}}' "$blue" | sed 's#^/##')
+previous_release_id=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.release.run" }}' "$blue")
+if [[ "$previous_release_id" == '<no value>' ]]; then
+  previous_release_id=''
+fi
+
+for container_id in "${web_candidates[@]}"; do
+  if [[ "$container_id" != "$blue" ]] &&
+     [[ "$(docker inspect -f '{{ index .Config.Labels "codex.xboard.release" }}' "$container_id")" == true ]]; then
+    echo 'RELEASE_PREPARE_FAIL=another_release_candidate_exists'
+    exit 1
+  fi
+done
 
 session_middleware=$(docker exec "$blue" php -r '
 require "/www/vendor/autoload.php";
@@ -178,8 +226,12 @@ blue_image_name=$(docker inspect -f '{{.Config.Image}}' "$blue")
   printf 'PROJECT=%q\n' "$project"
   printf 'WORKDIR=%q\n' "$workdir"
   printf 'BLUE_CONTAINER=%q\n' "$blue"
+  printf 'BLUE_CONTAINER_NAME=%q\n' "$blue_name"
+  printf 'BLUE_PORT=%q\n' "$blue_port"
   printf 'BLUE_IMAGE_ID=%q\n' "$blue_image_id"
   printf 'BLUE_IMAGE_NAME=%q\n' "$blue_image_name"
+  printf 'PREVIOUS_RELEASE_ID=%q\n' "$previous_release_id"
+  printf 'GREEN_PORT=%q\n' "$RELEASE_PORT"
   printf 'DATABASE_BACKUP=%q\n' "$release_dir/backups/database.sqlite"
   printf 'DATABASE_BACKUP_SHA256=%q\n' "$backup_sha256"
   printf 'PREPARED_AT=%q\n' "$(date -u +%FT%TZ)"
@@ -196,6 +248,10 @@ if [[ -d "$stage_dir" ]]; then
   docker run --rm --entrypoint sh -v "$stage_dir:/stage" "$RELEASE_IMAGE" \
     -c 'find /stage -mindepth 1 -delete' >/dev/null
   rmdir -- "$stage_dir"
+fi
+if command -v ss >/dev/null 2>&1 && ss -H -lnt "( sport = :$RELEASE_PORT )" 2>/dev/null | grep -q .; then
+  echo "RELEASE_PREPARE_FAIL=release_port_in_use port=$RELEASE_PORT"
+  exit 1
 fi
 
 green_name="xboard-green-$RELEASE_ID"
@@ -216,10 +272,10 @@ docker run -d \
   --label codex.xboard.release=true \
   --label "codex.xboard.release.run=$RELEASE_ID" \
   --label codex.xboard.release.role=web \
-  --restart no \
+  --restart unless-stopped \
   --memory 768m \
   --cpus 2 \
-  -p 127.0.0.1:7002:7001 \
+  -p "127.0.0.1:$RELEASE_PORT:7001" \
   --volumes-from "$blue" \
   -e SKIP_XBOARD_UPDATE=true \
   -e "RUNTIME_INSTANCE_ID=green-$RELEASE_ID" \
@@ -296,10 +352,9 @@ if [[ "$blue_continuity" != "$green_continuity" ]]; then
   echo 'RELEASE_PREPARE_FAIL=configuration_or_plugin_continuity'
   exit 1
 fi
-if docker exec "$green_name" php /www/artisan migrate:status --no-interaction | grep -q Pending; then
-  echo 'RELEASE_PREPARE_FAIL=pending_migrations'
-  exit 1
-fi
+docker exec "$green_name" php /www/.github/scripts/validate-approved-migrations.php
+docker exec "$green_name" php /www/artisan migrate --force --no-interaction
+docker exec "$green_name" php /www/.github/scripts/validate-approved-migrations.php --require-clean
 if [[ "$(docker exec "$green_name" sqlite3 "$db_path" 'PRAGMA integrity_check;')" != ok ]]; then
   echo 'RELEASE_PREPARE_FAIL=live_database_integrity'
   exit 1
@@ -342,7 +397,8 @@ fi
 printf 'GREEN_CONTAINER=%q\n' "$green_name" >> "$state_file"
 printf 'GREEN_RUNTIME=%q\n' "$runtime" >> "$state_file"
 printf 'CONTINUITY_SHA256=%q\n' "$(printf '%s' "$green_continuity" | sha256sum | awk '{print $1}')" >> "$state_file"
+printf 'MIGRATED_AT=%q\n' "$(date -u +%FT%TZ)" >> "$state_file"
 trap - EXIT
-echo "RELEASE_PREPARE=PASS id=$RELEASE_ID image=$RELEASE_IMAGE blue=$blue green=$green_name"
+echo "RELEASE_PREPARE=PASS id=$RELEASE_ID image=$RELEASE_IMAGE blue=$blue_name:$blue_port green=$green_name:$RELEASE_PORT"
 echo "RELEASE_BACKUP=PASS sha256=$backup_sha256"
 echo "RELEASE_RUNTIME=$runtime"

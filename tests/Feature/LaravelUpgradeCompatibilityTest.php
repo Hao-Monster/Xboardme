@@ -98,4 +98,67 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             'sing-box', 'hiddify', 'sfm', 'karing', 'stash', 'surfboard', 'surge',
         ], $manager->getAllFlags());
     }
+
+    public function test_release_governance_prevents_branch_and_runtime_misidentification(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $this->assertIsString($workflow);
+        $this->assertStringContainsString('branches: ["codex/distributor"]', $workflow);
+        $this->assertStringContainsString("pull_request:\n    branches: [\"codex/distributor\"]", $workflow);
+        $this->assertStringNotContainsString('branches: ["master", "new-dev"', $workflow);
+        $this->assertStringContainsString('github.ref == \'refs/heads/codex/distributor\'', $workflow);
+        $this->assertStringContainsString('github_token=${{ secrets.GITHUB_TOKEN }}', $workflow);
+        $this->assertStringNotContainsString('"github_token=${{ secrets.GITHUB_TOKEN }}"', $workflow);
+
+        $productionJobs = [
+            'production-preflight',
+            'cleanup-requested-stage',
+            'deploy-admin-assets-hotfix',
+            'rollback-admin-assets-hotfix',
+            'deploy-distributor',
+            'stage-distributor-green',
+            'prepare-live-green',
+            'switch-live-green',
+            'activate-green-roles',
+            'rollback-live-release',
+            'cleanup-live-release',
+        ];
+        foreach ($productionJobs as $job) {
+            preg_match(
+                '/^  ' . preg_quote($job, '/') . ':\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
+                $workflow,
+                $matches
+            );
+            $this->assertArrayHasKey('body', $matches, "Workflow job {$job} must exist.");
+            $this->assertStringContainsString(
+                "github.ref == 'refs/heads/codex/distributor'",
+                $matches['body'],
+                "Workflow job {$job} must reject non-production branches."
+            );
+        }
+
+        foreach (['distributor-preflight.yml', 'distributor-stage-cleanup.yml'] as $workflowName) {
+            $standaloneWorkflow = file_get_contents(base_path('.github/workflows/' . $workflowName));
+            $this->assertIsString($standaloneWorkflow);
+            $this->assertStringContainsString(
+                "if: \${{ github.ref == 'refs/heads/codex/distributor' }}",
+                $standaloneWorkflow,
+                "Standalone workflow {$workflowName} must reject non-production branches."
+            );
+        }
+
+        $approved = collect(file(base_path('.github/release/approved-migrations.txt'), FILE_IGNORE_NEW_LINES))
+            ->map(fn (string $line): string => trim($line))
+            ->reject(fn (string $line): bool => $line === '' || str_starts_with($line, '#'))
+            ->values()
+            ->all();
+        $this->assertSame([
+            '2026_08_18_000001_add_last_online_at_index_to_v2_user_table',
+        ], $approved);
+
+        $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));
+        $this->assertStringContainsString('active_upstream=', $preflight);
+        $this->assertStringContainsString('ambiguous_active_web', $preflight);
+        $this->assertStringContainsString('active_runtime_is_not_laravel_13', $preflight);
+    }
 }

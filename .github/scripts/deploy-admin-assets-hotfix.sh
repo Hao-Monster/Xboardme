@@ -37,31 +37,41 @@ if [[ "$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.im
 fi
 docker exec "$stage" php /www/.github/scripts/verify-admin-assets.php >/dev/null
 
-mapfile -t active_ids < <(
-  docker ps -q \
-    --filter label=codex.xboard.release=true \
-    --filter label=codex.xboard.release.role=web
-)
-if ((${#active_ids[@]} != 1)); then
-  echo "ADMIN_ASSET_HOTFIX_FAIL=active_web_ambiguous count=${#active_ids[@]}"
-  exit 1
-fi
-active=${active_ids[0]}
-if [[ "$(docker inspect -f '{{.State.Running}}' "$active")" != true ]] || \
-   ! docker port "$active" 7001/tcp | grep -Eq '^127\.0\.0\.1:7002$'; then
-  echo 'ADMIN_ASSET_HOTFIX_FAIL=active_web_not_on_expected_port'
-  exit 1
-fi
-
 mapfile -t proxy_files < <(
   grep -RIlE --include='*.conf' --include='Caddyfile' \
-    -- '127\.0\.0\.1:7002' /etc/caddy 2>/dev/null || true
+    -- 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' /etc/caddy 2>/dev/null || true
 )
-if ((${#proxy_files[@]} != 1)) || \
-   [[ "$(grep -o '127\.0\.0\.1:7002' "${proxy_files[0]}" | wc -l)" != 1 ]]; then
+if ((${#proxy_files[@]} != 1)); then
+  echo 'ADMIN_ASSET_HOTFIX_FAIL=active_caddy_file_ambiguous'
+  exit 1
+fi
+mapfile -t active_upstreams < <(
+  grep -Eo 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' "${proxy_files[0]}" |
+    awk '{print $2}' | sort -u
+)
+if ((${#active_upstreams[@]} != 1)); then
   echo 'ADMIN_ASSET_HOTFIX_FAIL=active_caddy_route_ambiguous'
   exit 1
 fi
+active_port=${active_upstreams[0]##*:}
+mapfile -t web_candidates < <(
+  {
+    docker ps -q --filter label=com.docker.compose.service=xboard
+    docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=web
+  } | sort -u
+)
+active_ids=()
+for container_id in "${web_candidates[@]}"; do
+  if docker inspect -f '{{range $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}' "$container_id" |
+      grep -qx "$active_port"; then
+    active_ids+=("$container_id")
+  fi
+done
+if ((${#active_ids[@]} != 1)); then
+  echo "ADMIN_ASSET_HOTFIX_FAIL=active_web_ambiguous port=$active_port count=${#active_ids[@]}"
+  exit 1
+fi
+active=${active_ids[0]}
 
 mapfile -t blue_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
 if ((${#blue_ids[@]} != 1)); then
@@ -181,5 +191,5 @@ chmod 600 "$state_file"
 docker exec -u 0 "$active" rm -f "$validator"
 switched=0
 trap - EXIT
-echo "ADMIN_ASSET_HOTFIX=PASS id=$HOTFIX_ID container=$active entry=$entry_asset"
+echo "ADMIN_ASSET_HOTFIX=PASS id=$HOTFIX_ID container=$active port=$active_port entry=$entry_asset"
 echo "ADMIN_ASSET_HOTFIX_ROLLBACK=$state_file"

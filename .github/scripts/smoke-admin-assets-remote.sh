@@ -6,10 +6,14 @@ set -euo pipefail
 : "${DEPLOY_PORT:?DEPLOY_PORT is required}"
 : "${DEPLOY_USER:?DEPLOY_USER is required}"
 : "${SSHPASS:?SSHPASS is required}"
-: "${TARGET_PORT:?TARGET_PORT is required}"
+: "${TARGET_PORT:=active}"
 
-test "$TARGET_PORT" -ge 1
-test "$TARGET_PORT" -le 65535
+if [[ "$TARGET_PORT" == active ]]; then
+  TARGET_PORT=$(sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+    "grep -RhoE --include='*.conf' --include='Caddyfile' 'reverse_proxy[[:space:]]+127\\.0\\.0\\.1:[0-9]{4,5}' /etc/caddy 2>/dev/null | awk '{print \$2}' | sort -u | sed -n 's/.*://p'")
+fi
+[[ "$TARGET_PORT" =~ ^[0-9]+$ ]]
+((TARGET_PORT >= 1 && TARGET_PORT <= 65535))
 
 sshpass -e ssh -N \
   -p "$DEPLOY_PORT" \

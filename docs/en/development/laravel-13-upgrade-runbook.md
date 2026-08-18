@@ -18,8 +18,10 @@ The release baseline is:
 - The existing Redis data remains authoritative during the initial web
   cutover. Redis ownership is separated in a later infrastructure phase before
   the old all-in-one container is retired.
-- Two web runtimes on the same host during cutover, with host Caddy switching
-  atomically between loopback ports 7001 (blue) and 7002 (green).
+- Two web runtimes on the same host during cutover. The initial framework
+  upgrade switched from loopback port 7001 to 7002; subsequent releases must
+  discover the active Caddy upstream and use a separately approved free port.
+  Port/color names are not production identity.
 
 This topology is eligible only while SQLite remains on the same local host,
 uses a persistent bind mount, passes `PRAGMA integrity_check`, and remains in
@@ -99,8 +101,9 @@ reserved for a separately authorized disaster-recovery event.
 The rehearsal is not a traffic deployment. It is started by
 `.github/scripts/stage-xboard-green.sh` and must satisfy all of these controls:
 
-1. Locate exactly one non-stage Compose project and reject an occupied port
-   7002 or another stage container.
+1. Locate exactly one Compose storage anchor, discover the real active web from
+   Caddy plus its bound container, and reject an occupied requested stage port
+   or another stage container.
 2. Require an immutable GHCR digest, sufficient measured disk/memory, active
    host Caddy, persistent SQLite WAL, and all required mounts.
 3. Use SQLite online backup, copy sessions and private attachments, and mount
@@ -123,8 +126,11 @@ container.
 
 The workflow input `production_release_action` exposes deliberately separate
 phases. The `prepare` phase consumes the exact successful isolated stage run,
-creates and checksums an online SQLite backup, records the blue image, and
-starts the live green candidate on loopback port 7002 without changing Caddy.
+creates and checksums an online SQLite backup, records the current active image
+and port, and starts the live candidate on the approved inactive loopback port
+without changing Caddy. Pending migrations are accepted only when their names
+are committed in `.github/release/approved-migrations.txt`; the same migration
+set is rehearsed on the isolated SQLite clone before it can touch live data.
 The `switch` phase runs authenticated smoke first, validates a candidate Caddy
 configuration, reloads Caddy atomically, observes public and direct health for
 one minute, and restores the exact saved Caddy file automatically on failure.
@@ -148,18 +154,19 @@ and preserves backups and state evidence.
    payment callbacks until normal API and authentication metrics are healthy.
 8. Observe HTTP 5xx, latency, authentication failures, Redis errors, database
    errors, queue depth and Octane worker health for the agreed canary window.
-9. Atomically switch the host Caddy upstream from 7001 to 7002, validate the
-   configuration before reload, and keep blue running for immediate rollback.
+9. Atomically switch the host Caddy upstream from the recorded active port to
+   the recorded candidate port, validate the configuration before reload, and
+   keep the previous web running for immediate rollback.
 10. Route new WebSocket connections to green while blue drains existing
     connections. Verify client reconnect behavior before terminating blue.
 11. Start a Laravel 13 Horizon-only container against the existing authoritative
-    Redis socket, prove it is running, and then stop blue Horizon. Redis itself
-    remains the single process inside the retained blue container, avoiding a
-    data-plane migration in the framework release.
-12. Stop blue Octane (and therefore its scheduler tick), then start one Laravel
-    13 `schedule:work` container. Retain blue, its Redis process and the old
-    image for the full rollback window. A later Redis extraction is a separate
-    infrastructure release with its own replication rehearsal.
+    Redis socket, prove it is running, and then stop the previous Horizon owner.
+    On the first cutover that owner is inside Compose; on later rotations it is
+    the prior release role container.
+12. Transfer the scheduler in the same single-owner sequence. The first
+    cutover freezes the Compose Octane scheduler; later rotations stop and
+    retain the prior scheduler container. Retain the previous web, roles, Redis
+    process and image for the full rollback window.
 
 ## Rollback triggers
 

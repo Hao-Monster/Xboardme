@@ -13,9 +13,10 @@ permissions:
 
 jobs:
   cleanup:
+    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: distributor-server
+    environment: distributor-staging
 
     steps:
       - name: Checkout cleanup script

@@ -1,0 +1,4 @@
+# Production migrations approved for the current backward-compatible release.
+# Use Laravel migration names without the .php suffix. Every pending migration
+# must be reviewed and listed here before the staging or live release can run.
+2026_08_18_000001_add_last_online_at_index_to_v2_user_table
