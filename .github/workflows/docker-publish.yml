@@ -870,10 +870,38 @@ jobs:
 
   smoke-live-green:
     needs: prepare-live-green
-    uses: ./.github/workflows/distributor-smoke.yml
-    with:
-      target_port: ${{ inputs.candidate_target_port }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify prepared live candidate without switching traffic
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: ${{ inputs.candidate_target_port }}
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   cleanup-failed-live-green:
     if: >-
