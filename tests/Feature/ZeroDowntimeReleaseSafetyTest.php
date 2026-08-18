@@ -110,6 +110,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
 
         $resolver = file_get_contents(base_path('.github/scripts/resolve-xboard-public-url.sh'));
 
+        $this->assertStringContainsString('environment: distributor-server', $workflow);
         $this->assertStringContainsString('< .github/scripts/resolve-xboard-public-url.sh', $workflow);
         $this->assertStringContainsString('--output /dev/null "$public_url/"', $workflow);
         $this->assertStringContainsString('test "$public_ready" = \'1\'', $workflow);

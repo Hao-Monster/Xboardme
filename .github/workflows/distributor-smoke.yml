@@ -22,6 +22,7 @@ permissions:
 jobs:
   smoke-test:
     runs-on: ubuntu-latest
+    environment: distributor-server
     steps:
       - uses: actions/checkout@v4
 
