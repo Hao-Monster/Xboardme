@@ -110,13 +110,12 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
 
     public function test_smoke_test_checks_the_public_route_from_the_runner(): void
     {
-        $workflow = file_get_contents(base_path('.github/workflows/distributor-smoke.yml'));
-
+        $smoke = file_get_contents(base_path('.github/scripts/smoke-distributor-remote.sh'));
         $resolver = file_get_contents(base_path('.github/scripts/resolve-xboard-public-url.sh'));
 
-        $this->assertStringContainsString('< .github/scripts/resolve-xboard-public-url.sh', $workflow);
-        $this->assertStringContainsString('--output /dev/null "$public_url/"', $workflow);
-        $this->assertStringContainsString('test "$public_ready" = \'1\'', $workflow);
+        $this->assertStringContainsString('< .github/scripts/resolve-xboard-public-url.sh', $smoke);
+        $this->assertStringContainsString('--output /dev/null "$public_url/"', $smoke);
+        $this->assertStringContainsString('test "$public_ready" = \'1\'', $smoke);
         $this->assertStringContainsString('caddy adapt --config', $resolver);
         $this->assertStringContainsString('tls_connection_policies', $resolver);
         $this->assertStringContainsString('ambiguous_caddy_origin', $resolver);
@@ -126,7 +125,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
     public function test_admin_frontend_submodule_and_assets_are_release_gates(): void
     {
         $publishWorkflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
-        $smokeWorkflow = file_get_contents(base_path('.github/workflows/distributor-smoke.yml'));
+        $distributorSmoke = file_get_contents(base_path('.github/scripts/smoke-distributor-remote.sh'));
         $adminAssetSmoke = file_get_contents(base_path('.github/scripts/smoke-admin-assets.sh'));
         $dockerfile = file_get_contents(base_path('Dockerfile'));
 
@@ -140,8 +139,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('submodules: recursive', $matches['job']);
         $this->assertStringContainsString('php .github/scripts/verify-admin-assets.php', $matches['job']);
         $this->assertStringContainsString('RUN php .github/scripts/verify-admin-assets.php', $dockerfile);
-        $this->assertStringContainsString('bash .github/scripts/smoke-admin-assets.sh', $smokeWorkflow);
+        $this->assertStringContainsString('bash .github/scripts/smoke-admin-assets.sh', $distributorSmoke);
         $this->assertStringContainsString('bash -n .github/scripts/smoke-admin-assets.sh', $publishWorkflow);
+        $this->assertStringContainsString('bash -n .github/scripts/smoke-distributor-remote.sh', $publishWorkflow);
         $this->assertStringContainsString('/assets/admin/manifest.json', $adminAssetSmoke);
         $this->assertStringContainsString('entry_asset=$(jq -er', $adminAssetSmoke);
         $this->assertStringContainsString('/assets/admin/$entry_asset', $adminAssetSmoke);
@@ -217,7 +217,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('Restore blue after failed external green smoke', $workflow);
         $this->assertStringContainsString('smoke-auto-rolled-back-blue:', $workflow);
         $this->assertStringContainsString('needs.auto-rollback-failed-switch.result == \'success\'', $workflow);
-        $this->assertStringContainsString('target_port: ${{ inputs.rollback_target_port }}', $workflow);
+        $this->assertStringContainsString('TARGET_PORT: ${{ inputs.rollback_target_port }}', $workflow);
     }
 
     public function test_release_cleanup_requires_the_exact_active_blue_caddy_config(): void

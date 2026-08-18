@@ -1,0 +1,23 @@
+name: Distributor smoke
+description: Verify the distributor release through an SSH tunnel.
+
+runs:
+  using: composite
+  steps:
+    - name: Install SSH password helper
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y --no-install-recommends sshpass
+
+    - name: Trust deployment host key
+      shell: bash
+      run: |
+        mkdir -p "$HOME/.ssh"
+        chmod 700 "$HOME/.ssh"
+        ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+        chmod 600 "$HOME/.ssh/known_hosts"
+
+    - name: Verify distributor login and route isolation
+      shell: bash
+      run: bash "$GITHUB_WORKSPACE/.github/scripts/smoke-distributor-remote.sh"
