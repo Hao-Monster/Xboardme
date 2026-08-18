@@ -134,6 +134,12 @@ jobs:
           curl --silent --show-error --fail --output admin-distributor.js \
             'http://127.0.0.1:17001/assets/admin-distributor.js'
           grep -q '下单时间' admin-distributor.js
+          curl --silent --show-error --fail --output admin-realtime-status.js \
+            'http://127.0.0.1:17001/assets/admin-realtime-status.js'
+          grep -q 'getRealtimeStats' admin-realtime-status.js
+          curl --silent --show-error --fail --output admin-realtime-status.css \
+            'http://127.0.0.1:17001/assets/admin-realtime-status.css'
+          grep -q 'xboard-realtime-grid' admin-realtime-status.css
 
           bash .github/scripts/smoke-admin-assets.sh
 

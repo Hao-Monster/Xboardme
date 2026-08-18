@@ -10,7 +10,7 @@ use Tests\TestCase;
 
 class LaravelUpgradeCompatibilityTest extends TestCase
 {
-    public function test_public_route_contract_matches_the_laravel_12_baseline(): void
+    public function test_public_route_contract_matches_the_approved_application_baseline(): void
     {
         $defaultSecurePath = hash('crc32b', config('app.key'));
 
@@ -28,7 +28,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->values();
 
         $this->assertSame(
-            '1d5429a7766e680af368ee739def17dca2a6566409c89b9d4dc8d14f877e14d8',
+            'f365940edf4b63d204abfd230faa2061565601d17f2b96294b66750bf6c1609b',
             hash('sha256', $routes->implode("\n")),
             sprintf('The normalized public route contract contains %d routes.', $routes->count())
         );
@@ -58,16 +58,16 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertStringContainsString('return;', $provider);
     }
 
-    public function test_framework_upgrade_adds_no_business_database_migrations(): void
+    public function test_database_migration_inventory_matches_the_approved_application_baseline(): void
     {
         $migrations = collect(glob(database_path('migrations/*.php')))
             ->map(fn (string $path): string => basename($path))
             ->sort()
             ->values();
 
-        $this->assertSame(51, $migrations->count());
+        $this->assertSame(52, $migrations->count());
         $this->assertSame(
-            'b90f32ed1df374c7ee55f611809dd717d474503a0f96f61ffa998daa94f69219',
+            '49f8e1ca3cf8a29bcfac415d8d1398947ba82f1fed1049ca90f022c932e18b90',
             hash('sha256', $migrations->implode("\n"))
         );
     }
@@ -97,5 +97,68 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             'loon', 'quantumult%20x', 'quantumult-x', 'shadowrocket', 'shadowsocks',
             'sing-box', 'hiddify', 'sfm', 'karing', 'stash', 'surfboard', 'surge',
         ], $manager->getAllFlags());
+    }
+
+    public function test_release_governance_prevents_branch_and_runtime_misidentification(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $this->assertIsString($workflow);
+        $this->assertStringContainsString('branches: ["codex/distributor"]', $workflow);
+        $this->assertStringContainsString("pull_request:\n    branches: [\"codex/distributor\"]", $workflow);
+        $this->assertStringNotContainsString('branches: ["master", "new-dev"', $workflow);
+        $this->assertStringContainsString('github.ref == \'refs/heads/codex/distributor\'', $workflow);
+        $this->assertStringContainsString('github_token=${{ secrets.GITHUB_TOKEN }}', $workflow);
+        $this->assertStringNotContainsString('"github_token=${{ secrets.GITHUB_TOKEN }}"', $workflow);
+
+        $productionJobs = [
+            'production-preflight',
+            'cleanup-requested-stage',
+            'deploy-admin-assets-hotfix',
+            'rollback-admin-assets-hotfix',
+            'deploy-distributor',
+            'stage-distributor-green',
+            'prepare-live-green',
+            'switch-live-green',
+            'activate-green-roles',
+            'rollback-live-release',
+            'cleanup-live-release',
+        ];
+        foreach ($productionJobs as $job) {
+            preg_match(
+                '/^  ' . preg_quote($job, '/') . ':\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
+                $workflow,
+                $matches
+            );
+            $this->assertArrayHasKey('body', $matches, "Workflow job {$job} must exist.");
+            $this->assertStringContainsString(
+                "github.ref == 'refs/heads/codex/distributor'",
+                $matches['body'],
+                "Workflow job {$job} must reject non-production branches."
+            );
+        }
+
+        foreach (['distributor-preflight.yml', 'distributor-stage-cleanup.yml'] as $workflowName) {
+            $standaloneWorkflow = file_get_contents(base_path('.github/workflows/' . $workflowName));
+            $this->assertIsString($standaloneWorkflow);
+            $this->assertStringContainsString(
+                "if: \${{ github.ref == 'refs/heads/codex/distributor' }}",
+                $standaloneWorkflow,
+                "Standalone workflow {$workflowName} must reject non-production branches."
+            );
+        }
+
+        $approved = collect(file(base_path('.github/release/approved-migrations.txt'), FILE_IGNORE_NEW_LINES))
+            ->map(fn (string $line): string => trim($line))
+            ->reject(fn (string $line): bool => $line === '' || str_starts_with($line, '#'))
+            ->values()
+            ->all();
+        $this->assertSame([
+            '2026_08_18_000001_add_last_online_at_index_to_v2_user_table',
+        ], $approved);
+
+        $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));
+        $this->assertStringContainsString('active_upstream=', $preflight);
+        $this->assertStringContainsString('ambiguous_active_web', $preflight);
+        $this->assertStringContainsString('active_runtime_is_not_laravel_13', $preflight);
     }
 }

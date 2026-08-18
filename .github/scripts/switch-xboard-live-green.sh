@@ -20,13 +20,12 @@ if ((${#green_ids[@]} != 1)); then
 fi
 green=${green_ids[0]}
 
-mapfile -t blue_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
-if ((${#blue_ids[@]} != 1)); then
-  echo "RELEASE_SWITCH_FAIL=blue_missing count=${#blue_ids[@]}"
+mapfile -t compose_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
+if ((${#compose_ids[@]} != 1)); then
+  echo "RELEASE_SWITCH_FAIL=compose_base_missing count=${#compose_ids[@]}"
   exit 1
 fi
-blue=${blue_ids[0]}
-workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$blue")
+workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${compose_ids[0]}")
 release_dir="$workdir/.codex-release/$RELEASE_ID"
 state_file="$release_dir/state.env"
 if [[ ! -f "$state_file" ]]; then
@@ -35,11 +34,18 @@ if [[ ! -f "$state_file" ]]; then
 fi
 # shellcheck disable=SC1090
 source "$state_file"
+blue=$BLUE_CONTAINER
+if [[ "$(docker inspect -f '{{.State.Running}}' "$blue" 2>/dev/null || true)" != true ]]; then
+  echo 'RELEASE_SWITCH_FAIL=blue_missing'
+  exit 1
+fi
 if [[ "$RELEASE_SHA" != "$EXPECTED_RELEASE_SHA" ]]; then
   echo 'RELEASE_SWITCH_FAIL=release_commit_mismatch'
   exit 1
 fi
-if [[ "$BLUE_CONTAINER" != "$blue" || "$GREEN_CONTAINER" != "$(docker inspect -f '{{.Name}}' "$green" | sed 's#^/##')" ]]; then
+if [[ "$GREEN_CONTAINER" != "$(docker inspect -f '{{.Name}}' "$green" | sed 's#^/##')" ]] ||
+   [[ ! "$BLUE_PORT" =~ ^[0-9]+$ ]] || [[ ! "$GREEN_PORT" =~ ^[0-9]+$ ]] ||
+   [[ "$BLUE_PORT" == "$GREEN_PORT" ]]; then
   echo 'RELEASE_SWITCH_FAIL=state_container_mismatch'
   exit 1
 fi
@@ -59,14 +65,14 @@ fi
 
 mapfile -t proxy_files < <(
   grep -RIlE --include='*.conf' --include='Caddyfile' \
-    -- '127\.0\.0\.1:7001' /etc/caddy 2>/dev/null || true
+    -- "127\\.0\\.0\\.1:$BLUE_PORT" /etc/caddy 2>/dev/null || true
 )
 if ((${#proxy_files[@]} != 1)); then
   echo "RELEASE_SWITCH_FAIL=ambiguous_caddy_file count=${#proxy_files[@]}"
   exit 1
 fi
 proxy_file=${proxy_files[0]}
-if [[ "$(grep -o '127\.0\.0\.1:7001' "$proxy_file" | wc -l)" != 1 ]]; then
+if [[ "$(grep -o "127\\.0\\.0\\.1:$BLUE_PORT" "$proxy_file" | wc -l)" != 1 ]]; then
   echo 'RELEASE_SWITCH_FAIL=ambiguous_caddy_upstream'
   exit 1
 fi
@@ -98,8 +104,8 @@ candidate=$(mktemp "${proxy_file}.codex-${RELEASE_ID}.XXXXXX")
 cleanup_candidate() { rm -f -- "$candidate"; }
 trap cleanup_candidate EXIT
 cp -p -- "$proxy_file" "$candidate"
-sed -i 's/127\.0\.0\.1:7001/127.0.0.1:7002/' "$candidate"
-if [[ "$(grep -o '127\.0\.0\.1:7002' "$candidate" | wc -l)" != 1 ]]; then
+sed -i "s/127\\.0\\.0\\.1:$BLUE_PORT/127.0.0.1:$GREEN_PORT/" "$candidate"
+if [[ "$(grep -o "127\\.0\\.0\\.1:$GREEN_PORT" "$candidate" | wc -l)" != 1 ]]; then
   echo 'RELEASE_SWITCH_FAIL=candidate_upstream'
   exit 1
 fi
@@ -133,8 +139,8 @@ for attempt in {1..12}; do
   [[ "$(docker inspect -f '{{.State.Running}}' "$green")" == true ]]
   sleep 5
 done
-if [[ "$(grep -o '127\.0\.0\.1:7002' "$proxy_file" | wc -l)" != 1 ]] || \
-   grep -q '127\.0\.0\.1:7001' "$proxy_file"; then
+if [[ "$(grep -o "127\\.0\\.0\\.1:$GREEN_PORT" "$proxy_file" | wc -l)" != 1 ]] ||
+   grep -q "127\\.0\\.0\\.1:$BLUE_PORT" "$proxy_file"; then
   echo 'RELEASE_SWITCH_FAIL=caddy_route_not_committed'
   exit 1
 fi
@@ -144,4 +150,4 @@ set_state TRAFFIC_STATE green
 
 config_changed=0
 trap - EXIT
-echo "RELEASE_SWITCH=PASS id=$RELEASE_ID upstream=127.0.0.1:7002 external_smoke_required"
+echo "RELEASE_SWITCH=PASS id=$RELEASE_ID upstream=127.0.0.1:$GREEN_PORT external_smoke_required"

@@ -78,7 +78,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('caddy_backup=${CADDY_BACKUP:-$workdir/.codex-release/', $rollback);
         $this->assertStringContainsString('cp -p -- "$caddy_backup" "$caddy_config"', $rollback);
         $this->assertStringContainsString('chmod 0644 "$caddy_config"', $rollback);
-        $this->assertStringContainsString('grep -o \'127\\.0\\.0\\.1:7001\' "$caddy_config"', $rollback);
+        $this->assertStringContainsString('127\\\\.0\\\\.0\\\\.1:$BLUE_PORT', $rollback);
+        $this->assertStringContainsString('127\\\\.0\\\\.0\\\\.1:$GREEN_PORT', $rollback);
         $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001' /etc/caddy", $rollback);
         $this->assertStringContainsString('systemctl is-active caddy', $rollback);
         $this->assertStringContainsString('external_smoke_required', $rollback);
@@ -102,6 +103,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringNotContainsString('supervisorctl stop horizon', $script);
         $this->assertStringNotContainsString('supervisorctl stop octane', $script);
         $this->assertStringContainsString('php /www/artisan schedule:work', $script);
+        $this->assertStringContainsString('PREVIOUS_RELEASE_ID', $script);
+        $this->assertStringContainsString('previous_release_roles_missing', $script);
+        $this->assertStringContainsString('docker start "$previous_scheduler"', $script);
     }
 
     public function test_smoke_test_checks_the_public_route_from_the_runner(): void
@@ -157,7 +161,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
             $workflow
         );
         $this->assertStringContainsString('needs: deploy-admin-assets-hotfix', $workflow);
-        $this->assertStringContainsString('TARGET_PORT: 7002', $workflow);
+        $this->assertStringContainsString('TARGET_PORT: active', $workflow);
         $this->assertStringContainsString('run: bash .github/scripts/smoke-admin-assets-remote.sh', $workflow);
         $this->assertStringContainsString('-L "17001:127.0.0.1:$TARGET_PORT"', $remoteSmoke);
         $this->assertStringContainsString('bash .github/scripts/smoke-admin-assets.sh', $remoteSmoke);
@@ -171,8 +175,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
             'docker cp "$stage:/www/.github/scripts/verify-admin-assets.php" "$active:$validator"',
             $deploy
         );
-        $this->assertStringContainsString('active_web_not_on_expected_port', $deploy);
+        $this->assertStringContainsString('active_web_ambiguous', $deploy);
         $this->assertStringContainsString('active_caddy_route_ambiguous', $deploy);
+        $this->assertStringContainsString('reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}', $deploy);
         $this->assertStringContainsString('.admin-candidate-$HOTFIX_ID', $deploy);
         $this->assertStringContainsString('.admin-before-$HOTFIX_ID', $deploy);
         $this->assertStringContainsString('restore_on_error', $deploy);
@@ -195,10 +200,11 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         );
         $this->assertStringContainsString("needs.smoke-staged-distributor.result == 'failure'", $workflow);
         $this->assertStringNotContainsString("needs.smoke-staged-distributor.result != 'success'", $workflow);
-        $this->assertStringContainsString(': "${STAGE_PORT:=7002}"', $stage);
+        $this->assertStringContainsString(': "${STAGE_PORT:=7003}"', $stage);
         $this->assertStringContainsString('STAGE_FAIL=invalid_stage_port', $stage);
         $this->assertStringContainsString('"127.0.0.1:$STAGE_PORT:7001"', $stage);
-        $this->assertStringContainsString("'127\\.0\\.0\\.1:(7001|7002)'", $stage);
+        $this->assertStringContainsString('codex.xboard.stage.port=$STAGE_PORT', $stage);
+        $this->assertStringContainsString('reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}', $stage);
         $this->assertStringContainsString('((${#proxy_files[@]} != 1 || proxy_references != 1))', $stage);
     }
 
@@ -211,7 +217,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('Restore blue after failed external green smoke', $workflow);
         $this->assertStringContainsString('smoke-auto-rolled-back-blue:', $workflow);
         $this->assertStringContainsString('needs.auto-rollback-failed-switch.result == \'success\'', $workflow);
-        $this->assertStringContainsString('target_port: 7001', $workflow);
+        $this->assertStringContainsString('target_port: ${{ inputs.rollback_target_port }}', $workflow);
     }
 
     public function test_release_cleanup_requires_the_exact_active_blue_caddy_config(): void
@@ -221,7 +227,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString("grep -RIlE --include='*.conf' --include='Caddyfile'", $script);
         $this->assertStringContainsString('ambiguous_caddy_file', $script);
         $this->assertStringContainsString('caddy validate --config "$caddy_config"', $script);
-        $this->assertStringContainsString("grep -o '127\\.0\\.0\\.1:7001' \"\$caddy_config\"", $script);
+        $this->assertStringContainsString('127\\\\.0\\\\.0\\\\.1:$BLUE_PORT', $script);
+        $this->assertStringContainsString('127\\\\.0\\\\.0\\\\.1:$GREEN_PORT', $script);
         $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001'", $script);
     }
 }

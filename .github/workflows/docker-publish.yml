@@ -2,7 +2,9 @@ name: Docker Build and Publish
 
 on:
   push:
-    branches: ["master", "new-dev", "codex/distributor"]
+    branches: ["codex/distributor"]
+  pull_request:
+    branches: ["codex/distributor"]
   workflow_dispatch:
     inputs:
       deploy_production:
@@ -20,7 +22,7 @@ on:
         default: false
         type: boolean
       stage_production_green:
-        description: Start an isolated Laravel 13 green container on production port 7002
+        description: Start an isolated Laravel 13 candidate on the requested loopback port
         required: true
         default: false
         type: boolean
@@ -31,6 +33,16 @@ on:
         type: boolean
       stage_target_port:
         description: Remote loopback port reserved for the isolated staging container
+        required: true
+        default: 7003
+        type: number
+      candidate_target_port:
+        description: Inactive loopback port for the live candidate; must match the approved stage port
+        required: true
+        default: 7003
+        type: number
+      rollback_target_port:
+        description: Current live loopback port retained for rollback smoke tests
         required: true
         default: 7002
         type: number
@@ -64,6 +76,7 @@ jobs:
   production-preflight:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_preflight == true }}
     uses: ./.github/workflows/distributor-preflight.yml
     secrets: inherit
@@ -71,6 +84,7 @@ jobs:
   cleanup-requested-stage:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.cleanup_stage_run_id != '' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -78,7 +92,7 @@ jobs:
           inputs.production_release_action == 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: distributor-server
+    environment: distributor-staging
     permissions:
       contents: read
 
@@ -253,6 +267,7 @@ jobs:
         run: |
           node --check public/assets/admin-distributor.js
           node --check public/assets/admin-client-catalog.js
+          node --check public/assets/admin-realtime-status.js
           node --check public/assets/admin-knowledge-attachments.js
           node --check public/assets/admin-knowledge-rich-editor.js
           node --check theme/Xboard/assets/auth-session.js
@@ -262,6 +277,7 @@ jobs:
 
       - name: Validate deployment scripts
         run: |
+          php -l .github/scripts/validate-approved-migrations.php
           bash -n deploy.sh
           bash -n init.sh
           bash -n update.sh
@@ -282,6 +298,7 @@ jobs:
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
 
   build:
+    if: ${{ github.event_name != 'pull_request' }}
     needs: verify
     runs-on: ubuntu-latest
     outputs:
@@ -380,11 +397,12 @@ jobs:
           allow: |
             network.host
           secrets: |
-            "github_token=${{ secrets.GITHUB_TOKEN }}"
+            github_token=${{ secrets.GITHUB_TOKEN }}
 
   deploy-admin-assets-hotfix:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'admin_assets' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -474,12 +492,13 @@ jobs:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
-          TARGET_PORT: 7002
+          TARGET_PORT: active
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   rollback-admin-assets-hotfix:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'admin_assets_rollback' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -609,13 +628,14 @@ jobs:
   stage-distributor-green:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           (inputs.stage_production_green == true || inputs.stage_production_dry_run == true) &&
           inputs.deploy_production == false &&
           inputs.production_release_action == 'none' }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: distributor-server
+    environment: distributor-staging
     permissions:
       contents: read
       packages: read
@@ -688,7 +708,7 @@ jobs:
     needs: stage-distributor-green
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: distributor-server
+    environment: distributor-staging
     permissions:
       contents: read
 
@@ -731,7 +751,7 @@ jobs:
       - smoke-staged-distributor
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: distributor-server
+    environment: distributor-staging
     permissions:
       contents: read
 
@@ -769,6 +789,7 @@ jobs:
   prepare-live-green:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'prepare' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -830,9 +851,10 @@ jobs:
           RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
           RELEASE_SHA: ${{ github.sha }}
+          RELEASE_PORT: ${{ inputs.candidate_target_port }}
         run: |
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s" \
+            "RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' RELEASE_PORT='$RELEASE_PORT' bash -s" \
             < .github/scripts/prepare-xboard-live-green.sh
 
       - name: Logout server from GHCR
@@ -853,7 +875,7 @@ jobs:
     needs: prepare-live-green
     uses: ./.github/workflows/distributor-smoke.yml
     with:
-      target_port: 7002
+      target_port: ${{ inputs.candidate_target_port }}
     secrets: inherit
 
   cleanup-failed-live-green:
@@ -898,15 +920,17 @@ jobs:
   pre-switch-smoke:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'switch' }}
     uses: ./.github/workflows/distributor-smoke.yml
     with:
-      target_port: 7002
+      target_port: ${{ inputs.candidate_target_port }}
     secrets: inherit
 
   switch-live-green:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'switch' &&
           inputs.deploy_production == false }}
     needs: pre-switch-smoke
@@ -955,7 +979,7 @@ jobs:
     needs: switch-live-green
     uses: ./.github/workflows/distributor-smoke.yml
     with:
-      target_port: 7002
+      target_port: ${{ inputs.candidate_target_port }}
     secrets: inherit
 
   auto-rollback-failed-switch:
@@ -1006,12 +1030,13 @@ jobs:
     needs: auto-rollback-failed-switch
     uses: ./.github/workflows/distributor-smoke.yml
     with:
-      target_port: 7001
+      target_port: ${{ inputs.rollback_target_port }}
     secrets: inherit
 
   activate-green-roles:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'activate_roles' &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
@@ -1055,6 +1080,7 @@ jobs:
   rollback-live-release:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'rollback' &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
@@ -1094,12 +1120,13 @@ jobs:
     needs: rollback-live-release
     uses: ./.github/workflows/distributor-smoke.yml
     with:
-      target_port: 7001
+      target_port: ${{ inputs.rollback_target_port }}
     secrets: inherit
 
   cleanup-live-release:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
           inputs.production_release_action == 'cleanup' &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
