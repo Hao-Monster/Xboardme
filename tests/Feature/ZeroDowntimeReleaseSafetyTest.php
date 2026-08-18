@@ -165,6 +165,12 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString("inputs.production_release_action == 'admin_assets_rollback'", $workflow);
         $this->assertStringContainsString('docker exec "$stage" php /www/.github/scripts/verify-admin-assets.php', $deploy);
         $this->assertStringContainsString('stage_image_revision_mismatch', $deploy);
+        $this->assertStringContainsString('validator_payload="$hotfix_dir/verify-admin-assets.php"', $deploy);
+        $this->assertStringContainsString('docker cp "$validator_payload" "$active:$validator"', $deploy);
+        $this->assertStringNotContainsString(
+            'docker cp "$stage:/www/.github/scripts/verify-admin-assets.php" "$active:$validator"',
+            $deploy
+        );
         $this->assertStringContainsString('active_web_not_on_expected_port', $deploy);
         $this->assertStringContainsString('active_caddy_route_ambiguous', $deploy);
         $this->assertStringContainsString('.admin-candidate-$HOTFIX_ID', $deploy);

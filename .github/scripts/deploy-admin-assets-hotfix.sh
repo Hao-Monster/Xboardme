@@ -87,6 +87,9 @@ fi
 mkdir -p "$hotfix_dir/payload"
 chmod 700 "$hotfix_root" "$hotfix_dir" "$hotfix_dir/payload"
 docker cp "$stage:/www/public/assets/admin/." "$hotfix_dir/payload"
+validator_payload="$hotfix_dir/verify-admin-assets.php"
+docker cp "$stage:/www/.github/scripts/verify-admin-assets.php" "$validator_payload"
+chmod 600 "$validator_payload"
 if find "$hotfix_dir/payload" -type l -print -quit | grep -q .; then
   echo 'ADMIN_ASSET_HOTFIX_FAIL=payload_contains_symlink'
   exit 1
@@ -104,7 +107,7 @@ done
 
 docker exec -u 0 "$active" mkdir -p /www/public/assets
 docker cp "$hotfix_dir/payload" "$active:$candidate"
-docker cp "$stage:/www/.github/scripts/verify-admin-assets.php" "$active:$validator"
+docker cp "$validator_payload" "$active:$validator"
 docker exec "$active" php "$validator" "$candidate" >/dev/null
 
 previous_exists=0
