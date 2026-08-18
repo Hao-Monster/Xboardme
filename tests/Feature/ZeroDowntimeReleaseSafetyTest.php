@@ -141,6 +141,28 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('/assets/admin/locales/zh-CN.js', $smokeWorkflow);
     }
 
+    public function test_admin_asset_hotfix_is_scoped_verified_and_recoverable(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $deploy = file_get_contents(base_path('.github/scripts/deploy-admin-assets-hotfix.sh'));
+        $rollback = file_get_contents(base_path('.github/scripts/rollback-admin-assets-hotfix.sh'));
+
+        $this->assertStringContainsString("inputs.production_release_action == 'admin_assets'", $workflow);
+        $this->assertStringContainsString('needs: deploy-admin-assets-hotfix', $workflow);
+        $this->assertStringContainsString('target_port: 7002', $workflow);
+        $this->assertStringContainsString("inputs.production_release_action == 'admin_assets_rollback'", $workflow);
+        $this->assertStringContainsString('docker exec "$stage" php /www/.github/scripts/verify-admin-assets.php', $deploy);
+        $this->assertStringContainsString('stage_image_revision_mismatch', $deploy);
+        $this->assertStringContainsString('active_web_not_on_expected_port', $deploy);
+        $this->assertStringContainsString('active_caddy_route_ambiguous', $deploy);
+        $this->assertStringContainsString('.admin-candidate-$HOTFIX_ID', $deploy);
+        $this->assertStringContainsString('.admin-before-$HOTFIX_ID', $deploy);
+        $this->assertStringContainsString('restore_on_error', $deploy);
+        $this->assertStringContainsString('wget -q -O /dev/null http://127.0.0.1:7001/assets/admin/manifest.json', $deploy);
+        $this->assertStringContainsString('PREVIOUS_EXISTS', $rollback);
+        $this->assertStringContainsString('.admin-rolled-back-$HOTFIX_ID', $rollback);
+    }
+
     public function test_failed_external_green_smoke_automatically_restores_and_verifies_blue(): void
     {
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));

@@ -38,9 +38,10 @@ function verifyAsset(string $adminRoot, mixed $relativePath, string $source): st
     return $normalized;
 }
 
-$adminRoot = realpath(__DIR__ . '/../../public/assets/admin');
+$requestedRoot = $argv[1] ?? (__DIR__ . '/../../public/assets/admin');
+$adminRoot = realpath($requestedRoot);
 if ($adminRoot === false || !is_dir($adminRoot)) {
-    fail('public/assets/admin is absent; initialize the Git submodule before building');
+    fail("admin asset directory is absent: {$requestedRoot}");
 }
 
 $manifestPath = $adminRoot . DIRECTORY_SEPARATOR . 'manifest.json';

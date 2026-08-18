@@ -34,7 +34,7 @@ on:
         required: false
         type: string
       production_release_action:
-        description: Zero-downtime release phase (none, prepare, switch, activate_roles, rollback, cleanup)
+        description: Release phase (none, prepare, switch, activate_roles, rollback, cleanup, admin_assets, admin_assets_rollback)
         required: true
         default: none
         type: string
@@ -270,6 +270,8 @@ jobs:
           bash -n .github/scripts/rollback-xboard-live-green.sh
           bash -n .github/scripts/resolve-xboard-public-url.sh
           bash -n .github/scripts/cleanup-xboard-live-release.sh
+          bash -n .github/scripts/deploy-admin-assets-hotfix.sh
+          bash -n .github/scripts/rollback-admin-assets-hotfix.sh
 
   build:
     needs: verify
@@ -371,6 +373,123 @@ jobs:
             network.host
           secrets: |
             "github_token=${{ secrets.GITHUB_TOKEN }}"
+
+  deploy-admin-assets-hotfix:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'admin_assets' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false &&
+          inputs.cleanup_stage_run_id == '' }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Verify exact approved repair and stage
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          APPROVED_STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+        run: |
+          test "${#EXPECTED_SHA}" -eq 40
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$APPROVED_STAGE_RUN_ID" = "$(printf '%s' "$APPROVED_STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Checkout admin asset deployment script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Install verified admin assets without restarting production
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          HOTFIX_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "HOTFIX_ID='$HOTFIX_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s" \
+            < .github/scripts/deploy-admin-assets-hotfix.sh
+
+  smoke-admin-assets-hotfix:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'admin_assets' }}
+    needs: deploy-admin-assets-hotfix
+    uses: ./.github/workflows/distributor-smoke.yml
+    with:
+      target_port: 7002
+    secrets: inherit
+
+  rollback-admin-assets-hotfix:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          inputs.production_release_action == 'admin_assets_rollback' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false &&
+          inputs.cleanup_stage_run_id == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Validate exact hotfix identifier
+        env:
+          HOTFIX_ID: ${{ inputs.release_id }}
+        run: test "$HOTFIX_ID" = "$(printf '%s' "$HOTFIX_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Checkout admin asset rollback script
+        uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Restore the exact pre-hotfix admin assets
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          HOTFIX_ID: ${{ inputs.release_id }}
+        run: |
+          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "HOTFIX_ID='$HOTFIX_ID' bash -s" \
+            < .github/scripts/rollback-admin-assets-hotfix.sh
 
   deploy-distributor:
     if: >-
