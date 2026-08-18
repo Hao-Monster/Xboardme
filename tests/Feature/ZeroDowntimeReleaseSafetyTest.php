@@ -119,6 +119,28 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('bash -n .github/scripts/resolve-xboard-public-url.sh', file_get_contents(base_path('.github/workflows/docker-publish.yml')));
     }
 
+    public function test_admin_frontend_submodule_and_assets_are_release_gates(): void
+    {
+        $publishWorkflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $smokeWorkflow = file_get_contents(base_path('.github/workflows/distributor-smoke.yml'));
+        $dockerfile = file_get_contents(base_path('Dockerfile'));
+
+        $matched = preg_match(
+            '/^  build:\R(?<job>.*?)(?=^  [a-zA-Z0-9_-]+:\R|\z)/ms',
+            $publishWorkflow,
+            $matches
+        );
+
+        $this->assertSame(1, $matched, 'The image build job must remain discoverable.');
+        $this->assertStringContainsString('submodules: recursive', $matches['job']);
+        $this->assertStringContainsString('php .github/scripts/verify-admin-assets.php', $matches['job']);
+        $this->assertStringContainsString('RUN php .github/scripts/verify-admin-assets.php', $dockerfile);
+        $this->assertStringContainsString('/assets/admin/manifest.json', $smokeWorkflow);
+        $this->assertStringContainsString('admin_entry_asset=$(jq -er', $smokeWorkflow);
+        $this->assertStringContainsString('/assets/admin/$admin_entry_asset', $smokeWorkflow);
+        $this->assertStringContainsString('/assets/admin/locales/zh-CN.js', $smokeWorkflow);
+    }
+
     public function test_failed_external_green_smoke_automatically_restores_and_verifies_blue(): void
     {
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));

@@ -134,6 +134,35 @@ jobs:
           curl --silent --show-error --fail --output admin-distributor.js \
             'http://127.0.0.1:17001/assets/admin-distributor.js'
           grep -q '下单时间' admin-distributor.js
+
+          curl --silent --show-error --fail --output admin-manifest.json \
+            'http://127.0.0.1:17001/assets/admin/manifest.json'
+          admin_entry_asset=$(jq -er '."index.html".file | strings | select(length > 0)' admin-manifest.json)
+          case "$admin_entry_asset" in
+            /*|*\\*|*..*) echo 'Unsafe admin entry asset path.' >&2; exit 1 ;;
+          esac
+          curl --silent --show-error --fail --output admin-entry.js \
+            "http://127.0.0.1:17001/assets/admin/$admin_entry_asset"
+          test -s admin-entry.js
+
+          mapfile -t admin_style_assets < <(jq -er '."index.html".css[] | strings | select(length > 0)' admin-manifest.json)
+          test "${#admin_style_assets[@]}" -gt 0
+          for admin_style_asset in "${admin_style_assets[@]}"; do
+            case "$admin_style_asset" in
+              /*|*\\*|*..*) echo 'Unsafe admin stylesheet asset path.' >&2; exit 1 ;;
+            esac
+            curl --silent --show-error --fail --output admin-entry.css \
+              "http://127.0.0.1:17001/assets/admin/$admin_style_asset"
+            test -s admin-entry.css
+          done
+
+          curl --silent --show-error --fail --output admin-en-US.js \
+            'http://127.0.0.1:17001/assets/admin/locales/en-US.js'
+          curl --silent --show-error --fail --output admin-zh-CN.js \
+            'http://127.0.0.1:17001/assets/admin/locales/zh-CN.js'
+          test -s admin-en-US.js
+          test -s admin-zh-CN.js
+
           curl --silent --show-error --fail --output client-center.js \
             'http://127.0.0.1:17001/theme/Xboard/assets/client-center.js'
           grep -q '网盘下载' client-center.js

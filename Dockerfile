@@ -39,6 +39,8 @@ RUN --mount=type=secret,id=github_token \
 COPY .docker /
 COPY . /www
 
+RUN php .github/scripts/verify-admin-assets.php
+
 COPY .docker/supervisor/supervisord.conf /etc/supervisord.conf
 COPY .docker/caddy/Caddyfile /etc/caddy/Caddyfile
 COPY .docker/php/zz-xboard.ini /usr/local/etc/php/conf.d/zz-xboard.ini
