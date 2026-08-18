@@ -149,10 +149,15 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
         $deploy = file_get_contents(base_path('.github/scripts/deploy-admin-assets-hotfix.sh'));
         $rollback = file_get_contents(base_path('.github/scripts/rollback-admin-assets-hotfix.sh'));
+        $remoteSmoke = file_get_contents(base_path('.github/scripts/smoke-admin-assets-remote.sh'));
 
         $this->assertStringContainsString("inputs.production_release_action == 'admin_assets'", $workflow);
         $this->assertStringContainsString('needs: deploy-admin-assets-hotfix', $workflow);
-        $this->assertStringContainsString('target_port: 7002', $workflow);
+        $this->assertStringContainsString('TARGET_PORT: 7002', $workflow);
+        $this->assertStringContainsString('run: bash .github/scripts/smoke-admin-assets-remote.sh', $workflow);
+        $this->assertStringContainsString('-L "17001:127.0.0.1:$TARGET_PORT"', $remoteSmoke);
+        $this->assertStringContainsString('bash .github/scripts/smoke-admin-assets.sh', $remoteSmoke);
+        $this->assertStringContainsString('bash -n .github/scripts/smoke-admin-assets-remote.sh', $workflow);
         $this->assertStringContainsString("inputs.production_release_action == 'admin_assets_rollback'", $workflow);
         $this->assertStringContainsString('docker exec "$stage" php /www/.github/scripts/verify-admin-assets.php', $deploy);
         $this->assertStringContainsString('stage_image_revision_mismatch', $deploy);
@@ -173,9 +178,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
 
         $this->assertStringContainsString('stage_target_port:', $workflow);
         $this->assertStringContainsString('STAGE_PORT: ${{ inputs.stage_target_port }}', $workflow);
-        $this->assertStringContainsString('target_port: ${{ inputs.stage_target_port }}', $workflow);
+        $this->assertStringContainsString('TARGET_PORT: ${{ inputs.stage_target_port }}', $workflow);
         $this->assertMatchesRegularExpression(
-            '/smoke-staged-distributor:\R\s+needs: stage-distributor-green\R\s+uses:/',
+            '/smoke-staged-distributor:\R\s+needs: stage-distributor-green\R\s+runs-on:/',
             $workflow
         );
         $this->assertStringContainsString("needs.smoke-staged-distributor.result == 'failure'", $workflow);

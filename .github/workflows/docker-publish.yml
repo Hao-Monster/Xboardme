@@ -275,6 +275,7 @@ jobs:
           bash -n .github/scripts/rollback-xboard-live-green.sh
           bash -n .github/scripts/resolve-xboard-public-url.sh
           bash -n .github/scripts/smoke-admin-assets.sh
+          bash -n .github/scripts/smoke-admin-assets-remote.sh
           bash -n .github/scripts/cleanup-xboard-live-release.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
@@ -442,10 +443,38 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' &&
           inputs.production_release_action == 'admin_assets' }}
     needs: deploy-admin-assets-hotfix
-    uses: ./.github/workflows/distributor-smoke.yml
-    with:
-      target_port: 7002
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify live admin assets without changing production
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: 7002
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   rollback-admin-assets-hotfix:
     if: >-
@@ -656,10 +685,38 @@ jobs:
 
   smoke-staged-distributor:
     needs: stage-distributor-green
-    uses: ./.github/workflows/distributor-smoke.yml
-    with:
-      target_port: ${{ inputs.stage_target_port }}
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SSH password helper
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends sshpass
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify isolated admin assets without changing production
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: ${{ inputs.stage_target_port }}
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   cleanup-failed-green-stage:
     if: >-
