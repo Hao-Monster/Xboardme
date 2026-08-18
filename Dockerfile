@@ -2,6 +2,11 @@ FROM phpswoole/swoole:6.1.0-php8.3-alpine@sha256:895033ef1b965458c81ed55a22eaf9b
 
 COPY --from=mlocati/php-extension-installer:2.11.12@sha256:b6d3fa381b9ba5cf051117c1c601d6a523b590e534bf3d56eb4fbe352949c138 /usr/bin/install-php-extensions /usr/local/bin/
 
+# Composer 2.9.8 accepts the current hyphenated GitHub Actions token format
+# and no longer echoes a rejected token into build logs (CVE-2026-45793).
+COPY --from=composer:2.9.8@sha256:b09bccd91a78fe8a9ab4b33d707b862e8fe54fec17782e32683ad2a69c46867d /usr/bin/composer /usr/local/bin/composer
+RUN composer --version --no-ansi | grep -F 'Composer version 2.9.8 '
+
 # Install only extensions missing from the pinned Swoole image. Building them
 # in one transaction avoids repeatedly downloading the compiler toolchain;
 # conservative optimization keeps the existing ARM64 compatibility posture.
