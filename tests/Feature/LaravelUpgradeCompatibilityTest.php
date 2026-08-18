@@ -308,4 +308,16 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             'The paused previous release must release its memory before the candidate Horizon starts.'
         );
     }
+
+    public function test_release_role_state_initializes_compose_only_values(): void
+    {
+        $script = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
+
+        $this->assertIsString($script);
+        $this->assertStringContainsString(
+            "blue_octane_pid=''\nblue_octane_pgid=''",
+            $script,
+            'Release-to-release activation must persist empty compose-only state without triggering set -u.'
+        );
+    }
 }
