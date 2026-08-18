@@ -158,6 +158,18 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             $smokeLiveGreen['body'],
             'The smoke job must inherit the prepare result instead of duplicating dispatch conditions.'
         );
+        $this->assertStringContainsString('runs-on: ubuntu-latest', $smokeLiveGreen['body']);
+        $this->assertStringContainsString('environment: distributor-server', $smokeLiveGreen['body']);
+        $this->assertStringContainsString(
+            'bash .github/scripts/smoke-admin-assets-remote.sh',
+            $smokeLiveGreen['body'],
+            'The prepared release smoke must be an observable job that can use the deployment environment.'
+        );
+        $this->assertStringNotContainsString(
+            'uses: ./.github/workflows/distributor-smoke.yml',
+            $smokeLiveGreen['body'],
+            'The dependent reusable workflow call is not observable when GitHub rejects its startup.'
+        );
 
         preg_match(
             '/^  cleanup-failed-live-green:\R(?<body>.*?)(?=^  [a-z][a-z0-9-]+:|\z)/ms',
