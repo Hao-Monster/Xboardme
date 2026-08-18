@@ -274,6 +274,7 @@ jobs:
           bash -n .github/scripts/activate-xboard-green-roles.sh
           bash -n .github/scripts/rollback-xboard-live-green.sh
           bash -n .github/scripts/resolve-xboard-public-url.sh
+          bash -n .github/scripts/smoke-admin-assets.sh
           bash -n .github/scripts/cleanup-xboard-live-release.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh

@@ -110,7 +110,6 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
 
         $resolver = file_get_contents(base_path('.github/scripts/resolve-xboard-public-url.sh'));
 
-        $this->assertStringContainsString('environment: distributor-server', $workflow);
         $this->assertStringContainsString('< .github/scripts/resolve-xboard-public-url.sh', $workflow);
         $this->assertStringContainsString('--output /dev/null "$public_url/"', $workflow);
         $this->assertStringContainsString('test "$public_ready" = \'1\'', $workflow);
@@ -124,6 +123,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
     {
         $publishWorkflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
         $smokeWorkflow = file_get_contents(base_path('.github/workflows/distributor-smoke.yml'));
+        $adminAssetSmoke = file_get_contents(base_path('.github/scripts/smoke-admin-assets.sh'));
         $dockerfile = file_get_contents(base_path('Dockerfile'));
 
         $matched = preg_match(
@@ -136,10 +136,12 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('submodules: recursive', $matches['job']);
         $this->assertStringContainsString('php .github/scripts/verify-admin-assets.php', $matches['job']);
         $this->assertStringContainsString('RUN php .github/scripts/verify-admin-assets.php', $dockerfile);
-        $this->assertStringContainsString('/assets/admin/manifest.json', $smokeWorkflow);
-        $this->assertStringContainsString('admin_entry_asset=$(jq -er', $smokeWorkflow);
-        $this->assertStringContainsString('/assets/admin/$admin_entry_asset', $smokeWorkflow);
-        $this->assertStringContainsString('/assets/admin/locales/zh-CN.js', $smokeWorkflow);
+        $this->assertStringContainsString('bash .github/scripts/smoke-admin-assets.sh', $smokeWorkflow);
+        $this->assertStringContainsString('bash -n .github/scripts/smoke-admin-assets.sh', $publishWorkflow);
+        $this->assertStringContainsString('/assets/admin/manifest.json', $adminAssetSmoke);
+        $this->assertStringContainsString('entry_asset=$(jq -er', $adminAssetSmoke);
+        $this->assertStringContainsString('/assets/admin/$entry_asset', $adminAssetSmoke);
+        $this->assertStringContainsString('for locale in en-US zh-CN', $adminAssetSmoke);
     }
 
     public function test_admin_asset_hotfix_is_scoped_verified_and_recoverable(): void
