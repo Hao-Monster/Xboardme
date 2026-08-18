@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 mapfile -t caddy_configs < <(
   grep -RIlE --include='*.conf' --include='Caddyfile' \
-    -- '127\.0\.0\.1:700[12]' /etc/caddy 2>/dev/null || true
+    -- '127\.0\.0\.1:700[123]' /etc/caddy 2>/dev/null || true
 )
 if ((${#caddy_configs[@]} != 1)); then
   echo "PUBLIC_URL_FAIL=ambiguous_caddy_file count=${#caddy_configs[@]}" >&2
