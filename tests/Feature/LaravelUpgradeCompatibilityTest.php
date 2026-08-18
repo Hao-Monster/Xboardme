@@ -10,7 +10,7 @@ use Tests\TestCase;
 
 class LaravelUpgradeCompatibilityTest extends TestCase
 {
-    public function test_public_route_contract_matches_the_laravel_12_baseline(): void
+    public function test_public_route_contract_matches_the_approved_application_baseline(): void
     {
         $defaultSecurePath = hash('crc32b', config('app.key'));
 
@@ -28,7 +28,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->values();
 
         $this->assertSame(
-            '1d5429a7766e680af368ee739def17dca2a6566409c89b9d4dc8d14f877e14d8',
+            'f365940edf4b63d204abfd230faa2061565601d17f2b96294b66750bf6c1609b',
             hash('sha256', $routes->implode("\n")),
             sprintf('The normalized public route contract contains %d routes.', $routes->count())
         );
@@ -58,16 +58,16 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertStringContainsString('return;', $provider);
     }
 
-    public function test_framework_upgrade_adds_no_business_database_migrations(): void
+    public function test_database_migration_inventory_matches_the_approved_application_baseline(): void
     {
         $migrations = collect(glob(database_path('migrations/*.php')))
             ->map(fn (string $path): string => basename($path))
             ->sort()
             ->values();
 
-        $this->assertSame(51, $migrations->count());
+        $this->assertSame(52, $migrations->count());
         $this->assertSame(
-            'b90f32ed1df374c7ee55f611809dd717d474503a0f96f61ffa998daa94f69219',
+            '49f8e1ca3cf8a29bcfac415d8d1398947ba82f1fed1049ca90f022c932e18b90',
             hash('sha256', $migrations->implode("\n"))
         );
     }

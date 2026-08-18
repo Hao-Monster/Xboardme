@@ -11,27 +11,24 @@ use App\Models\StatServer;
 use App\Models\StatUser;
 use App\Models\Ticket;
 use App\Models\User;
+use App\Services\RealtimeStatsService;
 use App\Services\StatisticalService;
 use Illuminate\Http\Request;
 
 class StatController extends Controller
 {
     private $service;
-    public function __construct(StatisticalService $service)
+    private RealtimeStatsService $realtimeStatsService;
+
+    public function __construct(StatisticalService $service, RealtimeStatsService $realtimeStatsService)
     {
         $this->service = $service;
+        $this->realtimeStatsService = $realtimeStatsService;
     }
+
     public function getOverride(Request $request)
     {
-        // 获取在线节点数
-        $onlineNodes = Server::all()->filter(function ($server) {
-            return !!$server->is_online;
-        })->count();
-        // 获取在线设备数和在线用户数
-        $onlineDevices = User::where('t', '>=', time() - 600)
-            ->sum('online_count');
-        $onlineUsers = User::where('t', '>=', time() - 600)
-            ->count();
+        $realtimeStats = $this->realtimeStatsService->snapshot();
 
         // 获取今日流量统计
         $todayStart = strtotime('today');
@@ -85,9 +82,9 @@ class StatController extends Controller
                     ->where('created_at', '<', strtotime(date('Y-m-1')))
                     ->sum('get_amount'),
                 // 新增统计数据
-                'online_nodes' => $onlineNodes,
-                'online_devices' => $onlineDevices,
-                'online_users' => $onlineUsers,
+                'online_nodes' => $realtimeStats['onlineNodes'],
+                'online_devices' => $realtimeStats['onlineDevices'],
+                'online_users' => $realtimeStats['onlineUsers'],
                 'today_traffic' => [
                     'upload' => $todayTraffic->upload ?? 0,
                     'download' => $todayTraffic->download ?? 0,
@@ -268,16 +265,7 @@ class StatController extends Controller
         $todayStart = strtotime('today');
         $yesterdayStart = strtotime('-1 day', $todayStart);
 
-        // 获取在线节点数
-        $onlineNodes = Server::all()->filter(function ($server) {
-            return !!$server->is_online;
-        })->count();
-
-        // 获取在线设备数和在线用户数
-        $onlineDevices = User::where('t', '>=', time() - 600)
-            ->sum('online_count');
-        $onlineUsers = User::where('t', '>=', time() - 600)
-            ->count();
+        $realtimeStats = $this->realtimeStatsService->snapshot();
 
         // 获取今日流量统计
         $todayTraffic = StatServer::where('record_at', '>=', $todayStart)
@@ -400,14 +388,14 @@ class StatController extends Controller
                 'totalUsers' => $totalUsers,
                 'activeUsers' => $activeUsers,
                 'userGrowth' => $userGrowth,
-                'onlineUsers' => $onlineUsers,
-                'onlineDevices' => $onlineDevices,
+                'onlineUsers' => $realtimeStats['onlineUsers'],
+                'onlineDevices' => $realtimeStats['onlineDevices'],
 
                 // 工单相关
                 'ticketPendingTotal' => $ticketPendingTotal,
 
                 // 节点相关
-                'onlineNodes' => $onlineNodes,
+                'onlineNodes' => $realtimeStats['onlineNodes'],
 
                 // 流量统计
                 'todayTraffic' => [
@@ -427,6 +415,11 @@ class StatController extends Controller
                 ]
             ]
         ];
+    }
+
+    public function getRealtimeStats()
+    {
+        return $this->success($this->realtimeStatsService->snapshot());
     }
 
     /**

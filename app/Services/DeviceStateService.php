@@ -9,7 +9,7 @@ use Illuminate\Support\Facades\Redis;
 class DeviceStateService
 {
     private const PREFIX = 'user_devices:';
-    private const TTL = 300;                     // device state ttl
+    public const ONLINE_WINDOW_SECONDS = 300;
     private const DB_THROTTLE = 10;             // update db throttle
 
     /**
@@ -41,7 +41,7 @@ class DeviceStateService
                 $fields["{$nodeId}:{$ip}"] = $timestamp;
             }
             Redis::hMset($key, $fields);
-            Redis::expire($key, self::TTL);
+            Redis::expire($key, self::ONLINE_WINDOW_SECONDS);
         }
 
         $this->notifyUpdate($userId);
@@ -117,7 +117,7 @@ class DeviceStateService
         $ips = [];
 
         foreach ($data as $field => $timestamp) {
-            if ($now - $timestamp <= self::TTL) {
+            if ($now - $timestamp <= self::ONLINE_WINDOW_SECONDS) {
                 $ips[] = substr($field, strpos($field, ':') + 1);
             }
         }
@@ -157,7 +157,7 @@ class DeviceStateService
             if (!empty($data)) {
                 $ips = [];
                 foreach ($data as $field => $timestamp) {
-                    if ($now - $timestamp <= self::TTL) {
+                    if ($now - $timestamp <= self::ONLINE_WINDOW_SECONDS) {
                         $ips[] = substr($field, strpos($field, ':') + 1);
                     }
                 }
