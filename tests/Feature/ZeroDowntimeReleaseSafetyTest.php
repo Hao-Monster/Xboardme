@@ -244,5 +244,4 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('127\\\\.0\\\\.0\\\\.1:$GREEN_PORT', $script);
         $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001'", $script);
     }
-
 }
