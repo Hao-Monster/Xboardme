@@ -11,7 +11,7 @@ test('distributor order table places order time beside the order number', () => 
   const renderer = distributor.match(/async function renderOrders\(\)[\s\S]*?function periodLabel/);
   assert.ok(renderer, 'distributor order renderer should exist');
   assert.match(renderer[0], /<th>\$\{t\('orderNo'\)\}<\/th><th>\$\{t\('orderTime'\)\}<\/th><th>\$\{t\('customerName'\)\}<\/th>/);
-  assert.match(renderer[0], /<td><strong>\$\{escapeHtml\(order\.trade_no\)\}<\/strong><small>\$\{orderType\}<\/small>\$\{originalOrder\}<\/td>\s*<td class="dist-order-time">\$\{formatTime\(order\.created_at\)\}<\/td>/);
+  assert.match(renderer[0], /<td class="dist-order-identity"><strong>\$\{escapeHtml\(order\.trade_no\)\}<\/strong><small>\$\{orderType\}<\/small>\$\{originalOrder\}<\/td>\s*<td class="dist-order-time" data-label="\$\{t\('orderTime'\)\}">\$\{formatTime\(order\.created_at\)\}<\/td>/);
   assert.doesNotMatch(renderer[0], /\$\{orderType\} · \$\{formatTime\(order\.created_at\)\}/);
   assert.match(renderer[0], /colspan="9"/);
   assert.match(distributorStyles, /\.dist-order-time \{[^}]*white-space:nowrap/);
