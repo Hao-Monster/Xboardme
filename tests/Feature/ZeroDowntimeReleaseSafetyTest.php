@@ -95,9 +95,10 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
 
         $this->assertStringContainsString('-e ENABLE_REDIS=false', $script);
         $this->assertStringContainsString('php /www/artisan horizon:pause', $script);
-        $this->assertStringContainsString('php /www/artisan horizon:continue', $script);
-        $this->assertStringContainsString('horizon_ready_samples >= 3', $script);
-        $this->assertStringNotContainsString('php /www/artisan horizon:status', $script);
+        $this->assertStringContainsString('docker exec "$horizon_name" php /www/artisan horizon:continue', $script);
+        $this->assertStringContainsString('php /www/artisan horizon:status', $script);
+        $this->assertStringContainsString('Horizon is running.', $script);
+        $this->assertStringContainsString('horizon_ready_samples >= 10', $script);
         $this->assertStringContainsString('SIGSTOP', $script);
         $this->assertStringContainsString('BLUE_OCTANE_PGID', $script);
         $this->assertStringNotContainsString('supervisorctl stop horizon', $script);
@@ -106,6 +107,28 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('PREVIOUS_RELEASE_ID', $script);
         $this->assertStringContainsString('previous_release_roles_missing', $script);
         $this->assertStringContainsString('docker start "$previous_scheduler"', $script);
+    }
+
+    public function test_release_horizon_uses_container_lifecycle_and_rejects_oom_restarts(): void
+    {
+        $activation = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
+        $rollback = file_get_contents(base_path('.github/scripts/rollback-xboard-live-green.sh'));
+
+        $this->assertStringContainsString('--init', $activation);
+        $this->assertStringContainsString('--stop-signal SIGINT', $activation);
+        $this->assertStringContainsString('--memory 768m', $activation);
+        $this->assertStringContainsString('-e HORIZON_WORKER_MAX_TIME=3600', $activation);
+        $this->assertStringContainsString('-e HORIZON_WORKER_MAX_JOBS=1000', $activation);
+        $this->assertStringContainsString('"$RELEASE_IMAGE" su-exec www php /www/artisan horizon', $activation);
+        $this->assertStringContainsString('oom_kill', $activation);
+        $this->assertStringContainsString('/sys/fs/cgroup/memory.events', $activation);
+        $this->assertStringContainsString("docker inspect -f '{{.RestartCount}}'", $activation);
+        $this->assertStringNotContainsString('^horizon:horizon_00[[:space:]]+RUNNING', $activation);
+
+        $this->assertStringContainsString('horizon_master_ready()', $rollback);
+        $this->assertStringContainsString('^horizon:horizon_00[[:space:]]+RUNNING', $rollback);
+        $this->assertStringContainsString('[ "$argument2" = horizon ]', $rollback);
+        $this->assertStringContainsString('Horizon is running.', $rollback);
     }
 
     public function test_smoke_test_checks_the_public_route_from_the_runner(): void

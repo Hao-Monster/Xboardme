@@ -4,6 +4,7 @@
 namespace App\Jobs;
 
 use App\Models\StatUser;
+use App\Support\SqliteImmediateTransaction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -51,14 +52,24 @@ class StatUserJob implements ShouldQueue
             ? strtotime(date('Y-m-01'))
             : strtotime(date('Y-m-d'));
 
-        foreach ($this->data as $uid => $v) {
-            try {
-                $this->processUserStat($uid, $v, $recordAt);
-            } catch (\Exception $e) {
-                Log::error('StatUserJob failed for user ' . $uid . ': ' . $e->getMessage());
-                throw $e;
+        $processBatch = function () use ($recordAt): void {
+            foreach ($this->data as $uid => $v) {
+                try {
+                    $this->processUserStat($uid, $v, $recordAt);
+                } catch (\Throwable $e) {
+                    Log::error('StatUserJob failed for user ' . $uid . ': ' . $e->getMessage());
+                    throw $e;
+                }
             }
+        };
+
+        if (config('database.default') === 'sqlite') {
+            SqliteImmediateTransaction::run($processBatch);
+
+            return;
         }
+
+        $processBatch();
     }
 
     protected function processUserStat(int $uid, array $v, int $recordAt): void
@@ -75,33 +86,33 @@ class StatUserJob implements ShouldQueue
 
     protected function processUserStatForSqlite(int $uid, array $v, int $recordAt): void
     {
-        DB::transaction(function () use ($uid, $v, $recordAt) {
-            $existingRecord = StatUser::where([
-                'user_id' => $uid,
-                'server_rate' => $this->server['rate'],
-                'record_at' => $recordAt,
-                'record_type' => $this->recordType,
-            ])->first();
+        $existingRecord = StatUser::where([
+            'user_id' => $uid,
+            'server_rate' => $this->server['rate'],
+            'record_at' => $recordAt,
+            'record_type' => $this->recordType,
+        ])->first();
 
-            if ($existingRecord) {
-                $existingRecord->update([
-                    'u' => $existingRecord->u + intval($v[0] * $this->server['rate']),
-                    'd' => $existingRecord->d + intval($v[1] * $this->server['rate']),
-                    'updated_at' => time(),
-                ]);
-            } else {
-                StatUser::create([
-                    'user_id' => $uid,
-                    'server_rate' => $this->server['rate'],
-                    'record_at' => $recordAt,
-                    'record_type' => $this->recordType,
-                    'u' => intval($v[0] * $this->server['rate']),
-                    'd' => intval($v[1] * $this->server['rate']),
-                    'created_at' => time(),
-                    'updated_at' => time(),
-                ]);
-            }
-        }, 3);
+        if ($existingRecord) {
+            $existingRecord->update([
+                'u' => $existingRecord->u + intval($v[0] * $this->server['rate']),
+                'd' => $existingRecord->d + intval($v[1] * $this->server['rate']),
+                'updated_at' => time(),
+            ]);
+
+            return;
+        }
+
+        StatUser::create([
+            'user_id' => $uid,
+            'server_rate' => $this->server['rate'],
+            'record_at' => $recordAt,
+            'record_type' => $this->recordType,
+            'u' => intval($v[0] * $this->server['rate']),
+            'd' => intval($v[1] * $this->server['rate']),
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
     }
 
     protected function processUserStatForOtherDatabases(int $uid, array $v, int $recordAt): void

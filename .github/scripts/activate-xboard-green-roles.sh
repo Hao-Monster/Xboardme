@@ -149,35 +149,77 @@ docker run -d \
   --label codex.xboard.release=true \
   --label "codex.xboard.release.run=$RELEASE_ID" \
   --label codex.xboard.release.role=horizon \
+  --init \
   --restart unless-stopped \
-  --memory 512m \
+  --stop-signal SIGINT \
+  --memory 768m \
   --cpus 2 \
   --volumes-from "$blue" \
   -e SKIP_XBOARD_UPDATE=true \
   -e "RUNTIME_INSTANCE_ID=horizon-$RELEASE_ID" \
   -e RESOURCE_PROFILE=minimal \
+  -e HORIZON_WORKER_MAX_TIME=3600 \
+  -e HORIZON_WORKER_MAX_JOBS=1000 \
   -e ENABLE_WEB=false \
   -e ENABLE_HORIZON=true \
   -e ENABLE_REDIS=false \
   -e ENABLE_WS_SERVER=false \
   -e ENABLE_CADDY=false \
   -e ENABLE_SCHEDULER=false \
-  "$RELEASE_IMAGE" >/dev/null
+  --entrypoint /entrypoint.sh \
+  "$RELEASE_IMAGE" su-exec www php /www/artisan horizon >/dev/null
 
+horizon_master_started=0
+for attempt in {1..30}; do
+  horizon_master_count=$(docker exec "$horizon_name" sh -c '
+    count=0
+    for proc in /proc/[0-9]*; do
+      [ -r "$proc/cmdline" ] || continue
+      executable=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "1p")
+      argument1=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "2p")
+      argument2=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "3p")
+      if [ "${executable##*/}" = php ] && [ "$argument1" = /www/artisan ] && [ "$argument2" = horizon ]; then
+        count=$((count + 1))
+      fi
+    done
+    printf "%s\n" "$count"
+  ' 2>/dev/null || true)
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$horizon_name" 2>/dev/null || true)" == true ]] &&
+     [[ "$horizon_master_count" == 1 ]]; then
+    horizon_master_started=1
+    break
+  fi
+  sleep 2
+done
+if ((horizon_master_started != 1)); then
+  docker logs --tail 100 "$horizon_name" >&2 || true
+  echo 'RELEASE_ROLES_FAIL=new_horizon_master_missing'
+  exit 1
+fi
+
+docker exec "$horizon_name" php /www/artisan horizon:continue >/dev/null
+
+# A short RUNNING sample allowed the previous OOM loop to pass release gates.
+# Require sustained health, no container restart and no cgroup OOM kill.
 horizon_ready_samples=0
 for attempt in {1..30}; do
-  horizon_supervisor_state=$(docker exec "$horizon_name" supervisorctl status 2>&1 || true)
-  if grep -Eq '^horizon:horizon_00[[:space:]]+RUNNING([[:space:]]|$)' <<< "$horizon_supervisor_state"; then
+  horizon_restart_count=$(docker inspect -f '{{.RestartCount}}' "$horizon_name" 2>/dev/null || true)
+  horizon_oom_kills=$(docker exec "$horizon_name" sh -c \
+    "awk '\$1 == \"oom_kill\" {print \$2}' /sys/fs/cgroup/memory.events" 2>/dev/null || true)
+  horizon_status=$(docker exec "$horizon_name" php /www/artisan horizon:status 2>&1 || true)
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$horizon_name" 2>/dev/null || true)" == true ]] &&
+     [[ "$horizon_restart_count" == 0 ]] && [[ "$horizon_oom_kills" == 0 ]] &&
+     grep -Fq 'Horizon is running.' <<< "$horizon_status"; then
     ((horizon_ready_samples += 1))
-    ((horizon_ready_samples >= 3)) && break
+    ((horizon_ready_samples >= 10)) && break
   else
     horizon_ready_samples=0
   fi
   sleep 2
 done
-if ((horizon_ready_samples < 3)); then
+if ((horizon_ready_samples < 10)); then
   docker logs --tail 100 "$horizon_name" >&2 || true
-  echo 'RELEASE_ROLES_FAIL=new_horizon_unhealthy'
+  echo "RELEASE_ROLES_FAIL=new_horizon_unhealthy restarts=${horizon_restart_count:-unknown} oom_kills=${horizon_oom_kills:-unknown}"
   exit 1
 fi
 

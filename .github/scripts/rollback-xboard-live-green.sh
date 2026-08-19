@@ -46,6 +46,32 @@ if [[ -z "$caddy_config" ]]; then
   caddy_config=${caddy_candidates[0]}
 fi
 
+horizon_master_ready() {
+  local container=$1 horizon_state master_count
+  [[ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || true)" == true ]] || return 1
+
+  # Backward compatibility for the retained pre-fix release container.
+  horizon_state=$(docker exec "$container" supervisorctl status 2>&1 || true)
+  if grep -Eq '^horizon:horizon_00[[:space:]]+RUNNING([[:space:]]|$)' <<< "$horizon_state"; then
+    return 0
+  fi
+
+  master_count=$(docker exec "$container" sh -c '
+    count=0
+    for proc in /proc/[0-9]*; do
+      [ -r "$proc/cmdline" ] || continue
+      executable=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "1p")
+      argument1=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "2p")
+      argument2=$(tr "\000" "\n" < "$proc/cmdline" | sed -n "3p")
+      if [ "${executable##*/}" = php ] && [ "$argument1" = /www/artisan ] && [ "$argument2" = horizon ]; then
+        count=$((count + 1))
+      fi
+    done
+    printf "%s\n" "$count"
+  ' 2>/dev/null || true)
+  [[ "$master_count" == 1 ]]
+}
+
 if [[ "$ROLE_STATE" == green ]]; then
   docker rm -f "${SCHEDULER_CONTAINER:?}" "${HORIZON_CONTAINER:?}" >/dev/null 2>&1 || true
   if [[ "${ROLE_MODE:-compose}" == release ]]; then
@@ -55,8 +81,7 @@ if [[ "$ROLE_STATE" == green ]]; then
     docker start "$PREVIOUS_HORIZON_CONTAINER" >/dev/null
     previous_roles_ready=0
     for attempt in {1..20}; do
-      horizon_state=$(docker exec "$PREVIOUS_HORIZON_CONTAINER" supervisorctl status 2>&1 || true)
-      if grep -Eq '^horizon:horizon_00[[:space:]]+RUNNING([[:space:]]|$)' <<< "$horizon_state" &&
+      if horizon_master_ready "$PREVIOUS_HORIZON_CONTAINER" &&
          [[ "$(docker inspect -f '{{.State.Running}}' "$PREVIOUS_SCHEDULER_CONTAINER")" == true ]]; then
         previous_roles_ready=1
         break
@@ -68,6 +93,22 @@ if [[ "$ROLE_STATE" == green ]]; then
       exit 1
     fi
     docker exec "$PREVIOUS_HORIZON_CONTAINER" php /www/artisan horizon:continue >/dev/null
+    previous_horizon_running_samples=0
+    for attempt in {1..15}; do
+      horizon_status=$(docker exec "$PREVIOUS_HORIZON_CONTAINER" php /www/artisan horizon:status 2>&1 || true)
+      if horizon_master_ready "$PREVIOUS_HORIZON_CONTAINER" &&
+         grep -Fq 'Horizon is running.' <<< "$horizon_status"; then
+        ((previous_horizon_running_samples += 1))
+        ((previous_horizon_running_samples >= 3)) && break
+      else
+        previous_horizon_running_samples=0
+      fi
+      sleep 2
+    done
+    if ((previous_horizon_running_samples < 3)); then
+      echo 'RELEASE_ROLLBACK_FAIL=previous_horizon_not_running'
+      exit 1
+    fi
   else
     if [[ ! "${BLUE_OCTANE_PGID:-}" =~ ^[1-9][0-9]*$ ]]; then
       echo 'RELEASE_ROLLBACK_FAIL=invalid_blue_octane_group'

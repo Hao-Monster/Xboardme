@@ -5,6 +5,7 @@ namespace App\Jobs;
 
 use App\Models\Server;
 use App\Models\StatServer;
+use App\Support\SqliteImmediateTransaction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -60,9 +61,17 @@ class StatServerJob implements ShouldQueue
         }
 
         try {
-            $this->processServerStat($u, $d, $recordAt);
-            $this->updateServerTraffic($u, $d);
-        } catch (\Exception $e) {
+            $processBatch = function () use ($u, $d, $recordAt): void {
+                $this->processServerStat($u, $d, $recordAt);
+                $this->updateServerTraffic($u, $d);
+            };
+
+            if (config('database.default') === 'sqlite') {
+                SqliteImmediateTransaction::run($processBatch);
+            } else {
+                $processBatch();
+            }
+        } catch (\Throwable $e) {
             Log::error('StatServerJob failed for server ' . $this->server['id'] . ': ' . $e->getMessage());
             throw $e;
         }
@@ -92,33 +101,33 @@ class StatServerJob implements ShouldQueue
 
     protected function processServerStatForSqlite(int $u, int $d, int $recordAt): void
     {
-        DB::transaction(function () use ($u, $d, $recordAt) {
-            $existingRecord = StatServer::where([
-                'record_at' => $recordAt,
-                'server_id' => $this->server['id'],
-                'server_type' => $this->protocol,
-                'record_type' => $this->recordType,
-            ])->first();
+        $existingRecord = StatServer::where([
+            'record_at' => $recordAt,
+            'server_id' => $this->server['id'],
+            'server_type' => $this->protocol,
+            'record_type' => $this->recordType,
+        ])->first();
 
-            if ($existingRecord) {
-                $existingRecord->update([
-                    'u' => $existingRecord->u + $u,
-                    'd' => $existingRecord->d + $d,
-                    'updated_at' => time(),
-                ]);
-            } else {
-                StatServer::create([
-                    'record_at' => $recordAt,
-                    'server_id' => $this->server['id'],
-                    'server_type' => $this->protocol,
-                    'record_type' => $this->recordType,
-                    'u' => $u,
-                    'd' => $d,
-                    'created_at' => time(),
-                    'updated_at' => time(),
-                ]);
-            }
-        }, 3);
+        if ($existingRecord) {
+            $existingRecord->update([
+                'u' => $existingRecord->u + $u,
+                'd' => $existingRecord->d + $d,
+                'updated_at' => time(),
+            ]);
+
+            return;
+        }
+
+        StatServer::create([
+            'record_at' => $recordAt,
+            'server_id' => $this->server['id'],
+            'server_type' => $this->protocol,
+            'record_type' => $this->recordType,
+            'u' => $u,
+            'd' => $d,
+            'created_at' => time(),
+            'updated_at' => time(),
+        ]);
     }
 
     protected function processServerStatForOtherDatabases(int $u, int $d, int $recordAt): void
