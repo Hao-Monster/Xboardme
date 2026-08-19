@@ -131,6 +131,35 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('Horizon is running.', $rollback);
     }
 
+    public function test_role_recovery_is_explicit_and_failed_rollback_preserves_current_roles(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $activation = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
+        $rollback = file_get_contents(base_path('.github/scripts/rollback-xboard-live-green.sh'));
+
+        $this->assertStringContainsString("inputs.production_release_action == 'repair_roles'", $workflow);
+        $this->assertStringContainsString(
+            "ALLOW_ROLE_REPAIR: \${{ inputs.production_release_action == 'repair_roles' }}",
+            $workflow
+        );
+        $this->assertStringContainsString('ALLOW_ROLE_REPAIR', $activation);
+        $this->assertStringContainsString('role_repair_state_mismatch', $activation);
+        $this->assertStringContainsString('transition=$role_transition', $activation);
+
+        $healthCheck = strpos($rollback, 'previous_horizon_running_samples < 3');
+        $currentRoleRemoval = strpos($rollback, 'docker rm -f "$current_scheduler" "$current_horizon"');
+
+        $this->assertNotFalse($healthCheck);
+        $this->assertNotFalse($currentRoleRemoval);
+        $this->assertGreaterThan(
+            $healthCheck,
+            $currentRoleRemoval,
+            'The current roles must remain recoverable until the previous Horizon is proven healthy.'
+        );
+        $this->assertStringContainsString('restore_current_roles_on_error()', $rollback);
+        $this->assertStringContainsString('current_release_roles_missing', $rollback);
+    }
+
     public function test_smoke_test_checks_the_public_route_from_the_runner(): void
     {
         $smoke = file_get_contents(base_path('.github/scripts/smoke-distributor-remote.sh'));
