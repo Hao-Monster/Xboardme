@@ -244,4 +244,27 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('127\\\\.0\\\\.0\\\\.1:$GREEN_PORT', $script);
         $this->assertStringNotContainsString("grep -Rho '127\\.0\\.0\\.1:7001'", $script);
     }
+
+    public function test_one_time_production_diagnostics_are_read_only_encrypted_and_branch_gated(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/production-readonly-diagnostics.yml'));
+        $script = file_get_contents(base_path('.github/scripts/collect-xboard-readonly-diagnostics.sh'));
+        $publishWorkflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+
+        $this->assertStringContainsString("github.ref == 'refs/heads/codex/distributor'", $workflow);
+        $this->assertStringContainsString('test "$GITHUB_SHA" = "$EXPECTED_SHA"', $workflow);
+        $this->assertStringContainsString('openssl cms -encrypt -stream -binary -aes-256-cbc', $workflow);
+        $this->assertStringContainsString('retention-days: 1', $workflow);
+        $this->assertStringContainsString('xboard-production-diagnostics.txt.gz.p7m', $workflow);
+        $this->assertStringNotContainsString('upload-artifact', substr($workflow, 0, (int) strpos($workflow, 'openssl cms -encrypt')));
+        $this->assertStringContainsString('PRAGMA query_only=ON;', $script);
+        $this->assertStringContainsString('sqlite3 -readonly "$db_path"', $script);
+        $this->assertStringContainsString('payload_sha256', $script);
+        $this->assertStringNotContainsString("'payload' =>", $script);
+        $this->assertStringNotContainsString('wal_checkpoint', $script);
+        $this->assertStringNotContainsString('queue:retry', $script);
+        $this->assertStringNotContainsString('horizon:forget', $script);
+        $this->assertStringNotContainsString('docker restart', $script);
+        $this->assertStringContainsString('bash -n .github/scripts/collect-xboard-readonly-diagnostics.sh', $publishWorkflow);
+    }
 }

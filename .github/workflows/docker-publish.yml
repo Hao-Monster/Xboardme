@@ -301,6 +301,7 @@ jobs:
           bash -n .github/scripts/cleanup-xboard-live-release.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
+          bash -n .github/scripts/collect-xboard-readonly-diagnostics.sh
 
   build:
     if: ${{ github.event_name != 'pull_request' }}
