@@ -3,8 +3,13 @@ set -Eeuo pipefail
 
 : "${RELEASE_ID:?RELEASE_ID is required}"
 : "${EXPECTED_RELEASE_SHA:?EXPECTED_RELEASE_SHA is required}"
+: "${ALLOW_ROLE_REPAIR:=false}"
 if [[ ! "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
   echo 'RELEASE_ROLES_FAIL=invalid_run_id'
+  exit 1
+fi
+if [[ "$ALLOW_ROLE_REPAIR" != true && "$ALLOW_ROLE_REPAIR" != false ]]; then
+  echo 'RELEASE_ROLES_FAIL=invalid_repair_flag'
   exit 1
 fi
 
@@ -33,7 +38,7 @@ if [[ "$RELEASE_SHA" != "$EXPECTED_RELEASE_SHA" ]]; then
   echo 'RELEASE_ROLES_FAIL=release_commit_mismatch'
   exit 1
 fi
-if [[ "$TRAFFIC_STATE" != green || "$ROLE_STATE" != blue ]]; then
+if [[ "$TRAFFIC_STATE" != green ]]; then
   echo "RELEASE_ROLES_FAIL=invalid_state traffic=$TRAFFIC_STATE roles=$ROLE_STATE"
   exit 1
 fi
@@ -45,6 +50,19 @@ fi
 
 horizon_name="xboard-horizon-$RELEASE_ID"
 scheduler_name="xboard-scheduler-$RELEASE_ID"
+role_transition=activate
+if [[ "$ROLE_STATE" == green && "$ALLOW_ROLE_REPAIR" == true ]]; then
+  role_transition=repair
+  if [[ "${ROLE_MODE:-}" != release ]] ||
+     [[ "${HORIZON_CONTAINER:-}" != "$horizon_name" ]] ||
+     [[ "${SCHEDULER_CONTAINER:-}" != "$scheduler_name" ]]; then
+    echo 'RELEASE_ROLES_FAIL=role_repair_state_mismatch'
+    exit 1
+  fi
+elif [[ "$ROLE_STATE" != blue || "$ALLOW_ROLE_REPAIR" == true ]]; then
+  echo "RELEASE_ROLES_FAIL=invalid_state traffic=$TRAFFIC_STATE roles=$ROLE_STATE"
+  exit 1
+fi
 for name in "$horizon_name" "$scheduler_name"; do
   if docker ps -aq --filter "name=^/${name}$" | grep -q .; then
     echo "RELEASE_ROLES_FAIL=role_container_exists name=$name"
@@ -317,4 +335,4 @@ set_state ROLE_STATE green
 set_state ROLES_ACTIVATED_AT "$(date -u +%FT%TZ)"
 
 trap - EXIT
-echo "RELEASE_ROLES=PASS id=$RELEASE_ID mode=$role_mode horizon=$horizon_name scheduler=$scheduler_name"
+echo "RELEASE_ROLES=PASS id=$RELEASE_ID mode=$role_mode transition=$role_transition horizon=$horizon_name scheduler=$scheduler_name"

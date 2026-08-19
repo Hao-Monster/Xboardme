@@ -55,7 +55,7 @@ on:
         required: false
         type: string
       production_release_action:
-        description: Release phase (none, prepare, switch, activate_roles, rollback, cleanup, admin_assets, admin_assets_rollback)
+        description: Release phase (none, prepare, switch, activate_roles, repair_roles, rollback, cleanup, admin_assets, admin_assets_rollback)
         required: true
         default: none
         type: string
@@ -1095,7 +1095,8 @@ jobs:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
           github.ref == 'refs/heads/codex/distributor' &&
-          inputs.production_release_action == 'activate_roles' &&
+          (inputs.production_release_action == 'activate_roles' ||
+           inputs.production_release_action == 'repair_roles') &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1133,9 +1134,10 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           RELEASE_ID: ${{ inputs.release_id }}
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+          ALLOW_ROLE_REPAIR: ${{ inputs.production_release_action == 'repair_roles' }}
         run: |
           sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' ALLOW_ROLE_REPAIR='$ALLOW_ROLE_REPAIR' bash -s" \
             < .github/scripts/activate-xboard-green-roles.sh
 
   rollback-live-release:

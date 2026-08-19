@@ -72,13 +72,52 @@ horizon_master_ready() {
   [[ "$master_count" == 1 ]]
 }
 
+role_handoff_started=0
+current_horizon=''
+current_scheduler=''
+restore_current_roles_on_error() {
+  status=$?
+  if ((status != 0 && role_handoff_started == 1)); then
+    if [[ "${ROLE_MODE:-compose}" == release ]]; then
+      docker stop --time 20 "${PREVIOUS_SCHEDULER_CONTAINER:-}" "${PREVIOUS_HORIZON_CONTAINER:-}" >/dev/null 2>&1 || true
+    elif [[ "${BLUE_OCTANE_PGID:-}" =~ ^[1-9][0-9]*$ ]]; then
+      docker exec "$blue" php -r 'posix_kill(-((int) $argv[1]), SIGSTOP);' "$BLUE_OCTANE_PGID" >/dev/null 2>&1 || true
+    fi
+    docker start "$current_horizon" "$current_scheduler" >/dev/null 2>&1 || true
+    for attempt in {1..20}; do
+      if horizon_master_ready "$current_horizon"; then
+        docker exec "$current_horizon" php /www/artisan horizon:continue >/dev/null 2>&1 || true
+        break
+      fi
+      sleep 2
+    done
+  fi
+  exit "$status"
+}
+trap restore_current_roles_on_error EXIT
+
 if [[ "$ROLE_STATE" == green ]]; then
-  docker rm -f "${SCHEDULER_CONTAINER:?}" "${HORIZON_CONTAINER:?}" >/dev/null 2>&1 || true
+  current_horizon=${HORIZON_CONTAINER:-}
+  current_scheduler=${SCHEDULER_CONTAINER:-}
+  if [[ -z "$current_horizon" || -z "$current_scheduler" ]] ||
+     [[ "$(docker inspect -f '{{.State.Running}}' "$current_horizon" 2>/dev/null || true)" != true ]] ||
+     [[ "$(docker inspect -f '{{.State.Running}}' "$current_scheduler" 2>/dev/null || true)" != true ]]; then
+    echo 'RELEASE_ROLLBACK_FAIL=current_release_roles_missing'
+    exit 1
+  fi
+
+  role_handoff_started=1
+  docker exec "$current_horizon" php /www/artisan horizon:pause >/dev/null
+  docker stop --time 20 "$current_scheduler" >/dev/null
+  docker stop --time 20 "$current_horizon" >/dev/null
+
+  previous_horizon_owner=$blue
   if [[ "${ROLE_MODE:-compose}" == release ]]; then
     : "${PREVIOUS_HORIZON_CONTAINER:?}"
     : "${PREVIOUS_SCHEDULER_CONTAINER:?}"
     docker start "$PREVIOUS_SCHEDULER_CONTAINER" >/dev/null
     docker start "$PREVIOUS_HORIZON_CONTAINER" >/dev/null
+    previous_horizon_owner=$PREVIOUS_HORIZON_CONTAINER
     previous_roles_ready=0
     for attempt in {1..20}; do
       if horizon_master_ready "$PREVIOUS_HORIZON_CONTAINER" &&
@@ -92,30 +131,30 @@ if [[ "$ROLE_STATE" == green ]]; then
       echo 'RELEASE_ROLLBACK_FAIL=previous_release_roles_unhealthy'
       exit 1
     fi
-    docker exec "$PREVIOUS_HORIZON_CONTAINER" php /www/artisan horizon:continue >/dev/null
-    previous_horizon_running_samples=0
-    for attempt in {1..15}; do
-      horizon_status=$(docker exec "$PREVIOUS_HORIZON_CONTAINER" php /www/artisan horizon:status 2>&1 || true)
-      if horizon_master_ready "$PREVIOUS_HORIZON_CONTAINER" &&
-         grep -Fq 'Horizon is running.' <<< "$horizon_status"; then
-        ((previous_horizon_running_samples += 1))
-        ((previous_horizon_running_samples >= 3)) && break
-      else
-        previous_horizon_running_samples=0
-      fi
-      sleep 2
-    done
-    if ((previous_horizon_running_samples < 3)); then
-      echo 'RELEASE_ROLLBACK_FAIL=previous_horizon_not_running'
-      exit 1
-    fi
   else
     if [[ ! "${BLUE_OCTANE_PGID:-}" =~ ^[1-9][0-9]*$ ]]; then
       echo 'RELEASE_ROLLBACK_FAIL=invalid_blue_octane_group'
       exit 1
     fi
     docker exec "$blue" php -r 'exit(posix_kill(-((int) $argv[1]), SIGCONT) ? 0 : 1);' "$BLUE_OCTANE_PGID"
-    docker exec "$blue" php /www/artisan horizon:continue >/dev/null
+  fi
+
+  docker exec "$previous_horizon_owner" php /www/artisan horizon:continue >/dev/null
+  previous_horizon_running_samples=0
+  for attempt in {1..15}; do
+    horizon_status=$(docker exec "$previous_horizon_owner" php /www/artisan horizon:status 2>&1 || true)
+    if horizon_master_ready "$previous_horizon_owner" &&
+       grep -Fq 'Horizon is running.' <<< "$horizon_status"; then
+      ((previous_horizon_running_samples += 1))
+      ((previous_horizon_running_samples >= 3)) && break
+    else
+      previous_horizon_running_samples=0
+    fi
+    sleep 2
+  done
+  if ((previous_horizon_running_samples < 3)); then
+    echo 'RELEASE_ROLLBACK_FAIL=previous_horizon_not_running'
+    exit 1
   fi
 fi
 
@@ -160,4 +199,9 @@ set_state ROLE_STATE blue
 set_state CADDY_CONFIG "$caddy_config"
 set_state CADDY_BACKUP "$caddy_backup"
 set_state ROLLED_BACK_AT "$(date -u +%FT%TZ)"
+
+trap - EXIT
+if ((role_handoff_started == 1)); then
+  docker rm -f "$current_scheduler" "$current_horizon" >/dev/null 2>&1 || true
+fi
 echo "RELEASE_ROLLBACK=PASS id=$RELEASE_ID upstream=127.0.0.1:$BLUE_PORT"
