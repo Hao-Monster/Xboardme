@@ -27,7 +27,10 @@ class SqliteTrafficJobAtomicityTest extends TestCase
         }
 
         $this->databasePath = $databasePath;
-        config(['database.connections.sqlite.database' => $this->databasePath]);
+        config([
+            'database.default' => 'sqlite',
+            'database.connections.sqlite.database' => $this->databasePath,
+        ]);
         DB::purge('sqlite');
 
         $this->artisan('migrate:fresh', ['--database' => 'sqlite', '--force' => true])
