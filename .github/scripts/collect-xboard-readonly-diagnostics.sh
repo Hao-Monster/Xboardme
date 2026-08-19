@@ -137,6 +137,20 @@ collect_diagnostics() {
   docker stats --no-stream --format 'container={{.Name}} cpu={{.CPUPerc}} memory={{.MemUsage}} pids={{.PIDs}}' \
     "$primary" "$horizon_container" "$scheduler_container" || true
 
+  echo '=== HORIZON CGROUP MEMORY STATE ==='
+  docker inspect -f 'memory_limit={{.HostConfig.Memory}} memory_swap={{.HostConfig.MemorySwap}} container_oom_killed={{.State.OOMKilled}} container_error={{.State.Error}}' "$horizon_container"
+  docker exec "$horizon_container" sh -lc '
+for file in memory.current memory.peak memory.max memory.events memory.events.local; do
+  path="/sys/fs/cgroup/$file"
+  if [ -r "$path" ]; then
+    echo "--- $file ---"
+    cat "$path"
+  fi
+done
+echo "--- process_rss_kib ---"
+ps -eo pid,ppid,rss,args 2>/dev/null | sed -n "1,80p"
+' || true
+
   echo '=== HORIZON PROCESS STATE ==='
   docker exec "$horizon_container" supervisorctl status 2>&1 || true
   docker exec "$horizon_container" php /www/artisan horizon:status --no-ansi 2>&1 || true
@@ -209,7 +223,7 @@ do {
         }
     }
     $cursor = (int) $batch->last()->index;
-} while ($batch->count() === 51 && $scanned < 10000);
+} while ($scanned < 10000);
 
 arsort($groups);
 $target = $repository->findFailed($targetId);
