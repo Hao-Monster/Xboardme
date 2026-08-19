@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\User;
+use App\Support\SqliteImmediateTransaction;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -35,15 +36,23 @@ class TrafficFetchJob implements ShouldQueue
     {
         $userIds = array_keys($this->data);
 
-        foreach ($this->data as $uid => $v) {
-            User::where('id', $uid)
-                ->incrementEach(
-                    [
-                        'u' => $v[0] * $this->server['rate'],
-                        'd' => $v[1] * $this->server['rate'],
-                    ],
-                    ['t' => time()]
-                );
+        $updateUsers = function (): void {
+            foreach ($this->data as $uid => $v) {
+                User::where('id', $uid)
+                    ->incrementEach(
+                        [
+                            'u' => $v[0] * $this->server['rate'],
+                            'd' => $v[1] * $this->server['rate'],
+                        ],
+                        ['t' => time()]
+                    );
+            }
+        };
+
+        if (config('database.default') === 'sqlite') {
+            SqliteImmediateTransaction::run($updateUsers);
+        } else {
+            $updateUsers();
         }
 
         if (!empty($userIds)) {
