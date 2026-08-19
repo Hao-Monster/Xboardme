@@ -8,14 +8,17 @@ set -euo pipefail
 : "${SSHPASS:?SSHPASS is required}"
 : "${TARGET_PORT:=active}"
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ssh_with_password="$script_dir/ssh-with-password.sh"
+
 if [[ "$TARGET_PORT" == active ]]; then
-  TARGET_PORT=$(sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+  TARGET_PORT=$(bash "$ssh_with_password" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
     "grep -RhoE --include='*.conf' --include='Caddyfile' 'reverse_proxy[[:space:]]+127\\.0\\.0\\.1:[0-9]{4,5}' /etc/caddy 2>/dev/null | awk '{print \$2}' | sort -u | sed -n 's/.*://p'")
 fi
 [[ "$TARGET_PORT" =~ ^[0-9]+$ ]]
 ((TARGET_PORT >= 1 && TARGET_PORT <= 65535))
 
-sshpass -e ssh -N \
+bash "$ssh_with_password" -N \
   -p "$DEPLOY_PORT" \
   -o ExitOnForwardFailure=yes \
   -L "17001:127.0.0.1:$TARGET_PORT" \

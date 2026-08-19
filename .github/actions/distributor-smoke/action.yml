@@ -10,12 +10,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Install SSH password helper
-      shell: bash
-      run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends sshpass
-
     - name: Trust deployment host key
       shell: bash
       run: |

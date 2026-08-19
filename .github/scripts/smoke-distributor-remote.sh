@@ -10,6 +10,9 @@ set -euo pipefail
 : "${TARGET_PORT:?TARGET_PORT is required}"
 : "${SMOKE_VALIDATION_MODE:=release}"
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ssh_with_password="$script_dir/ssh-with-password.sh"
+
 case "$SMOKE_VALIDATION_MODE" in
   release|rollback) ;;
   *) echo 'Invalid smoke validation mode.' >&2; exit 1 ;;
@@ -18,7 +21,7 @@ esac
 test "$TARGET_PORT" -ge 1
 test "$TARGET_PORT" -le 65535
 
-sshpass -e ssh -N \
+bash "$ssh_with_password" -N \
   -p "$DEPLOY_PORT" \
   -o ExitOnForwardFailure=yes \
   -L "17001:127.0.0.1:$TARGET_PORT" \
@@ -145,7 +148,7 @@ restricted_status=$(curl --silent --show-error \
 test "$restricted_status" = '403'
 jq -e '.message == "分销商账号无权访问该功能"' restricted.json >/dev/null
 
-public_url=$(sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+public_url=$(bash "$ssh_with_password" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
   'bash -s' < .github/scripts/resolve-xboard-public-url.sh)
 case "$public_url" in
   http://*|https://*) ;;

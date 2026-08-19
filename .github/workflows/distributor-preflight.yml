@@ -18,11 +18,6 @@ jobs:
       - name: Checkout preflight script
         uses: actions/checkout@v4
 
-      - name: Install SSH password helper
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends sshpass
-
       - name: Trust deployment host key
         env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -42,5 +37,6 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
         run: |
-          sshpass -e ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             'bash -s' < .github/scripts/preflight-xboard-compose.sh
