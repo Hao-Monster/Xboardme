@@ -4,8 +4,11 @@ namespace Tests\Feature;
 
 use App\Http\Middleware\VerifyCsrfToken;
 use App\Support\ProtocolManager;
+use FilesystemIterator;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Routing\Route;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
 use Tests\TestCase;
 
 class LaravelUpgradeCompatibilityTest extends TestCase
@@ -251,6 +254,50 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertStringContainsString('active_upstream=', $preflight);
         $this->assertStringContainsString('ambiguous_active_web', $preflight);
         $this->assertStringContainsString('active_runtime_is_not_laravel_13', $preflight);
+    }
+
+    public function test_production_ssh_does_not_depend_on_runtime_package_installation(): void
+    {
+        $githubFiles = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator(base_path('.github'), FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($githubFiles as $file) {
+            if (! $file->isFile()) {
+                continue;
+            }
+
+            $contents = file_get_contents($file->getPathname());
+            $this->assertIsString($contents);
+            $this->assertStringNotContainsString(
+                'sshpass',
+                $contents,
+                "{$file->getPathname()} must not make production access depend on apt or sshpass."
+            );
+        }
+
+        $wrapper = file_get_contents(base_path('.github/scripts/ssh-with-password.sh'));
+        $askpass = file_get_contents(base_path('.github/scripts/ssh-askpass.sh'));
+        $wrapperTest = file_get_contents(base_path('.github/scripts/test-ssh-with-password.sh'));
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+
+        $this->assertIsString($wrapper);
+        $this->assertIsString($askpass);
+        $this->assertIsString($wrapperTest);
+        $this->assertIsString($workflow);
+        foreach ([
+            'SSH_ASKPASS_REQUIRE=force',
+            'NumberOfPasswordPrompts=1',
+            'PreferredAuthentications=password,keyboard-interactive',
+            'PubkeyAuthentication=no',
+            'StrictHostKeyChecking=yes',
+            'exec ssh',
+        ] as $requiredControl) {
+            $this->assertStringContainsString($requiredControl, $wrapper);
+        }
+        $this->assertStringContainsString('*password*)', $askpass);
+        $this->assertStringContainsString('Refusing an unexpected SSH prompt.', $askpass);
+        $this->assertStringContainsString('The SSH password leaked into arguments or standard input.', $wrapperTest);
+        $this->assertStringContainsString('bash .github/scripts/test-ssh-with-password.sh', $workflow);
     }
 
     public function test_role_activation_does_not_treat_stale_reserved_jobs_as_active_work(): void
