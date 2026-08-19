@@ -259,6 +259,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringNotContainsString('upload-artifact', substr($workflow, 0, (int) strpos($workflow, 'openssl cms -encrypt')));
         $this->assertStringContainsString('PRAGMA query_only=ON;', $script);
         $this->assertStringContainsString('sqlite3 -readonly "$db_path"', $script);
+        $this->assertStringContainsString('memory.current memory.peak memory.max memory.events', $script);
+        $this->assertStringContainsString('path="/sys/fs/cgroup/$file"', $script);
         $this->assertStringContainsString('payload_sha256', $script);
         $this->assertStringNotContainsString("'payload' =>", $script);
         $this->assertStringNotContainsString('wal_checkpoint', $script);
