@@ -72,6 +72,25 @@ horizon_master_ready() {
   [[ "$master_count" == 1 ]]
 }
 
+horizon_master_running() {
+  local container=$1
+  docker exec "$container" php -r '
+  require "/www/vendor/autoload.php";
+  $app = require "/www/bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  $basename = Laravel\Horizon\MasterSupervisor::basename();
+  $matching = array_values(array_filter(
+      app(Laravel\Horizon\Contracts\MasterSupervisorRepository::class)->all(),
+      static fn ($master): bool => str_starts_with($master->name, $basename."-")
+  ));
+  if (count($matching) !== 1) {
+      exit(1);
+  }
+  $master = $matching[0];
+  exit($master->status === "running" && count($master->supervisors) > 0 ? 0 : 1);
+  '
+}
+
 role_handoff_started=0
 current_horizon=''
 current_scheduler=''
@@ -87,7 +106,7 @@ restore_current_roles_on_error() {
     for attempt in {1..20}; do
       if horizon_master_ready "$current_horizon"; then
         docker exec "$current_horizon" php /www/artisan horizon:continue >/dev/null 2>&1 || true
-        break
+        horizon_master_running "$current_horizon" && break
       fi
       sleep 2
     done
@@ -142,9 +161,8 @@ if [[ "$ROLE_STATE" == green ]]; then
   docker exec "$previous_horizon_owner" php /www/artisan horizon:continue >/dev/null
   previous_horizon_running_samples=0
   for attempt in {1..15}; do
-    horizon_status=$(docker exec "$previous_horizon_owner" php /www/artisan horizon:status 2>&1 || true)
     if horizon_master_ready "$previous_horizon_owner" &&
-       grep -Fq 'Horizon is running.' <<< "$horizon_status"; then
+       horizon_master_running "$previous_horizon_owner"; then
       ((previous_horizon_running_samples += 1))
       ((previous_horizon_running_samples >= 3)) && break
     else

@@ -96,8 +96,11 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('-e ENABLE_REDIS=false', $script);
         $this->assertStringContainsString('php /www/artisan horizon:pause', $script);
         $this->assertStringContainsString('docker exec "$horizon_name" php /www/artisan horizon:continue', $script);
-        $this->assertStringContainsString('php /www/artisan horizon:status', $script);
-        $this->assertStringContainsString('Horizon is running.', $script);
+        $this->assertStringContainsString('MasterSupervisorRepository::class', $script);
+        $this->assertStringContainsString('str_starts_with($master->name, $basename."-")', $script);
+        $this->assertStringContainsString('$master->status === "running"', $script);
+        $this->assertStringContainsString('count($master->supervisors) > 0', $script);
+        $this->assertStringNotContainsString('php /www/artisan horizon:status', $script);
         $this->assertStringContainsString('horizon_ready_samples >= 10', $script);
         $this->assertStringContainsString('SIGSTOP', $script);
         $this->assertStringContainsString('BLUE_OCTANE_PGID', $script);
@@ -128,7 +131,11 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('horizon_master_ready()', $rollback);
         $this->assertStringContainsString('^horizon:horizon_00[[:space:]]+RUNNING', $rollback);
         $this->assertStringContainsString('[ "$argument2" = horizon ]', $rollback);
-        $this->assertStringContainsString('Horizon is running.', $rollback);
+        $this->assertStringContainsString('MasterSupervisorRepository::class', $rollback);
+        $this->assertStringContainsString('str_starts_with($master->name, $basename."-")', $rollback);
+        $this->assertStringContainsString('$master->status === "running"', $rollback);
+        $this->assertStringContainsString('count($master->supervisors) > 0', $rollback);
+        $this->assertStringNotContainsString('php /www/artisan horizon:status', $rollback);
     }
 
     public function test_role_recovery_is_explicit_and_failed_rollback_preserves_current_roles(): void
@@ -158,6 +165,33 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         );
         $this->assertStringContainsString('restore_current_roles_on_error()', $rollback);
         $this->assertStringContainsString('current_release_roles_missing', $rollback);
+    }
+
+    public function test_previous_release_retirement_is_explicit_and_preserves_the_active_release(): void
+    {
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $retirement = file_get_contents(base_path('.github/scripts/retire-xboard-previous-release.sh'));
+
+        $this->assertStringContainsString("inputs.production_release_action == 'retire_previous'", $workflow);
+        $this->assertStringContainsString('EXPECTED_RELEASE_SHA', $retirement);
+        $this->assertStringContainsString('TRAFFIC_STATE" != green', $retirement);
+        $this->assertStringContainsString('ROLE_STATE" != green', $retirement);
+        $this->assertStringContainsString('MasterSupervisorRepository::class', $retirement);
+        $this->assertStringContainsString('horizon_ready_samples >= 3', $retirement);
+        $this->assertStringContainsString('previous_release_roles_still_running', $retirement);
+        $this->assertStringContainsString('previous_container_set_mismatch', $retirement);
+        $this->assertStringContainsString('PREVIOUS_RELEASE_RETIRED_ID', $retirement);
+
+        $activeHealth = strpos($retirement, 'horizon_ready_samples < 3');
+        $removal = strpos($retirement, 'docker rm -f "${previous_containers[@]}"');
+
+        $this->assertNotFalse($activeHealth);
+        $this->assertNotFalse($removal);
+        $this->assertGreaterThan(
+            $activeHealth,
+            $removal,
+            'The inactive release must only be removed after the active roles pass sustained health checks.'
+        );
     }
 
     public function test_smoke_test_checks_the_public_route_from_the_runner(): void

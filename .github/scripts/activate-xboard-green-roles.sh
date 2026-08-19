@@ -124,6 +124,25 @@ rollback_roles() {
 }
 trap rollback_roles EXIT
 
+horizon_master_running() {
+  local container=$1
+  docker exec "$container" php -r '
+  require "/www/vendor/autoload.php";
+  $app = require "/www/bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  $basename = Laravel\Horizon\MasterSupervisor::basename();
+  $matching = array_values(array_filter(
+      app(Laravel\Horizon\Contracts\MasterSupervisorRepository::class)->all(),
+      static fn ($master): bool => str_starts_with($master->name, $basename."-")
+  ));
+  if (count($matching) !== 1) {
+      exit(1);
+  }
+  $master = $matching[0];
+  exit($master->status === "running" && count($master->supervisors) > 0 ? 0 : 1);
+  '
+}
+
 horizon_owner=$blue
 if [[ "$role_mode" == release ]]; then
   horizon_owner=$previous_horizon
@@ -224,10 +243,9 @@ for attempt in {1..30}; do
   horizon_restart_count=$(docker inspect -f '{{.RestartCount}}' "$horizon_name" 2>/dev/null || true)
   horizon_oom_kills=$(docker exec "$horizon_name" sh -c \
     "awk '\$1 == \"oom_kill\" {print \$2}' /sys/fs/cgroup/memory.events" 2>/dev/null || true)
-  horizon_status=$(docker exec "$horizon_name" php /www/artisan horizon:status 2>&1 || true)
   if [[ "$(docker inspect -f '{{.State.Running}}' "$horizon_name" 2>/dev/null || true)" == true ]] &&
      [[ "$horizon_restart_count" == 0 ]] && [[ "$horizon_oom_kills" == 0 ]] &&
-     grep -Fq 'Horizon is running.' <<< "$horizon_status"; then
+     horizon_master_running "$horizon_name"; then
     ((horizon_ready_samples += 1))
     ((horizon_ready_samples >= 10)) && break
   else
