@@ -18,6 +18,8 @@ RUN CFLAGS="-O0 -g0" install-php-extensions pcntl bcmath zip && \
 
 WORKDIR /www
 
+ARG APP_REVISION=local
+
 COPY composer.json composer.lock /www/
 
 # Dependency downloads are keyed only by the locked manifests. The GitHub
@@ -45,6 +47,8 @@ COPY .docker /
 COPY . /www
 
 RUN php .github/scripts/verify-admin-assets.php
+RUN php .github/scripts/build-theme-asset-manifest.php "$APP_REVISION" \
+    && php .github/scripts/verify-theme-assets.php "$APP_REVISION"
 
 COPY .docker/supervisor/supervisord.conf /etc/supervisord.conf
 COPY .docker/caddy/Caddyfile /etc/caddy/Caddyfile

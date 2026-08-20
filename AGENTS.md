@@ -43,3 +43,16 @@
 - Run the complete PHPUnit suite, JavaScript suite, PHPStan, Composer audit,
   deployment script syntax checks, workflow validation and `git diff --check`.
 - Treat an empty PR check list as missing evidence, not as success.
+
+## Frontend release assets
+
+- Use the exact full production commit SHA as the dashboard asset version. Do
+  not derive asset identity from `.git` at runtime and never publish an
+  `unknown`, date-only or short-SHA fallback.
+- Every image must contain a generated Xboard theme asset manifest. Candidate
+  and post-switch smoke tests must match the rendered version, manifest
+  revision, checked-out file digests and served file digests.
+- Mobile distributor asset changes require a real headless-browser check
+  against the served candidate assets. After traffic switches, repeat resource
+  identity and browser checks through the public URL; a mismatch must trigger
+  the existing automatic rollback path.

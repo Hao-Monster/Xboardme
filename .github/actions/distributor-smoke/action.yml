@@ -6,6 +6,10 @@ inputs:
     description: Use rollback mode when verifying a release that predates the current feature assets.
     required: false
     default: release
+  verify_public_assets:
+    description: Verify the public route and CDN assets after traffic has switched.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -22,4 +26,6 @@ runs:
       shell: bash
       env:
         SMOKE_VALIDATION_MODE: ${{ inputs.validation_mode }}
+        SMOKE_VERIFY_PUBLIC_ASSETS: ${{ inputs.verify_public_assets }}
+        EXPECTED_ASSET_VERSION: ${{ github.sha }}
       run: bash "$GITHUB_WORKSPACE/.github/scripts/smoke-distributor-remote.sh"

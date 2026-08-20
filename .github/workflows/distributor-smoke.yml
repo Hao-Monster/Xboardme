@@ -28,6 +28,8 @@ jobs:
 
       - name: Verify distributor login and route isolation
         uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}

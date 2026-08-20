@@ -9,6 +9,7 @@ set -euo pipefail
 : "${DISTRIBUTOR_PASSWORD:?DISTRIBUTOR_PASSWORD is required}"
 : "${TARGET_PORT:?TARGET_PORT is required}"
 : "${SMOKE_VALIDATION_MODE:=release}"
+: "${SMOKE_VERIFY_PUBLIC_ASSETS:=false}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ssh_with_password="$script_dir/ssh-with-password.sh"
@@ -17,10 +18,19 @@ case "$SMOKE_VALIDATION_MODE" in
   release|rollback) ;;
   *) echo 'Invalid smoke validation mode.' >&2; exit 1 ;;
 esac
+case "$SMOKE_VERIFY_PUBLIC_ASSETS" in
+  true|false) ;;
+  *) echo 'Invalid public asset validation flag.' >&2; exit 1 ;;
+esac
+if [[ "$SMOKE_VALIDATION_MODE" == release ]] && [[ ! "${EXPECTED_ASSET_VERSION:-}" =~ ^[a-f0-9]{40}$ ]]; then
+  echo 'Expected asset version must be the full release commit SHA.' >&2
+  exit 1
+fi
 
 test "$TARGET_PORT" -ge 1
 test "$TARGET_PORT" -le 65535
 
+asset_work_dir=$(mktemp -d)
 bash "$ssh_with_password" -N \
   -p "$DEPLOY_PORT" \
   -o ExitOnForwardFailure=yes \
@@ -30,8 +40,71 @@ tunnel_pid=$!
 cleanup_tunnel() {
   kill "$tunnel_pid" >/dev/null 2>&1 || true
   wait "$tunnel_pid" 2>/dev/null || true
+  rm -rf -- "$asset_work_dir"
 }
 trap cleanup_tunnel EXIT
+
+required_theme_assets=(
+  auth-session.js
+  client-center.css
+  client-center.js
+  distributor-message-guard.js
+  distributor.css
+  distributor.js
+  umi.js
+)
+
+assert_release_dashboard() {
+  local dashboard_file=$1
+  grep -Fq "<meta name=\"xboard-release\" content=\"$EXPECTED_ASSET_VERSION\"" "$dashboard_file"
+  if grep -Eqi 'xboard-release[^>]+unknown|\?v=[^"[:space:]]*unknown' "$dashboard_file"; then
+    echo 'Dashboard contains an unknown release identifier.' >&2
+    return 1
+  fi
+  for asset in "${required_theme_assets[@]}"; do
+    grep -Fq "/theme/Xboard/assets/$asset?v=$EXPECTED_ASSET_VERSION" "$dashboard_file"
+  done
+}
+
+verify_release_assets() {
+  local origin=${1%/}
+  local label=$2
+  local manifest="$asset_work_dir/$label-release-manifest.json"
+  local downloaded
+  local local_path
+  local local_hash
+  local local_bytes
+
+  curl --silent --show-error --fail --location \
+    --header 'Cache-Control: no-cache' \
+    --output "$manifest" \
+    "$origin/theme/Xboard/assets/release-manifest.json?v=$EXPECTED_ASSET_VERSION"
+  jq -e --arg revision "$EXPECTED_ASSET_VERSION" \
+    '(.schema == 1) and (.revision == $revision) and (.assets | type == "object")' \
+    "$manifest" >/dev/null
+
+  for asset in "${required_theme_assets[@]}"; do
+    local_path="$GITHUB_WORKSPACE/theme/Xboard/assets/$asset"
+    test -s "$local_path"
+    local_hash=$(sha256sum "$local_path" | awk '{print $1}')
+    local_bytes=$(wc -c < "$local_path" | tr -d '[:space:]')
+    jq -e --arg asset "$asset" --arg hash "$local_hash" --argjson bytes "$local_bytes" \
+      '.assets[$asset].sha256 == $hash and .assets[$asset].bytes == $bytes' \
+      "$manifest" >/dev/null
+
+    downloaded="$asset_work_dir/$label-$asset"
+    curl --silent --show-error --fail --location \
+      --header 'Cache-Control: no-cache' \
+      --output "$downloaded" \
+      "$origin/theme/Xboard/assets/$asset?v=$EXPECTED_ASSET_VERSION"
+    test "$(sha256sum "$downloaded" | awk '{print $1}')" = "$local_hash"
+  done
+
+  DISTRIBUTOR_CSS_URL="$origin/theme/Xboard/assets/distributor.css?v=$EXPECTED_ASSET_VERSION" \
+  DISTRIBUTOR_JS_URL="$origin/theme/Xboard/assets/distributor.js?v=$EXPECTED_ASSET_VERSION" \
+  EXPECTED_ASSET_VERSION="$EXPECTED_ASSET_VERSION" \
+    bash "$script_dir/smoke-distributor-mobile-browser.sh"
+}
 
 tunnel_ready=0
 for attempt in $(seq 1 10); do
@@ -48,6 +121,10 @@ test "$tunnel_ready" = '1'
 curl --silent --show-error --fail --output dashboard.html \
   'http://127.0.0.1:17001/'
 grep -q 'distributor-message-guard.js' dashboard.html
+if [[ "$SMOKE_VALIDATION_MODE" == release ]]; then
+  assert_release_dashboard dashboard.html
+  verify_release_assets 'http://127.0.0.1:17001' candidate
+fi
 
 login_status=$(curl --silent --show-error \
   --output login.json --write-out '%{http_code}' \
@@ -110,17 +187,21 @@ fi
 
 bash .github/scripts/smoke-admin-assets.sh
 
+asset_version_query=''
+if [[ "$SMOKE_VALIDATION_MODE" == release ]]; then
+  asset_version_query="?v=$EXPECTED_ASSET_VERSION"
+fi
 curl --silent --show-error --fail --output client-center.js \
-  'http://127.0.0.1:17001/theme/Xboard/assets/client-center.js'
+  "http://127.0.0.1:17001/theme/Xboard/assets/client-center.js$asset_version_query"
 grep -q '网盘下载' client-center.js
 curl --silent --show-error --fail --output distributor.js \
-  'http://127.0.0.1:17001/theme/Xboard/assets/distributor.js'
+  "http://127.0.0.1:17001/theme/Xboard/assets/distributor.js$asset_version_query"
 grep -q '/user/order/renew' distributor.js
 grep -q 'data-entitlement-toggle' distributor.js
 grep -q 'orderTime' distributor.js
 grep -q 'distributorAccountLabel' distributor.js
 curl --silent --show-error --fail --output distributor-message-guard.js \
-  'http://127.0.0.1:17001/theme/Xboard/assets/distributor-message-guard.js'
+  "http://127.0.0.1:17001/theme/Xboard/assets/distributor-message-guard.js$asset_version_query"
 grep -q 'DISTRIBUTOR_ACCESS_DENIED' distributor-message-guard.js
 
 order_count=$(jq '.data | length' orders.json)
@@ -164,5 +245,13 @@ for attempt in $(seq 1 6); do
   sleep 3
 done
 test "$public_ready" = '1'
+if [[ "$SMOKE_VALIDATION_MODE" == release && "$SMOKE_VERIFY_PUBLIC_ASSETS" == true ]]; then
+  public_url=${public_url%/}
+  curl --silent --show-error --fail --location \
+    --header 'Cache-Control: no-cache' \
+    --output "$asset_work_dir/public-dashboard.html" "$public_url/"
+  assert_release_dashboard "$asset_work_dir/public-dashboard.html"
+  verify_release_assets "$public_url" public
+fi
 
 echo 'Distributor production smoke test passed.'

@@ -2,8 +2,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
 
-const source = fs.readFileSync('theme/Xboard/assets/distributor.js', 'utf8');
-const styles = fs.readFileSync('theme/Xboard/assets/distributor.css', 'utf8');
+const source = fs.readFileSync('theme/Xboard/assets/distributor.js', 'utf8').replaceAll('\r\n', '\n');
+const styles = fs.readFileSync('theme/Xboard/assets/distributor.css', 'utf8').replaceAll('\r\n', '\n');
 
 test('distributor plan catalog exposes the new commerce-oriented page structure', () => {
   assert.match(source, /dist-catalog-topbar/);
