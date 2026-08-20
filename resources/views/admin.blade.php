@@ -17,12 +17,14 @@
   <link rel="stylesheet" href="/assets/admin-distributor.css?v={{ $version }}" />
   <link rel="stylesheet" href="/assets/admin-client-catalog.css?v={{ $version }}" />
   <link rel="stylesheet" href="/assets/admin-realtime-status.css?v={{ $version }}" />
+  <link rel="stylesheet" href="/assets/admin-node-activation-schedule.css?v={{ $version }}" />
   <link rel="stylesheet" href="/assets/admin-knowledge-attachments.css?v={{ $version }}" />
   <link rel="stylesheet" href="/assets/admin-knowledge-rich-editor.css?v={{ $version }}" />
   <link rel="stylesheet" href="/assets/knowledge-share.css?v={{ $version }}" />
   <script defer src="/assets/admin-distributor.js?v={{ $version }}"></script>
   <script defer src="/assets/admin-client-catalog.js?v={{ $version }}"></script>
   <script defer src="/assets/admin-realtime-status.js?v={{ $version }}"></script>
+  <script defer src="/assets/admin-node-activation-schedule.js?v={{ $version }}"></script>
   <script defer src="/assets/admin-knowledge-attachments.js?v={{ $version }}"></script>
   <script defer src="/assets/admin-knowledge-rich-editor.js?v={{ $version }}"></script>
   <script defer src="/assets/knowledge-share.js?v={{ $version }}"></script>

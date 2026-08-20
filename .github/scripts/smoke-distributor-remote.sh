@@ -183,6 +183,12 @@ if [ "$SMOKE_VALIDATION_MODE" = 'release' ]; then
   curl --silent --show-error --fail --output admin-realtime-status.css \
     'http://127.0.0.1:17001/assets/admin-realtime-status.css'
   grep -q 'xboard-realtime-grid' admin-realtime-status.css
+  curl --silent --show-error --fail --output admin-node-activation-schedule.js \
+    'http://127.0.0.1:17001/assets/admin-node-activation-schedule.js'
+  grep -q 'dropActivationSchedule' admin-node-activation-schedule.js
+  curl --silent --show-error --fail --output admin-node-activation-schedule.css \
+    'http://127.0.0.1:17001/assets/admin-node-activation-schedule.css'
+  grep -q 'xboard-node-schedule-dialog' admin-node-activation-schedule.css
 fi
 
 bash .github/scripts/smoke-admin-assets.sh
