@@ -68,9 +68,9 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->sort()
             ->values();
 
-        $this->assertSame(53, $migrations->count());
+        $this->assertSame(54, $migrations->count());
         $this->assertSame(
-            '72c28c4adfa0a7286c06a02e04b6c688f909807ca43d3128ac183da54488598d',
+            'd095b1dbfafc743968a36ae0b987f3b6bf92188c248df45b263710812506047a',
             hash('sha256', $migrations->implode("\n"))
         );
     }
@@ -250,6 +250,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertSame([
             '2026_08_18_000001_add_last_online_at_index_to_v2_user_table',
             '2026_08_20_000001_create_server_activation_schedules_table',
+            '2026_08_20_000002_add_daily_fields_to_server_activation_schedules_table',
         ], $approved);
 
         $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));

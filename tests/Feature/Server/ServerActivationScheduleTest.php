@@ -55,6 +55,176 @@ class ServerActivationScheduleTest extends TestCase
             ->assertJsonPath('data', null);
     }
 
+    public function test_admin_can_save_a_daily_cross_midnight_schedule_that_reconciles_now_and_queues_only_the_next_boundary(): void
+    {
+        Queue::fake();
+        Sanctum::actingAs($this->user('admin-daily-schedule@example.com', true));
+        $server = $this->linkedServer([
+            'enabled' => true,
+            'show' => true,
+            'sort' => 37,
+        ]);
+
+        $response = $this->postJson($this->endpoint('server/manage/activationSchedule'), [
+            'server_id' => $server->id,
+            'schedule_type' => 'daily',
+            'enable_time' => '19:00',
+            'disable_time' => '01:00',
+        ]);
+
+        $response->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.server_id', $server->id)
+            ->assertJsonPath('data.schedule_type', 'daily')
+            ->assertJsonPath('data.timezone', 'Asia/Singapore')
+            ->assertJsonPath('data.enable_time', '19:00')
+            ->assertJsonPath('data.disable_time', '01:00')
+            ->assertJsonPath('data.phase', 'inactive');
+
+        $revision = (string) $response->json('data.revision');
+        $expectedEnableAt = Carbon::create(2026, 8, 20, 19, 0, 0, 'Asia/Singapore')->timestamp;
+        $this->assertDatabaseHas('v2_server_activation_schedule', [
+            'server_id' => $server->id,
+            'schedule_type' => 'daily',
+            'timezone' => 'Asia/Singapore',
+            'enable_second' => 19 * 3600,
+            'disable_second' => 3600,
+            'revision' => $revision,
+            'next_transition_at' => $expectedEnableAt,
+            'next_target_enabled' => true,
+        ]);
+
+        $reconciled = $server->fresh();
+        $this->assertFalse($reconciled->enabled);
+        $this->assertTrue($reconciled->show);
+        $this->assertSame(37, $reconciled->sort);
+
+        Queue::assertPushed(ApplyServerActivationScheduleJob::class, function ($job) use ($server, $revision, $expectedEnableAt) {
+            return $job->serverId === $server->id
+                && $job->revision === $revision
+                && $job->targetEnabled === true
+                && $job->queue === 'default'
+                && $job->delay?->timestamp === $expectedEnableAt;
+        });
+        Queue::assertPushed(ApplyServerActivationScheduleJob::class, 1);
+    }
+
+    public function test_saving_a_daily_schedule_inside_the_window_enables_immediately_and_preserves_other_node_fields(): void
+    {
+        Queue::fake();
+        Carbon::setTestNow(Carbon::create(2026, 8, 20, 20, 0, 0, 'Asia/Singapore'));
+        $server = $this->linkedServer([
+            'enabled' => false,
+            'show' => true,
+            'sort' => 23,
+        ]);
+        $machineId = $server->machine_id;
+
+        $schedule = app(ServerActivationScheduleService::class)->saveDaily(
+            $server,
+            '19:00',
+            '01:00'
+        );
+
+        $this->assertSame('daily', $schedule->schedule_type);
+        $this->assertSame(
+            Carbon::create(2026, 8, 21, 1, 0, 0, 'Asia/Singapore')->timestamp,
+            $schedule->next_transition_at
+        );
+        $this->assertFalse($schedule->next_target_enabled);
+        $updated = $server->fresh();
+        $this->assertTrue($updated->enabled);
+        $this->assertTrue($updated->show);
+        $this->assertSame(23, $updated->sort);
+        $this->assertSame($machineId, $updated->machine_id);
+    }
+
+    public function test_daily_schedule_supports_a_same_day_window(): void
+    {
+        Queue::fake();
+        $server = $this->linkedServer(['enabled' => false]);
+
+        $schedule = app(ServerActivationScheduleService::class)->saveDaily(
+            $server,
+            '10:00',
+            '18:00'
+        );
+
+        $this->assertTrue($server->fresh()->enabled);
+        $this->assertSame(
+            Carbon::create(2026, 8, 20, 18, 0, 0, 'Asia/Singapore')->timestamp,
+            $schedule->next_transition_at
+        );
+        $this->assertFalse($schedule->next_target_enabled);
+    }
+
+    public function test_daily_boundary_jobs_repeat_across_midnight_and_a_late_job_reconciles_current_state(): void
+    {
+        Queue::fake();
+        $server = $this->linkedServer(['enabled' => false]);
+        $schedule = ServerActivationSchedule::query()->create([
+            'server_id' => $server->id,
+            'enable_at' => 0,
+            'disable_at' => 0,
+            'schedule_type' => 'daily',
+            'timezone' => 'Asia/Singapore',
+            'enable_second' => 19 * 3600,
+            'disable_second' => 3600,
+            'revision' => 'daily-revision',
+            'next_transition_at' => Carbon::create(2026, 8, 20, 19, 0, 0, 'Asia/Singapore')->timestamp,
+            'next_target_enabled' => true,
+        ]);
+        $service = app(ServerActivationScheduleService::class);
+
+        Carbon::setTestNow(Carbon::create(2026, 8, 20, 19, 0, 0, 'Asia/Singapore'));
+        (new ApplyServerActivationScheduleJob($server->id, $schedule->revision, true))->handle($service);
+        $this->assertTrue($server->fresh()->enabled);
+        $this->assertSame(
+            Carbon::create(2026, 8, 21, 1, 0, 0, 'Asia/Singapore')->timestamp,
+            $schedule->fresh()->next_transition_at
+        );
+        $this->assertFalse($schedule->fresh()->next_target_enabled);
+        Queue::assertPushed(ApplyServerActivationScheduleJob::class, function ($job) use ($server) {
+            return $job->serverId === $server->id && $job->targetEnabled === false;
+        });
+
+        Queue::fake();
+        Carbon::setTestNow(Carbon::create(2026, 8, 21, 2, 30, 0, 'Asia/Singapore'));
+        (new ApplyServerActivationScheduleJob($server->id, $schedule->revision, false))->handle($service);
+        $this->assertFalse($server->fresh()->enabled);
+        $this->assertSame(
+            Carbon::create(2026, 8, 21, 19, 0, 0, 'Asia/Singapore')->timestamp,
+            $schedule->fresh()->next_transition_at
+        );
+        $this->assertTrue($schedule->fresh()->next_target_enabled);
+        Queue::assertPushed(ApplyServerActivationScheduleJob::class, function ($job) use ($server) {
+            return $job->serverId === $server->id && $job->targetEnabled === true;
+        });
+    }
+
+    public function test_daily_schedule_rejects_equal_or_malformed_times(): void
+    {
+        Queue::fake();
+        Sanctum::actingAs($this->user('admin-invalid-daily@example.com', true));
+        $server = $this->linkedServer();
+        $endpoint = $this->endpoint('server/manage/activationSchedule');
+
+        foreach ([
+            ['enable_time' => '19:00', 'disable_time' => '19:00'],
+            ['enable_time' => '7 PM', 'disable_time' => '01:00'],
+            ['enable_time' => '24:00', 'disable_time' => '01:00'],
+        ] as $range) {
+            $this->postJson($endpoint, [
+                'server_id' => $server->id,
+                'schedule_type' => 'daily',
+                ...$range,
+            ])->assertUnprocessable();
+        }
+
+        Queue::assertNotPushed(ApplyServerActivationScheduleJob::class);
+        $this->assertDatabaseCount('v2_server_activation_schedule', 0);
+    }
+
     public function test_admin_can_create_and_replace_a_one_time_schedule_with_two_delayed_jobs(): void
     {
         Queue::fake();
@@ -272,6 +442,45 @@ class ServerActivationScheduleTest extends TestCase
         $this->assertFalse($server->fresh()->enabled);
     }
 
+    public function test_daily_queue_dispatch_failure_rolls_back_the_schedule_and_immediate_state_reconciliation(): void
+    {
+        $server = $this->linkedServer(['enabled' => true]);
+        $dispatcher = \Mockery::mock(Dispatcher::class);
+        $dispatcher->shouldReceive('dispatch')
+            ->once()
+            ->andThrow(new \RuntimeException('queue unavailable'));
+        $this->app->instance(Dispatcher::class, $dispatcher);
+
+        try {
+            app(ServerActivationScheduleService::class)->saveDaily($server, '19:00', '01:00');
+            $this->fail('The queue failure must be visible to the caller.');
+        } catch (\RuntimeException $exception) {
+            $this->assertSame('queue unavailable', $exception->getMessage());
+        }
+
+        $this->assertDatabaseCount('v2_server_activation_schedule', 0);
+        $this->assertTrue($server->fresh()->enabled);
+    }
+
+    public function test_daily_manual_override_survives_until_the_next_boundary_and_deleting_the_schedule_keeps_it(): void
+    {
+        Queue::fake();
+        Carbon::setTestNow(Carbon::create(2026, 8, 20, 18, 0, 0, 'Asia/Singapore'));
+        $server = $this->linkedServer(['enabled' => false]);
+        $service = app(ServerActivationScheduleService::class);
+        $schedule = $service->saveDaily($server, '19:00', '01:00');
+
+        $server->forceFill(['enabled' => true])->save();
+        Carbon::setTestNow(Carbon::create(2026, 8, 20, 18, 30, 0, 'Asia/Singapore'));
+
+        $this->assertSame(1800, $service->apply($server->id, $schedule->revision, true));
+        $this->assertTrue($server->fresh()->enabled);
+
+        $this->assertTrue($service->cancel($server->id));
+        $this->assertDatabaseCount('v2_server_activation_schedule', 0);
+        $this->assertTrue($server->fresh()->enabled);
+    }
+
     public function test_failed_schedule_replacement_restores_the_previous_valid_revision(): void
     {
         $server = $this->linkedServer(['enabled' => false]);
@@ -305,6 +514,27 @@ class ServerActivationScheduleTest extends TestCase
         $this->assertSame($this->now->copy()->addMinutes(10)->timestamp, $restored->enable_at);
         $this->assertSame($this->now->copy()->addMinutes(20)->timestamp, $restored->disable_at);
         $this->assertDatabaseCount('v2_server_activation_schedule', 1);
+    }
+
+    public function test_daily_schedule_migration_rolls_back_and_reapplies(): void
+    {
+        $migration = require database_path(
+            'migrations/2026_08_20_000002_add_daily_fields_to_server_activation_schedules_table.php'
+        );
+
+        $columns = [
+            'schedule_type',
+            'timezone',
+            'enable_second',
+            'disable_second',
+            'next_transition_at',
+            'next_target_enabled',
+        ];
+        $this->assertTrue(Schema::hasColumns('v2_server_activation_schedule', $columns));
+        $migration->down();
+        $this->assertFalse(Schema::hasColumns('v2_server_activation_schedule', $columns));
+        $migration->up();
+        $this->assertTrue(Schema::hasColumns('v2_server_activation_schedule', $columns));
     }
 
     public function test_activation_schedule_migration_rolls_back_and_reapplies(): void

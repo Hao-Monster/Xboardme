@@ -11,7 +11,7 @@ use Illuminate\Validation\ValidationException;
 
 class ActivationScheduleController extends Controller
 {
-    public function fetch(Request $request)
+    public function fetch(Request $request, ServerActivationScheduleService $service)
     {
         $params = $request->validate([
             'server_id' => 'required|integer|exists:v2_server,id',
@@ -21,11 +21,30 @@ class ActivationScheduleController extends Controller
             ->where('server_id', $server->id)
             ->first();
 
-        return $this->success($schedule ? $this->serialize($schedule) : null);
+        return $this->success($schedule ? $this->serialize($schedule, $service) : null);
     }
 
     public function save(Request $request, ServerActivationScheduleService $service)
     {
+        if ($request->hasAny(['schedule_type', 'enable_time', 'disable_time'])) {
+            $params = $request->validate([
+                'server_id' => 'required|integer|exists:v2_server,id',
+                'schedule_type' => 'required|in:daily',
+                'enable_time' => 'required|date_format:H:i|different:disable_time',
+                'disable_time' => 'required|date_format:H:i|different:enable_time',
+            ]);
+            $server = $this->linkedServer((int) $params['server_id']);
+            $schedule = $service->saveDaily(
+                $server,
+                (string) $params['enable_time'],
+                (string) $params['disable_time']
+            );
+
+            return $this->success($this->serialize($schedule, $service));
+        }
+
+        // Retain the original request shape while old versioned admin assets
+        // age out after a rolling production release.
         $params = $request->validate([
             'server_id' => 'required|integer|exists:v2_server,id',
             'enable_at' => 'required|integer|min:1',
@@ -44,7 +63,7 @@ class ActivationScheduleController extends Controller
             (int) $params['disable_at']
         );
 
-        return $this->success($this->serialize($schedule));
+        return $this->success($this->serialize($schedule, $service));
     }
 
     public function drop(Request $request, ServerActivationScheduleService $service)
@@ -69,9 +88,26 @@ class ActivationScheduleController extends Controller
         return $server;
     }
 
-    /** @return array<string, int|string|null> */
-    private function serialize(ServerActivationSchedule $schedule): array
+    /** @return array<string, bool|int|string|null> */
+    private function serialize(
+        ServerActivationSchedule $schedule,
+        ServerActivationScheduleService $service
+    ): array
     {
+        if ($schedule->schedule_type === 'daily') {
+            return [
+                'server_id' => $schedule->server_id,
+                'schedule_type' => 'daily',
+                'timezone' => $schedule->timezone,
+                'enable_time' => $service->formatDailyTime($schedule->enable_second),
+                'disable_time' => $service->formatDailyTime($schedule->disable_second),
+                'revision' => $schedule->revision,
+                'next_transition_at' => $schedule->next_transition_at,
+                'next_target_enabled' => $schedule->next_target_enabled,
+                'phase' => $service->isDailyActive($schedule) ? 'active' : 'inactive',
+            ];
+        }
+
         $now = now()->timestamp;
         $phase = $now < $schedule->enable_at
             ? 'pending'
@@ -79,6 +115,7 @@ class ActivationScheduleController extends Controller
 
         return [
             'server_id' => $schedule->server_id,
+            'schedule_type' => 'once',
             'enable_at' => $schedule->enable_at,
             'disable_at' => $schedule->disable_at,
             'revision' => $schedule->revision,
