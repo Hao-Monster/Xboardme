@@ -31,7 +31,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->values();
 
         $this->assertSame(
-            'f365940edf4b63d204abfd230faa2061565601d17f2b96294b66750bf6c1609b',
+            '44df418b157ee8307248ab3fd6a1a9c7ab47908aa24f952cea4b35932b6d437d',
             hash('sha256', $routes->implode("\n")),
             sprintf('The normalized public route contract contains %d routes.', $routes->count())
         );
@@ -68,9 +68,9 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->sort()
             ->values();
 
-        $this->assertSame(52, $migrations->count());
+        $this->assertSame(53, $migrations->count());
         $this->assertSame(
-            '49f8e1ca3cf8a29bcfac415d8d1398947ba82f1fed1049ca90f022c932e18b90',
+            '72c28c4adfa0a7286c06a02e04b6c688f909807ca43d3128ac183da54488598d',
             hash('sha256', $migrations->implode("\n"))
         );
     }
@@ -208,6 +208,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             'set -euo pipefail',
             'api/v1/passport/auth/login',
             'admin-realtime-status.js',
+            'admin-node-activation-schedule.js',
             'api/v1/user/order/export',
             'api/v1/user/getSubscribe',
             'resolve-xboard-public-url.sh',
@@ -248,6 +249,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->all();
         $this->assertSame([
             '2026_08_18_000001_add_last_online_at_index_to_v2_user_table',
+            '2026_08_20_000001_create_server_activation_schedules_table',
         ], $approved);
 
         $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));
