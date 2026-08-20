@@ -278,6 +278,10 @@ jobs:
       - name: Validate deployment scripts
         run: |
           php -l .github/scripts/validate-approved-migrations.php
+          php -l .github/scripts/build-theme-asset-manifest.php
+          php -l .github/scripts/verify-theme-assets.php
+          php .github/scripts/build-theme-asset-manifest.php local "$RUNNER_TEMP/theme-release-manifest.json"
+          php .github/scripts/verify-theme-assets.php local "$RUNNER_TEMP/theme-release-manifest.json"
           bash -n deploy.sh
           bash -n init.sh
           bash -n update.sh
@@ -298,6 +302,7 @@ jobs:
           bash -n .github/scripts/smoke-admin-assets.sh
           bash -n .github/scripts/smoke-admin-assets-remote.sh
           bash -n .github/scripts/smoke-distributor-remote.sh
+          bash -n .github/scripts/smoke-distributor-mobile-browser.sh
           bash -n .github/scripts/cleanup-xboard-live-release.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
@@ -378,11 +383,14 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Update version in app.php
+      - name: Stamp immutable release and asset version
         run: |
-          VERSION=$(date '+%Y%m%d')-$(git rev-parse --short HEAD)
+          VERSION="$GITHUB_SHA"
+          test "$VERSION" = "$(printf '%s' "$VERSION" | grep -E '^[0-9a-f]{40}$')"
           sed -i "s/'version' => '.*'/'version' => '$VERSION'/g" config/app.php
-          echo "Updated version to: $VERSION"
+          grep -Fq "'version' => '$VERSION'" config/app.php
+          php .github/scripts/build-theme-asset-manifest.php "$VERSION" "$RUNNER_TEMP/theme-release-manifest.json"
+          php .github/scripts/verify-theme-assets.php "$VERSION" "$RUNNER_TEMP/theme-release-manifest.json"
 
       - name: Build and push
         id: build-and-push
@@ -398,6 +406,7 @@ jobs:
           build-args: |
             BUILDKIT_INLINE_CACHE=1
             BUILDKIT_MULTI_PLATFORM=1
+            APP_REVISION=${{ github.sha }}
           provenance: false
           outputs: type=registry,push=true
           allow: |
@@ -988,6 +997,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify candidate after switching traffic
         uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -1257,6 +1268,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify distributor deployment
         uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}

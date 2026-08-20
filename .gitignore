@@ -4,6 +4,7 @@
 /public/hot
 /public/storage
 /public/env.example.js
+/theme/Xboard/assets/release-manifest.json
 *.user.ini
 /storage/*.key
 /storage/knowledge-attachments/
