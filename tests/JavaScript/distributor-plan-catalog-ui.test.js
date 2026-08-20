@@ -95,9 +95,12 @@ test('distributor mode restores document scrolling and modal state locks it deli
 });
 
 test('mobile catalog uses compact spacing without changing desktop defaults', () => {
-  const compactStart = styles.lastIndexOf('@media (max-width:640px)');
+  const compactMarker = '@media (max-width:640px) {\n  .dist-content { padding:0 10px 10px; }';
+  const compactStart = styles.indexOf(compactMarker);
   assert.ok(compactStart >= 0, 'compact mobile breakpoint should exist');
-  const compact = styles.slice(compactStart);
+  const compactEnd = styles.indexOf('\n}', compactStart);
+  assert.ok(compactEnd > compactStart, 'compact mobile breakpoint should be complete');
+  const compact = styles.slice(compactStart, compactEnd + 2);
   assert.match(compact, /\.dist-content \{ padding:0 10px 10px; \}/);
   assert.match(compact, /\.dist-catalog-topbar \{ margin-bottom:0; padding:6px 8px;/);
   assert.match(compact, /\.dist-plan-grid \{ gap:0; \}/);
@@ -105,7 +108,7 @@ test('mobile catalog uses compact spacing without changing desktop defaults', ()
   assert.match(compact, /\.dist-plan-specs \{[^}]*margin:10px 0 0;/);
   assert.match(compact, /\.dist-period-options \{ gap:6px; \}/);
   assert.match(compact, /\.dist-plan-actions \{ padding:6px 14px; \}/);
-  assert.match(compact, /\.dist-topbar\.has-promo \{ height:64px; \}/);
+  assert.match(styles, /@media \(max-width:560px\) \{\s*\.dist-topbar\.has-promo \{ height:64px; \}/);
   assert.match(styles, /\.dist-content \{ max-width:1420px; margin:0 auto; padding:36px; \}/);
 });
 

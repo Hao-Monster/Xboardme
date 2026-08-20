@@ -104,6 +104,7 @@
     dark: localStorage.getItem('xboard_distributor_dark') === '1',
     loading: false,
     modal: null,
+    modalTrigger: null,
     poller: null,
     orderSettlementStatus: '',
     orderSearch: '',
@@ -586,6 +587,7 @@
     entitlementToggle.setAttribute('aria-expanded', String(willExpand));
     entitlementToggle.textContent = t(willExpand ? 'hideEntitlement' : 'viewEntitlement');
     entitlementRow.hidden = !willExpand;
+    entitlementToggle.closest?.('tr')?.classList.toggle('is-entitlement-open', willExpand);
   }
 
   async function renderOrders() {
@@ -616,34 +618,37 @@
         <span><dt>${t('boundDevices')}</dt><dd>${boundDeviceContent}</dd></span>
       </dl></div></td></tr>` : '';
       const qrAction = order.can_view_subscription_qr
-        ? `<button class="dist-link-btn" data-subscription-qr="${escapeHtml(order.trade_no)}">${t('viewSubscriptionQr')}</button>`
-        : `<span class="dist-action-disabled">${t('subscriptionPending')}</span>`;
+        ? `<button type="button" class="dist-link-btn" data-subscription-qr="${escapeHtml(order.trade_no)}">${t('viewSubscriptionQr')}</button>`
+        : `<span class="dist-action-disabled" role="status" aria-disabled="true">${t('subscriptionPending')}</span>`;
       const renewAction = order.can_renew
-        ? `<button class="dist-link-btn dist-renew-btn" data-renew="${escapeHtml(order.trade_no)}">${t('renew')}</button>`
+        ? `<button type="button" class="dist-link-btn dist-renew-btn" data-renew="${escapeHtml(order.trade_no)}">${t('renew')}</button>`
         : '';
       const entitlementAction = entitlement && order.is_subscription_origin
         ? `<button type="button" class="dist-link-btn dist-entitlement-toggle" data-entitlement-toggle="${entitlementTarget}" aria-expanded="false" aria-controls="${entitlementTarget}">${t('viewEntitlement')}</button>`
         : '';
+      const hasActions = Boolean(order.is_subscription_origin || entitlementAction || renewAction);
+      const actionCellClass = hasActions ? 'dist-order-action-cell has-actions' : 'dist-order-action-cell';
+      const utilityActionCount = Number(order.is_subscription_origin) + Number(Boolean(entitlementAction));
       const orderType = escapeHtml(isRenewal ? t('renew') : t('newPurchase'));
       const originalOrder = isRenewal && order.subscription_trade_no
         ? `<small>${t('originalOrder')}：${escapeHtml(order.subscription_trade_no)}</small>`
         : '';
       const rowClass = isRenewal ? 'dist-renewal-order-row' : 'dist-origin-order-row';
       return `<tr class="${rowClass}" data-subscription-trade-no="${escapeHtml(order.subscription_trade_no || order.trade_no)}">
-        <td><strong>${escapeHtml(order.trade_no)}</strong><small>${orderType}</small>${originalOrder}</td>
-        <td class="dist-order-time">${formatTime(order.created_at)}</td>
-        <td>${escapeHtml(order.customer_name || '-')}</td>
-        <td>${escapeHtml(order.plan?.name || '-')}</td><td>${escapeHtml(periodLabel(order.period))}</td>
-        <td>${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
-        <td><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
-        <td><div class="dist-order-remark">${order.remark ? escapeHtml(order.remark) : '—'}</div></td>
-        <td><div class="dist-order-actions">${order.is_subscription_origin ? qrAction : ''}${entitlementAction}${renewAction}</div></td>
+        <td class="dist-order-identity"><strong>${escapeHtml(order.trade_no)}</strong><small>${orderType}</small>${originalOrder}</td>
+        <td class="dist-order-time" data-label="${t('orderTime')}">${formatTime(order.created_at)}</td>
+        <td class="dist-order-customer" data-label="${t('customerName')}">${escapeHtml(order.customer_name || '-')}</td>
+        <td class="dist-order-plan" data-label="${t('plan')}">${escapeHtml(order.plan?.name || '-')}</td><td class="dist-order-period" data-label="${t('period')}">${escapeHtml(periodLabel(order.period))}</td>
+        <td class="dist-order-amount" data-label="${t('amount')}">${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
+        <td class="dist-order-settlement"><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
+        <td class="dist-order-remark-cell" data-label="${t('remark')}"><div class="dist-order-remark">${order.remark ? escapeHtml(order.remark) : '—'}</div></td>
+        <td class="${actionCellClass}"><div class="dist-order-actions utility-count-${utilityActionCount}">${order.is_subscription_origin ? qrAction : ''}${entitlementAction}${renewAction}</div></td>
       </tr>${entitlementRow}`;
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
       <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
-      <div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="9" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
+      <div class="dist-table-wrap dist-order-list"><table class="dist-orders-table"><thead><tr><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
+      <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="9" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
   }
 
   function periodLabel(period) {
@@ -728,6 +733,7 @@
     const png = await composeSubscriptionQrPng(payload);
     state.modal = { type: 'subscriptionQr', payload, ...png, copied: false };
     renderModal();
+    focusOrderActionModal();
   }
 
   function makeIdempotencyKey() {
@@ -758,6 +764,21 @@
       result: null,
     };
     renderModal();
+    focusOrderActionModal();
+  }
+
+  function isMobileOrderViewport() {
+    return Boolean(window.matchMedia?.('(max-width:640px), (max-width:900px) and (hover:none) and (pointer:coarse)').matches);
+  }
+
+  function isMobileOrderActionModal() {
+    const orderActionModal = state.modal && ['subscriptionQr', 'renewal'].includes(state.modal.type);
+    return Boolean(orderActionModal && isMobileOrderViewport());
+  }
+
+  function focusOrderActionModal() {
+    if (!isMobileOrderActionModal()) return;
+    document.querySelector('#dist-modal-root .dist-modal-x')?.focus({ preventScroll: true });
   }
 
   function renderModal() {
@@ -785,7 +806,7 @@
     }
     if (state.modal.type === 'subscriptionQr') {
       const modal = state.modal;
-      root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-subscription-qr-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${t('viewSubscriptionQr')}</h2>
+      root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-subscription-qr-modal" role="dialog" aria-modal="true" aria-labelledby="dist-subscription-qr-title"><button class="dist-modal-x" data-modal-action="cancel" aria-label="${t('cancel')}">×</button><h2 id="dist-subscription-qr-title">${t('viewSubscriptionQr')}</h2>
         <img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}">
         <div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>
       </section></div>`;
@@ -794,7 +815,7 @@
     if (state.modal.type === 'renewal') {
       const modal = state.modal;
       if (modal.result) {
-        root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-renewal-modal"><button class="dist-modal-x" data-modal-action="renew-done">×</button><h2>${t('renewSuccess')}</h2>
+        root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-renewal-modal" role="dialog" aria-modal="true" aria-labelledby="dist-renewal-result-title"><button class="dist-modal-x" data-modal-action="renew-done" aria-label="${t('closePopup')}">×</button><h2 id="dist-renewal-result-title">${t('renewSuccess')}</h2>
           <p class="dist-renewal-hint">${t('renewHint')}</p><dl>
           <div><dt>${t('renewOrder')}</dt><dd>${escapeHtml(modal.result.trade_no)}</dd></div>
           <div><dt>${t('amount')}</dt><dd>${money(modal.result.total_amount)}</dd></div>
@@ -805,7 +826,7 @@
       }
       const selectedPrice = Number(modal.order.plan?.[modal.period]) || 0;
       const options = modal.periods.map(([key]) => `<option value="${key}" ${modal.period === key ? 'selected' : ''}>${periodName(key)} · ${money(modal.order.plan[key])}</option>`).join('');
-      root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-renewal-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${t('renewTitle')}</h2>
+      root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-renewal-modal" role="dialog" aria-modal="true" aria-labelledby="dist-renewal-title"><button class="dist-modal-x" data-modal-action="cancel" aria-label="${t('cancel')}">×</button><h2 id="dist-renewal-title">${t('renewTitle')}</h2>
         <p class="dist-renewal-hint">${t('renewHint')}</p><dl>
         <div><dt>${t('customerName')}</dt><dd>${escapeHtml(modal.order.customer_name || '-')}</dd></div>
         <div><dt>${t('plan')}</dt><dd>${escapeHtml(modal.order.plan?.name || '-')}</dd></div>
@@ -832,8 +853,17 @@
   }
 
   function closeModal() {
+    const modalTrigger = state.modalTrigger;
     state.modal = null;
+    state.modalTrigger = null;
     renderModal();
+    if (!modalTrigger) return;
+    window.requestAnimationFrame(() => {
+      const focusTarget = modalTrigger?.isConnected
+        ? modalTrigger
+        : document.querySelector('.dist-order-action-cell.has-actions button:not(:disabled)');
+      focusTarget?.focus({ preventScroll: true });
+    });
   }
 
   function startPolling() {
@@ -881,7 +911,27 @@
       return;
     }
     const subscriptionQr = target.closest('[data-subscription-qr]');
-    if (subscriptionQr) { try { await openSubscriptionQr(subscriptionQr.dataset.subscriptionQr); } catch (e) { toast(e.message, 'error'); } return; }
+    if (subscriptionQr) {
+      const mobileOrderAction = isMobileOrderViewport();
+      if (mobileOrderAction && subscriptionQr.disabled) return;
+      if (mobileOrderAction) {
+        state.modalTrigger = subscriptionQr;
+        subscriptionQr.disabled = true;
+        subscriptionQr.setAttribute('aria-busy', 'true');
+      }
+      try {
+        await openSubscriptionQr(subscriptionQr.dataset.subscriptionQr);
+      } catch (e) {
+        if (mobileOrderAction) state.modalTrigger = null;
+        toast(e.message, 'error');
+      } finally {
+        if (mobileOrderAction && subscriptionQr.isConnected) {
+          subscriptionQr.disabled = false;
+          subscriptionQr.removeAttribute('aria-busy');
+        }
+      }
+      return;
+    }
     const entitlementToggle = target.closest('[data-entitlement-toggle]');
     if (entitlementToggle) {
       const entitlementRow = document.getElementById(entitlementToggle.dataset.entitlementToggle);
@@ -890,7 +940,12 @@
       return;
     }
     const renew = target.closest('[data-renew]');
-    if (renew) { try { openRenewal(renew.dataset.renew); } catch (e) { toast(e.message, 'error'); } return; }
+    if (renew) {
+      const mobileOrderAction = isMobileOrderViewport();
+      if (mobileOrderAction) state.modalTrigger = renew;
+      try { openRenewal(renew.dataset.renew); } catch (e) { if (mobileOrderAction) state.modalTrigger = null; toast(e.message, 'error'); }
+      return;
+    }
     const knowledge = target.closest('[data-knowledge-id]');
     if (knowledge) { try { await openKnowledge(knowledge.dataset.knowledgeId); } catch (e) { toast(e.message, 'error'); } return; }
     const copy = target.closest('[data-copy]');
@@ -1044,6 +1099,7 @@
   document.addEventListener('click', (event) => {
     if (!state.active) return;
     if (event.target.closest('[data-modal-action]')) handleModalAction(event.target);
+    else if (event.target.classList.contains('dist-modal-backdrop') && isMobileOrderActionModal()) closeModal();
     else handleAction(event.target);
   });
   document.addEventListener('change', (event) => {
@@ -1057,7 +1113,13 @@
     }
   });
   document.addEventListener('keydown', (event) => {
-    if (!state.active || event.key !== 'Enter') return;
+    if (!state.active) return;
+    if (event.key === 'Escape' && isMobileOrderActionModal()) {
+      event.preventDefault();
+      closeModal();
+      return;
+    }
+    if (event.key !== 'Enter') return;
     if (event.target.id === 'dist-order-search') {
       event.preventDefault();
       state.orderSearch = event.target.value.trim();
