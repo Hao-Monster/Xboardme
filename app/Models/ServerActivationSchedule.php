@@ -13,8 +13,12 @@ class ServerActivationSchedule extends Model
 
     protected $casts = [
         'server_id' => 'integer',
+        'enable_second' => 'integer',
+        'disable_second' => 'integer',
         'enable_at' => 'integer',
         'disable_at' => 'integer',
+        'next_transition_at' => 'integer',
+        'next_target_enabled' => 'boolean',
         'enabled_applied_at' => 'integer',
         'disabled_applied_at' => 'integer',
         'created_at' => 'timestamp',

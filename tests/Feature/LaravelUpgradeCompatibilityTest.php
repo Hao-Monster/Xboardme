@@ -68,9 +68,9 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->sort()
             ->values();
 
-        $this->assertSame(55, $migrations->count());
+        $this->assertSame(56, $migrations->count());
         $this->assertSame(
-            '7971986a636dbb13fd156b790708116cd632a32b546d20b0716bcbe0fa0af28b',
+            'b4be0128f11cbe07ad3fdf1c7085ba8adc1dad5fa3e5a9b9c5db880144fa6bae',
             hash('sha256', $migrations->implode("\n"))
         );
     }
@@ -250,6 +250,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $this->assertSame([
             '2026_08_18_000001_add_last_online_at_index_to_v2_user_table',
             '2026_08_20_000001_create_server_activation_schedules_table',
+            '2026_08_20_000002_add_daily_fields_to_server_activation_schedules_table',
             '2026_08_21_000001_create_server_report_receipts_table',
             '2026_08_21_000002_create_server_machine_credentials_tables',
         ], $approved);
