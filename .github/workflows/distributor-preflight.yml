@@ -18,6 +18,9 @@ jobs:
       - name: Checkout preflight script
         uses: actions/checkout@v7
 
+      - name: Validate scheduler reaper rollout guard
+        run: bash .github/scripts/test-preflight-scheduler-reaper.sh
+
       - name: Trust deployment host key
         env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -36,7 +39,8 @@ jobs:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.sha }}
         run: |
           bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            'bash -s' < .github/scripts/preflight-xboard-compose.sh
+            "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s" < .github/scripts/preflight-xboard-compose.sh

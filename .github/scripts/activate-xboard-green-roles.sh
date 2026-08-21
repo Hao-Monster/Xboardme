@@ -293,6 +293,7 @@ docker run -d \
   --label codex.xboard.release=true \
   --label "codex.xboard.release.run=$RELEASE_ID" \
   --label codex.xboard.release.role=scheduler \
+  --init \
   --restart unless-stopped \
   --memory 256m \
   --cpus 1 \
@@ -320,6 +321,67 @@ done
 if ((scheduler_ready != 1)); then
   docker logs --tail 100 "$scheduler_name" >&2 || true
   echo 'RELEASE_ROLES_FAIL=new_scheduler_unhealthy'
+  exit 1
+fi
+
+scheduler_init=$(docker inspect -f '{{.HostConfig.Init}}' "$scheduler_name")
+if [[ "$scheduler_init" != true ]]; then
+  echo 'RELEASE_ROLES_FAIL=scheduler_init_disabled'
+  exit 1
+fi
+scheduler_pid1=$(docker exec "$scheduler_name" sh -c 'cat /proc/1/comm')
+if [[ "$scheduler_pid1" == php ]]; then
+  echo 'RELEASE_ROLES_FAIL=scheduler_pid1_not_init'
+  exit 1
+fi
+
+scheduler_zombie_count() {
+  docker exec "$scheduler_name" sh -c '
+    count=0
+    for status in /proc/[0-9]*/status; do
+      [ -r "$status" ] || continue
+      if grep -q "^State:[[:space:]]*Z" "$status"; then
+        count=$((count + 1))
+      fi
+    done
+    printf "%s\n" "$count"
+  '
+}
+
+scheduler_last_check() {
+  docker exec "$scheduler_name" php -r '
+  require "/www/vendor/autoload.php";
+  $app = require "/www/bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  $value = Illuminate\Support\Facades\Cache::get(App\Utils\CacheKey::get("SCHEDULE_LAST_CHECK_AT", null));
+  echo is_numeric($value) ? (string) $value : "0";
+  '
+}
+
+scheduler_initial_check=$(scheduler_last_check)
+scheduler_reaper_observation_seconds=185
+scheduler_observation_deadline=$((SECONDS + scheduler_reaper_observation_seconds))
+echo "RELEASE_ROLES_CHECK=scheduler_zombie_reaping observation_seconds=$scheduler_reaper_observation_seconds"
+while ((SECONDS < scheduler_observation_deadline)); do
+  scheduler_zombies=$(scheduler_zombie_count)
+  if [[ ! "$scheduler_zombies" =~ ^[0-9]+$ ]] || ((scheduler_zombies != 0)); then
+    echo "RELEASE_ROLES_FAIL=scheduler_zombies_detected count=${scheduler_zombies:-unknown}"
+    exit 1
+  fi
+  sleep 5
+done
+scheduler_final_check=$(scheduler_last_check)
+scheduler_restart_count=$(docker inspect -f '{{.RestartCount}}' "$scheduler_name")
+scheduler_oom_kills=$(docker exec "$scheduler_name" sh -c \
+  "awk '\$1 == \"oom_kill\" {print \$2}' /sys/fs/cgroup/memory.events" 2>/dev/null || true)
+if [[ ! "$scheduler_initial_check" =~ ^[0-9]+$ ]] ||
+   [[ ! "$scheduler_final_check" =~ ^[0-9]+$ ]] ||
+   ((scheduler_final_check <= scheduler_initial_check)); then
+  echo "RELEASE_ROLES_FAIL=scheduler_did_not_tick initial=${scheduler_initial_check:-unknown} final=${scheduler_final_check:-unknown}"
+  exit 1
+fi
+if [[ "$scheduler_restart_count" != 0 || "$scheduler_oom_kills" != 0 ]]; then
+  echo "RELEASE_ROLES_FAIL=scheduler_unstable restarts=${scheduler_restart_count:-unknown} oom_kills=${scheduler_oom_kills:-unknown}"
   exit 1
 fi
 
@@ -353,4 +415,4 @@ set_state ROLE_STATE green
 set_state ROLES_ACTIVATED_AT "$(date -u +%FT%TZ)"
 
 trap - EXIT
-echo "RELEASE_ROLES=PASS id=$RELEASE_ID mode=$role_mode transition=$role_transition horizon=$horizon_name scheduler=$scheduler_name"
+echo "RELEASE_ROLES=PASS id=$RELEASE_ID mode=$role_mode transition=$role_transition horizon=$horizon_name scheduler=$scheduler_name scheduler_init=$scheduler_init scheduler_zombies=$scheduler_zombies"

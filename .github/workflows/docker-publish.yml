@@ -300,6 +300,7 @@ jobs:
           bash -n .github/scripts/ssh-askpass.sh
           bash -n .github/scripts/ssh-with-password.sh
           bash -n .github/scripts/test-ssh-with-password.sh
+          bash -n .github/scripts/test-preflight-scheduler-reaper.sh
           bash -n .github/scripts/smoke-admin-assets.sh
           bash -n .github/scripts/smoke-admin-assets-remote.sh
           bash -n .github/scripts/smoke-distributor-remote.sh
@@ -325,6 +326,7 @@ jobs:
           fi
           test "$unknown_output" = 'PREFLIGHT_FAIL=redis_cluster_topology_unknown'
           bash .github/scripts/test-ssh-with-password.sh
+          bash .github/scripts/test-preflight-scheduler-reaper.sh
 
   build:
     if: ${{ github.event_name != 'pull_request' }}
