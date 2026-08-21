@@ -1,6 +1,25 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+check_redis_cluster_support() {
+  case "${1:-}" in
+    0) return 0 ;;
+    1)
+      echo 'PREFLIGHT_FAIL=redis_cluster_not_supported'
+      return 1
+      ;;
+    *)
+      echo 'PREFLIGHT_FAIL=redis_cluster_topology_unknown'
+      return 1
+      ;;
+  esac
+}
+
+if [[ "${XBOARD_PREFLIGHT_SELF_TEST:-}" == redis-topology ]]; then
+  check_redis_cluster_support "${XBOARD_REDIS_CLUSTER_ENABLED:-}"
+  exit
+fi
+
 command -v docker >/dev/null
 command -v caddy >/dev/null
 docker info >/dev/null
@@ -137,6 +156,8 @@ redis_version=$(docker exec "$primary" sh -lc \
 redis_persistence=$(docker exec "$primary" sh -lc \
   'redis-cli -s /data/redis.sock INFO persistence 2>/dev/null | sed -n "s/^rdb_last_bgsave_status:\(.*\)\r$/\1/p"' || true)
 redis_ping=$(docker exec "$primary" redis-cli -s /data/redis.sock ping 2>/dev/null || true)
+redis_cluster_enabled=$(docker exec "$primary" sh -lc \
+  'redis-cli -s /data/redis.sock INFO cluster 2>/dev/null | tr -d "\r" | sed -n "s/^cluster_enabled://p"' || true)
 
 plugin_user_php_files=$(docker exec "$primary" sh -lc 'find /www/plugins -type f -name "*.php" 2>/dev/null | wc -l')
 plugin_core_php_files=$(docker exec "$primary" sh -lc 'find /www/plugins-core -type f -name "*.php" 2>/dev/null | wc -l')
@@ -184,6 +205,7 @@ echo "PREFLIGHT_SQLITE_JOURNAL_MODE=$sqlite_journal_mode"
 echo "PREFLIGHT_SQLITE_INTEGRITY=$sqlite_integrity"
 echo "PREFLIGHT_REDIS_VERSION=${redis_version:-unavailable}"
 echo "PREFLIGHT_REDIS_LAST_BGSAVE=${redis_persistence:-unavailable}"
+echo "PREFLIGHT_REDIS_CLUSTER_ENABLED=${redis_cluster_enabled:-unavailable}"
 echo "PREFLIGHT_PLUGIN_CORE_PHP_FILES=$plugin_core_php_files"
 echo "PREFLIGHT_PLUGIN_USER_PHP_FILES=$plugin_user_php_files"
 echo "PREFLIGHT_PLUGIN_SYNTAX=$plugin_syntax"
@@ -227,6 +249,9 @@ if [[ "$db_persistent" != true || "$sqlite_journal_mode" != wal || "$sqlite_inte
 fi
 if [[ "$redis_ping" != PONG || "$redis_persistence" != ok ]]; then
   echo 'PREFLIGHT_FAIL=redis_unhealthy_or_not_persisted'
+  failures=1
+fi
+if ! check_redis_cluster_support "$redis_cluster_enabled"; then
   failures=1
 fi
 if [[ "$plugin_syntax" != pass ]]; then

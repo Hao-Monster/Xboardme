@@ -44,6 +44,7 @@ class Kernel extends ConsoleKernel
         $schedule->command('horizon:snapshot')->everyFiveMinutes()->onOneServer();
         // cleanup stale online_count (GC for Redis TTL expiration)
         $schedule->command('cleanup:online-status')->everyFiveMinutes()->onOneServer();
+        $schedule->command('server-report-receipts:prune')->dailyAt('1:30')->onOneServer();
         // cleanup expired knowledge attachment drafts and trash
         $schedule->command('knowledge-attachments:cleanup')->hourly()->onOneServer()->withoutOverlapping(60);
         // backup Timing

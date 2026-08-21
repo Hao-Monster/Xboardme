@@ -2,7 +2,10 @@
 
 namespace App\Providers;
 
+use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Route;
 
 class RouteServiceProvider extends ServiceProvider
@@ -23,8 +26,34 @@ class RouteServiceProvider extends ServiceProvider
      */
     public function boot()
     {
+        $this->configureServerRateLimiting();
+
         // HTTPS scheme is forced per-request via middleware (Octane-safe).
         parent::boot();
+    }
+
+    private function configureServerRateLimiting(): void
+    {
+        foreach (['handshake', 'pull', 'report', 'machine'] as $profile) {
+            RateLimiter::for("server-{$profile}", function (Request $request) use ($profile) {
+                $ip = $request->ip() ?: 'unknown';
+                $peer = (string) ($request->server('REMOTE_ADDR') ?: 'unknown');
+                $credential = hash('sha256', implode('|', [
+                    $request->input('machine_id', ''),
+                    $request->input('node_id', ''),
+                    (string) ($request->bearerToken() ?: $request->input('token', '')),
+                ]));
+
+                return [
+                    Limit::perMinute(max(1, (int) config("server_security.rate_limits.{$profile}.per_ip")))
+                        ->by("server:{$profile}:ip:{$ip}"),
+                    Limit::perMinute(max(1, (int) config("server_security.rate_limits.{$profile}.per_peer")))
+                        ->by("server:{$profile}:peer:{$peer}"),
+                    Limit::perMinute(max(1, (int) config("server_security.rate_limits.{$profile}.per_credential")))
+                        ->by("server:{$profile}:credential:{$credential}"),
+                ];
+            });
+        }
     }
 
     /**

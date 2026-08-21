@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly DEFAULT_IMAGE="ghcr.io/fenghaoyun-monster/xboardme:distributor"
+readonly DEFAULT_IMAGE="ghcr.io/hao-monster/xboardme:distributor"
 readonly DEFAULT_INSTALL_DIR="/opt/xboardme"
 readonly DEFAULT_PORT="7001"
 readonly DEFAULT_ADMIN_ACCOUNT="admin@demo.com"

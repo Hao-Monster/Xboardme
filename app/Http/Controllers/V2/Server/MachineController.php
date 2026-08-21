@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
 use App\Services\ServerService;
+use App\Services\ServerMachineCredentialService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -14,6 +15,24 @@ use Illuminate\Http\Request;
  */
 class MachineController extends Controller
 {
+    public function enroll(Request $request, ServerMachineCredentialService $credentialService): JsonResponse
+    {
+        $data = $request->validate([
+            'machine_id' => 'required|integer|min:1',
+            'enrollment_code' => ['required', 'string', 'size:48', 'regex:/^[A-Za-z0-9]+$/'],
+        ]);
+
+        $token = $credentialService->exchangeEnrollment(
+            (int) $data['machine_id'],
+            $data['enrollment_code']
+        );
+
+        return $this->success([
+            'token' => $token,
+            'token_type' => 'Bearer',
+        ]);
+    }
+
     /**
      * get nodes list for machine
      */
@@ -117,18 +136,24 @@ class MachineController extends Controller
         return response()->json(['data' => true]);
     }
 
-    private function authenticateMachine(Request $request): ServerMachine
+    private function authenticateMachine(
+        Request $request,
+        ?ServerMachineCredentialService $credentialService = null
+    ): ServerMachine
     {
+        $token = $request->bearerToken() ?: $request->input('token');
+        $request->merge(['token' => $token]);
         $request->validate([
             'machine_id' => 'required|integer',
             'token' => 'required|string',
         ]);
 
-        $machine = ServerMachine::where('id', $request->input('machine_id'))
-            ->where('token', $request->input('token'))
-            ->first();
+        $machine = ($credentialService ?? app(ServerMachineCredentialService::class))->authenticate(
+            (int) $request->input('machine_id'),
+            (string) $token
+        );
 
-        if (!$machine || !$machine->is_active) {
+        if (!$machine) {
             abort(403, 'Machine not found or disabled');
         }
 

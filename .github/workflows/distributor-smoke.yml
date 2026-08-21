@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: distributor-server
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify distributor login and route isolation
         uses: ./.github/actions/distributor-smoke

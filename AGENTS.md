@@ -2,8 +2,8 @@
 
 ## Repository and branches
 
-- The writable GitHub repository is `FengHaoyun-MONSTER/Xboardme`. Always pass
-  `-R FengHaoyun-MONSTER/Xboardme` to `gh` commands that can read or mutate
+- The writable GitHub repository is `Hao-Monster/Xboardme`. Always pass
+  `-R Hao-Monster/Xboardme` to `gh` commands that can read or mutate
   repository state.
 - `origin/codex/distributor` is the default and production branch.
 - `origin/master` is an upstream-tracking baseline, not a production branch.

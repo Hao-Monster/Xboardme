@@ -26,7 +26,7 @@ Xboard is a modern panel system built on Laravel 13, focusing on providing a cle
 适用于 Linux `amd64` / `arm64` 服务器。请先安装 Docker 与 Docker Compose，然后执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/FengHaoyun-MONSTER/Xboardme/codex/distributor/deploy.sh \
+curl -fsSL https://raw.githubusercontent.com/Hao-Monster/Xboardme/codex/distributor/deploy.sh \
   -o /tmp/xboardme-deploy.sh && \
 sudo bash /tmp/xboardme-deploy.sh
 ```
@@ -35,7 +35,7 @@ sudo bash /tmp/xboardme-deploy.sh
 `admin@demo.com` 初始化，并输出随机管理员密码与管理入口，请立即保存。
 
 同一条命令可以安全地重复执行。再次执行时，脚本会先备份数据库，再拉取
-`ghcr.io/fenghaoyun-monster/xboardme:distributor` 的最新构建并完成数据库迁移，
+`ghcr.io/hao-monster/xboardme:distributor` 的最新构建并完成数据库迁移，
 因此部署的是 `codex/distributor` 分支最新通过 CI 的代码。
 
 可选配置：
@@ -45,7 +45,7 @@ sudo env \
   XBOARDME_DIR=/opt/xboardme \
   XBOARDME_PORT=7001 \
   ADMIN_ACCOUNT=admin@example.com \
-  XBOARDME_IMAGE=ghcr.io/fenghaoyun-monster/xboardme:distributor \
+  XBOARDME_IMAGE=ghcr.io/hao-monster/xboardme:distributor \
   bash /tmp/xboardme-deploy.sh
 ```
 

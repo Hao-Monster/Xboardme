@@ -8,6 +8,7 @@ use App\Models\Server;
 use App\Models\ServerMachine;
 use App\Models\ServerMachineLoadHistory;
 use App\Services\NodeSyncService;
+use App\Services\ServerMachineCredentialService;
 use Illuminate\Http\Request;
 
 class MachineController extends Controller
@@ -69,10 +70,15 @@ class MachineController extends Controller
             'token' => ServerMachine::generateToken(),
         ]);
 
+        $enrollment = app(ServerMachineCredentialService::class)
+            ->createEnrollment($machine, revokeExisting: true);
+
         return $this->success([
             'id' => $machine->id,
-            'token' => $machine->token,
-            'install_command' => $this->buildInstallCommand($request, $machine),
+            'token' => $enrollment->plainTextCode,
+            'token_type' => 'enrollment_code',
+            'expires_at' => $enrollment->expiresAt,
+            'install_command' => $this->buildInstallCommand($request, $machine, $enrollment->plainTextCode),
         ]);
     }
 
@@ -86,10 +92,15 @@ class MachineController extends Controller
         ]);
 
         $machine = ServerMachine::find($params['id']);
-        $token = ServerMachine::generateToken();
-        $machine->update(['token' => $token]);
+        $enrollment = app(ServerMachineCredentialService::class)
+            ->createEnrollment($machine, revokeExisting: true);
 
-        return $this->success(['token' => $token]);
+        return $this->success([
+            'token' => $enrollment->plainTextCode,
+            'token_type' => 'enrollment_code',
+            'expires_at' => $enrollment->expiresAt,
+            'install_command' => $this->buildInstallCommand($request, $machine, $enrollment->plainTextCode),
+        ]);
     }
 
     /**
@@ -103,7 +114,14 @@ class MachineController extends Controller
 
         $machine = ServerMachine::find($params['id']);
 
-        return $this->success(['token' => $machine->token]);
+        $enrollment = app(ServerMachineCredentialService::class)
+            ->createEnrollment($machine, revokeExisting: false);
+
+        return $this->success([
+            'token' => $enrollment->plainTextCode,
+            'token_type' => 'enrollment_code',
+            'expires_at' => $enrollment->expiresAt,
+        ]);
     }
 
     /**
@@ -117,8 +135,12 @@ class MachineController extends Controller
 
         $machine = ServerMachine::find($params['id']);
 
+        $enrollment = app(ServerMachineCredentialService::class)
+            ->createEnrollment($machine, revokeExisting: false);
+
         return $this->success([
-            'command' => $this->buildInstallCommand($request, $machine),
+            'command' => $this->buildInstallCommand($request, $machine, $enrollment->plainTextCode),
+            'expires_at' => $enrollment->expiresAt,
         ]);
     }
 
@@ -199,17 +221,26 @@ class MachineController extends Controller
         return $this->success($history);
     }
 
-    private function buildInstallCommand(Request $request, ServerMachine $machine): string
+    private function buildInstallCommand(
+        Request $request,
+        ServerMachine $machine,
+        string $enrollmentCode
+    ): string
     {
         $panelUrl = rtrim((string) (admin_setting('app_url') ?: $request->getSchemeAndHttpHost()), '/');
-        $installerUrl = 'https://raw.githubusercontent.com/cedar2025/xboard-node/dev/install.sh';
+        $releaseVersion = (string) config('server_security.node_release_version', 'v1.13');
 
         return sprintf(
-            'curl -fsSL %s | sudo bash -s -- --mode machine --panel %s --token %s --machine-id %d',
-            $installerUrl,
-            escapeshellarg($panelUrl),
-            escapeshellarg($machine->token),
+            '(set -Eeuo pipefail; XBOARD_NODE_VERSION=%s; XBOARD_NODE_RELEASE_DIR="$(mktemp -d)"; trap \'unset XBOARD_NODE_RELEASE_TOKEN; rm -rf "$XBOARD_NODE_RELEASE_DIR"\' EXIT; gh release download "$XBOARD_NODE_VERSION" -R Hao-Monster/Xboard-Node --pattern install.sh --pattern SHA256SUMS --dir "$XBOARD_NODE_RELEASE_DIR"; (cd "$XBOARD_NODE_RELEASE_DIR" && grep " install.sh$" SHA256SUMS | sha256sum -c -); XBOARD_NODE_RELEASE_TOKEN="$(gh auth token)"; export XBOARD_NODE_RELEASE_TOKEN; sudo --preserve-env=XBOARD_NODE_RELEASE_TOKEN bash "$XBOARD_NODE_RELEASE_DIR/install.sh" --version "$XBOARD_NODE_VERSION" --mode machine --panel %s --enrollment-code %s --machine-id %d)',
+            $this->quoteShellArgument($releaseVersion),
+            $this->quoteShellArgument($panelUrl),
+            $this->quoteShellArgument($enrollmentCode),
             $machine->id
         );
+    }
+
+    private function quoteShellArgument(string $value): string
+    {
+        return "'" . str_replace("'", "'\"'\"'", $value) . "'";
     }
 }

@@ -114,7 +114,7 @@ class UserService
         return true;
     }
 
-    public function trafficFetch(Server $server, string $protocol, array $data)
+    public function trafficFetch(Server $server, string $protocol, array $data, ?string $reportId = null)
     {
         $server->rate = $server->getCurrentRate();
         $server = $server->toArray();
@@ -124,10 +124,10 @@ class UserService
         list($server, $protocol, $data) = HookManager::filter('traffic.before_process', [$server, $protocol, $data]);
 
         $timestamp = strtotime(date('Y-m-d'));
-        collect($data)->chunk(1000)->each(function ($chunk) use ($timestamp, $server, $protocol) {
-            TrafficFetchJob::dispatch($server, $chunk->toArray(), $protocol, $timestamp);
-            StatUserJob::dispatch($server, $chunk->toArray(), $protocol, 'd');
-            StatServerJob::dispatch($server, $chunk->toArray(), $protocol, 'd');
+        collect($data)->chunk(1000)->each(function ($chunk, $chunkIndex) use ($timestamp, $server, $protocol, $reportId) {
+            TrafficFetchJob::dispatch($server, $chunk->toArray(), $protocol, $timestamp, $reportId, $chunkIndex);
+            StatUserJob::dispatch($server, $chunk->toArray(), $protocol, 'd', $reportId, $chunkIndex);
+            StatServerJob::dispatch($server, $chunk->toArray(), $protocol, 'd', $reportId, $chunkIndex);
         });
     }
 

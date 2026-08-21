@@ -4,8 +4,8 @@ namespace App\Http\Middleware;
 
 use App\Exceptions\ApiException;
 use App\Models\Server as ServerModel;
-use App\Models\ServerMachine;
 use App\Services\ServerService;
+use App\Services\ServerMachineCredentialService;
 use Closure;
 use Illuminate\Http\Request;
 
@@ -16,6 +16,10 @@ class ServerV2
 {
     public function handle(Request $request, Closure $next)
     {
+        if (!$request->filled('token') && $request->bearerToken()) {
+            $request->merge(['token' => $request->bearerToken()]);
+        }
+
         if ($request->filled('machine_id')) {
             $this->authenticateByMachine($request);
         } else {
@@ -64,16 +68,13 @@ class ServerV2
             'node_id' => $isHandshake ? 'nullable|integer' : 'required|integer',
         ]);
 
-        $machine = ServerMachine::where('id', $request->input('machine_id'))
-            ->where('token', $request->input('token'))
-            ->first();
+        $machine = app(ServerMachineCredentialService::class)->authenticate(
+            (int) $request->input('machine_id'),
+            (string) $request->input('token')
+        );
 
         if (!$machine) {
             throw new ApiException('Machine not found or invalid token', 401);
-        }
-
-        if (!$machine->is_active) {
-            throw new ApiException('Machine is disabled', 403);
         }
 
         $nodeId = (int) $request->input('node_id');

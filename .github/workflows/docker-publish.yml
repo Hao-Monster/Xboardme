@@ -102,7 +102,7 @@ jobs:
 
     steps:
       - name: Checkout staging cleanup script
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate requested stage identifier
         env:
@@ -172,7 +172,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -307,6 +307,23 @@ jobs:
           bash -n .github/scripts/cleanup-xboard-live-release.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
+          XBOARD_PREFLIGHT_SELF_TEST=redis-topology \
+            XBOARD_REDIS_CLUSTER_ENABLED=0 \
+            bash .github/scripts/preflight-xboard-compose.sh
+          if unsupported_output=$(XBOARD_PREFLIGHT_SELF_TEST=redis-topology \
+            XBOARD_REDIS_CLUSTER_ENABLED=1 \
+            bash .github/scripts/preflight-xboard-compose.sh); then
+            echo 'Redis Cluster topology guard unexpectedly passed.' >&2
+            exit 1
+          fi
+          test "$unsupported_output" = 'PREFLIGHT_FAIL=redis_cluster_not_supported'
+          if unknown_output=$(XBOARD_PREFLIGHT_SELF_TEST=redis-topology \
+            XBOARD_REDIS_CLUSTER_ENABLED=unknown \
+            bash .github/scripts/preflight-xboard-compose.sh); then
+            echo 'Unknown Redis topology guard unexpectedly passed.' >&2
+            exit 1
+          fi
+          test "$unknown_output" = 'PREFLIGHT_FAIL=redis_cluster_topology_unknown'
           bash .github/scripts/test-ssh-with-password.sh
 
   build:
@@ -323,7 +340,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           submodules: recursive
@@ -442,7 +459,7 @@ jobs:
           test "$APPROVED_STAGE_RUN_ID" = "$(printf '%s' "$APPROVED_STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
 
       - name: Checkout admin asset deployment script
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Trust deployment host key
         env:
@@ -481,7 +498,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Trust deployment host key
         env:
@@ -524,7 +541,7 @@ jobs:
         run: test "$HOTFIX_ID" = "$(printf '%s' "$HOTFIX_ID" | grep -E '^[0-9]+-[0-9]+$')"
 
       - name: Checkout admin asset rollback script
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Trust deployment host key
         env:
@@ -575,7 +592,7 @@ jobs:
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
 
       - name: Checkout deployment script
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Trust deployment host key
         env:
@@ -651,7 +668,7 @@ jobs:
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
 
       - name: Checkout staging script
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Trust deployment host key
         env:
@@ -714,7 +731,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Trust deployment host key
         env:
@@ -753,7 +770,7 @@ jobs:
 
     steps:
       - name: Checkout staging cleanup script
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Trust deployment host key
         env:
@@ -805,7 +822,7 @@ jobs:
           test "$APPROVED_STAGE_RUN_ID" = "$(printf '%s' "$APPROVED_STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
 
       - name: Checkout live release script
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Trust deployment host key
         env:
@@ -868,7 +885,7 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Verify prepared live candidate without switching traffic
         uses: ./.github/actions/distributor-smoke
@@ -897,7 +914,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -929,7 +946,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify candidate before switching traffic
         uses: ./.github/actions/distributor-smoke
         env:
@@ -962,7 +979,7 @@ jobs:
           test "${#EXPECTED_SHA}" -eq 40
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -995,7 +1012,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify candidate after switching traffic
         uses: ./.github/actions/distributor-smoke
         with:
@@ -1026,7 +1043,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -1059,7 +1076,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify blue after automatic rollback
         uses: ./.github/actions/distributor-smoke
         with:
@@ -1097,7 +1114,7 @@ jobs:
           test "${#RELEASE_EXPECTED_SHA}" -eq 40
           test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -1142,7 +1159,7 @@ jobs:
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -1176,7 +1193,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -1209,7 +1226,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify blue after manual rollback
         uses: ./.github/actions/distributor-smoke
         with:
@@ -1235,7 +1252,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -1266,7 +1283,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Verify distributor deployment
         uses: ./.github/actions/distributor-smoke
         with:

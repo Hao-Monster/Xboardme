@@ -8,6 +8,7 @@ use App\Jobs\TrafficFetchJob;
 use App\Support\SqliteImmediateTransaction;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use PDO;
 use PDOException;
 use Tests\TestCase;
@@ -146,6 +147,74 @@ class SqliteTrafficJobAtomicityTest extends TestCase
 
         $this->assertDatabaseHas('v2_user', ['id' => $firstUser, 'u' => 0, 'd' => 0]);
         $this->assertDatabaseHas('v2_user', ['id' => $secondUser, 'u' => 0, 'd' => 0]);
+    }
+
+    public function test_report_jobs_apply_each_report_chunk_exactly_once(): void
+    {
+        Redis::shouldReceive('sadd')->twice();
+
+        $userId = $this->createUser('idempotent@example.test');
+        $serverId = $this->createServer();
+        $reportId = fake()->uuid();
+        $server = ['id' => $serverId, 'name' => 'Idempotent Node', 'rate' => 1];
+        $traffic = [$userId => [10, 20]];
+
+        $trafficJob = new TrafficFetchJob($server, $traffic, 'shadowsocks', time(), $reportId, 0);
+        $statUserJob = new StatUserJob($server, $traffic, 'shadowsocks', 'd', $reportId, 0);
+        $statServerJob = new StatServerJob($server, $traffic, 'shadowsocks', 'd', $reportId, 0);
+
+        $trafficJob->handle();
+        $trafficJob->handle();
+        $statUserJob->handle();
+        $statUserJob->handle();
+        $statServerJob->handle();
+        $statServerJob->handle();
+
+        $this->assertDatabaseHas('v2_user', [
+            'id' => $userId,
+            'u' => 10,
+            'd' => 20,
+        ]);
+        $this->assertDatabaseHas('v2_stat_user', [
+            'user_id' => $userId,
+            'u' => 10,
+            'd' => 20,
+        ]);
+        $this->assertDatabaseHas('v2_stat_server', [
+            'server_id' => $serverId,
+            'u' => 10,
+            'd' => 20,
+        ]);
+        $this->assertDatabaseHas('v2_server', [
+            'id' => $serverId,
+            'u' => 10,
+            'd' => 20,
+        ]);
+        $this->assertDatabaseCount('v2_server_report_receipt', 3);
+    }
+
+    public function test_traffic_fetch_batches_user_increments_instead_of_one_update_per_user(): void
+    {
+        Redis::shouldReceive('sadd')->once();
+        $firstUser = $this->createUser('batch-first@example.test');
+        $secondUser = $this->createUser('batch-second@example.test');
+        $userUpdateQueries = 0;
+        DB::listen(function ($query) use (&$userUpdateQueries): void {
+            if (preg_match('/^update\s+["`]?v2_user["`]?\s+set/i', trim($query->sql))) {
+                $userUpdateQueries++;
+            }
+        });
+
+        (new TrafficFetchJob(
+            ['id' => 1, 'name' => 'Batch Node', 'rate' => 2],
+            [$firstUser => [10, 20], $secondUser => [30, 40]],
+            'shadowsocks',
+            time()
+        ))->handle();
+
+        $this->assertSame(1, $userUpdateQueries);
+        $this->assertDatabaseHas('v2_user', ['id' => $firstUser, 'u' => 20, 'd' => 40]);
+        $this->assertDatabaseHas('v2_user', ['id' => $secondUser, 'u' => 60, 'd' => 80]);
     }
 
     private function createUser(string $email): int

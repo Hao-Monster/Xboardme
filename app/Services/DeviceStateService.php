@@ -9,17 +9,45 @@ use Illuminate\Support\Facades\Redis;
 class DeviceStateService
 {
     private const PREFIX = 'user_devices:';
+    private const NODE_USERS_PREFIX = 'node_device_users:';
+    private const DB_PENDING_KEY = 'device:db_update_pending';
     public const ONLINE_WINDOW_SECONDS = 300;
-    private const DB_THROTTLE = 10;             // update db throttle
+    private const DB_THROTTLE = 10;
 
-    /**
-     * 移除 Redis key 的前缀
-     */
-    private function removeRedisPrefix(string $key): string
-    {
-        $prefix = config('database.redis.options.prefix', '');
-        return $prefix ? substr($key, strlen($prefix)) : $key;
-    }
+    private const REPLACE_NODE_DEVICES_SCRIPT = <<<'LUA'
+local userKey = KEYS[1]
+local nodeUsersKey = KEYS[2]
+local fieldPrefix = ARGV[1]
+local timestamp = ARGV[2]
+local ttl = ARGV[3]
+local userId = ARGV[4]
+
+for _, field in ipairs(redis.call('HKEYS', userKey)) do
+    if string.sub(field, 1, string.len(fieldPrefix)) == fieldPrefix then
+        redis.call('HDEL', userKey, field)
+    end
+end
+
+if #ARGV > 4 then
+    for i = 5, #ARGV do
+        redis.call('HSET', userKey, ARGV[i], timestamp)
+    end
+    redis.call('EXPIRE', userKey, ttl)
+    redis.call('SADD', nodeUsersKey, userId)
+else
+    redis.call('SREM', nodeUsersKey, userId)
+end
+
+return 1
+LUA;
+
+    private const REMOVE_DUE_DB_UPDATE_SCRIPT = <<<'LUA'
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if score and tonumber(score) <= tonumber(ARGV[2]) then
+    return redis.call('ZREM', KEYS[1], ARGV[1])
+end
+return 0
+LUA;
 
     /**
      * 批量设置设备
@@ -30,19 +58,26 @@ class DeviceStateService
         $key = self::PREFIX . $userId;
         $timestamp = time();
 
-        $this->removeNodeDevices($nodeId, $userId);
-
         // Normalize: strip port suffix and deduplicate
-        $ips = array_values(array_unique(array_map([self::class, 'normalizeIP'], $ips)));
+        $ips = array_slice(array_values(array_unique(array_filter(
+            array_map([self::class, 'normalizeIP'], array_filter($ips, 'is_string')),
+            fn(string $ip) => filter_var($ip, FILTER_VALIDATE_IP) !== false
+        ))), 0, 64);
 
-        if (!empty($ips)) {
-            $fields = [];
-            foreach ($ips as $ip) {
-                $fields["{$nodeId}:{$ip}"] = $timestamp;
-            }
-            Redis::hMset($key, $fields);
-            Redis::expire($key, self::ONLINE_WINDOW_SECONDS);
-        }
+        $fields = array_map(fn(string $ip) => "{$nodeId}:{$ip}", $ips);
+        Redis::command('eval', [
+            self::REPLACE_NODE_DEVICES_SCRIPT,
+            [
+                $key,
+                self::NODE_USERS_PREFIX . $nodeId,
+                "{$nodeId}:",
+                $timestamp,
+                self::ONLINE_WINDOW_SECONDS,
+                $userId,
+                ...$fields,
+            ],
+            2,
+        ]);
 
         $this->notifyUpdate($userId);
     }
@@ -53,18 +88,21 @@ class DeviceStateService
      */
     public function getNodeDevices(int $nodeId): array
     {
-        $keys = Redis::keys(self::PREFIX . '*');
+        $userIds = Redis::smembers(self::NODE_USERS_PREFIX . $nodeId);
         $prefix = "{$nodeId}:";
         $result = [];
-        foreach ($keys as $key) {
-            $actualKey = $this->removeRedisPrefix($key);
-            $uid = (int) substr($actualKey, strlen(self::PREFIX));
-            $data = Redis::hgetall($actualKey);
+        $now = time();
+        foreach ($userIds as $userId) {
+            $uid = (int) $userId;
+            $data = Redis::hgetall(self::PREFIX . $uid);
             foreach ($data as $field => $timestamp) {
-                if (str_starts_with($field, $prefix)) {
+                if (str_starts_with($field, $prefix) && $now - (int) $timestamp <= self::ONLINE_WINDOW_SECONDS) {
                     $ip = substr($field, strlen($prefix));
                     $result[$uid][] = $ip;
                 }
+            }
+            if (!isset($result[$uid])) {
+                Redis::srem(self::NODE_USERS_PREFIX . $nodeId, $uid);
             }
         }
 
@@ -76,14 +114,18 @@ class DeviceStateService
      */
     public function removeNodeDevices(int $nodeId, int $userId): void
     {
-        $key = self::PREFIX . $userId;
-        $prefix = "{$nodeId}:";
-
-        foreach (Redis::hkeys($key) as $field) {
-            if (str_starts_with($field, $prefix)) {
-                Redis::hdel($key, $field);
-            }
-        }
+        Redis::command('eval', [
+            self::REPLACE_NODE_DEVICES_SCRIPT,
+            [
+                self::PREFIX . $userId,
+                self::NODE_USERS_PREFIX . $nodeId,
+                "{$nodeId}:",
+                time(),
+                self::ONLINE_WINDOW_SECONDS,
+                $userId,
+            ],
+            2,
+        ]);
     }
 
     /**
@@ -91,20 +133,16 @@ class DeviceStateService
      */
     public function clearAllNodeDevices(int $nodeId): array
     {
-        $oldDevices = $this->getNodeDevices($nodeId);
-        $prefix = "{$nodeId}:";
+        $userIds = array_map('intval', Redis::smembers(self::NODE_USERS_PREFIX . $nodeId));
 
-        foreach ($oldDevices as $userId => $ips) {
-            $key = self::PREFIX . $userId;
-            foreach (Redis::hkeys($key) as $field) {
-                if (str_starts_with($field, $prefix)) {
-                    Redis::hdel($key, $field);
-                }
-            }
+        foreach ($userIds as $userId) {
+            $this->removeNodeDevices($nodeId, $userId);
             $this->notifyUpdate($userId);
         }
 
-        return array_keys($oldDevices);
+        Redis::del(self::NODE_USERS_PREFIX . $nodeId);
+
+        return $userIds;
     }
 
     /**
@@ -117,7 +155,7 @@ class DeviceStateService
         $ips = [];
 
         foreach ($data as $field => $timestamp) {
-            if ($now - $timestamp <= self::ONLINE_WINDOW_SECONDS) {
+            if ($now - (int) $timestamp <= self::ONLINE_WINDOW_SECONDS) {
                 $ips[] = substr($field, strpos($field, ':') + 1);
             }
         }
@@ -157,7 +195,7 @@ class DeviceStateService
             if (!empty($data)) {
                 $ips = [];
                 foreach ($data as $field => $timestamp) {
-                    if ($now - $timestamp <= self::ONLINE_WINDOW_SECONDS) {
+                    if ($now - (int) $timestamp <= self::ONLINE_WINDOW_SECONDS) {
                         $ips[] = substr($field, strpos($field, ':') + 1);
                     }
                 }
@@ -193,15 +231,44 @@ class DeviceStateService
     {
         $dbThrottleKey = "device:db_throttle:{$userId}";
 
-        // if (Redis::setnx($dbThrottleKey, 1)) {
-        //     Redis::expire($dbThrottleKey, self::DB_THROTTLE);
+        if (Redis::command('set', [$dbThrottleKey, '1', ['NX', 'EX' => self::DB_THROTTLE]])) {
+            $this->writeOnlineState($userId);
 
-            User::query()
-                ->whereKey($userId)
-                ->update([
-                    'online_count' => $this->getDeviceCount($userId),
-                    'last_online_at' => now(),
-                ]);
-        // }
+            return;
+        }
+
+        Redis::zadd(self::DB_PENDING_KEY, [$userId => time() + self::DB_THROTTLE]);
+    }
+
+    public function flushPendingUpdates(int $limit = 500): int
+    {
+        $dueAt = time();
+        $userIds = Redis::zrangebyscore(
+            self::DB_PENDING_KEY,
+            '-inf',
+            (string) $dueAt,
+            ['limit' => [0, max(1, min($limit, 5000))]]
+        );
+
+        foreach ($userIds as $userId) {
+            $this->notifyUpdate((int) $userId);
+            Redis::command('eval', [
+                self::REMOVE_DUE_DB_UPDATE_SCRIPT,
+                [self::DB_PENDING_KEY, $userId, $dueAt],
+                1,
+            ]);
+        }
+
+        return count($userIds);
+    }
+
+    private function writeOnlineState(int $userId): void
+    {
+        User::query()
+            ->whereKey($userId)
+            ->update([
+                'online_count' => $this->getDeviceCount($userId),
+                'last_online_at' => now(),
+            ]);
     }
 }

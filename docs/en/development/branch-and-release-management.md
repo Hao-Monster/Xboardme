@@ -8,7 +8,7 @@ branches must be based on the current production branch and target it with a
 pull request.
 
 The local checkout should resolve GitHub operations to
-`FengHaoyun-MONSTER/Xboardme`, use `origin` as `remote.pushDefault`, and keep
+`Hao-Monster/Xboardme`, use `origin` as `remote.pushDefault`, and keep
 the `upstream` remote read-only.
 
 Before publishing a feature branch:

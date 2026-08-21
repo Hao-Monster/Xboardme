@@ -22,7 +22,6 @@ class TrojanTidalabController extends Controller
     // 后端获取用户
     public function user(Request $request)
     {
-        ini_set('memory_limit', -1);
         $server = $request->attributes->get('node_info');
         if ($server->type !== 'trojan') {
             return $this->fail([400, '节点不存在']);

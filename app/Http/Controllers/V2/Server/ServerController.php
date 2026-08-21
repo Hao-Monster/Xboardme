@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\V2\Server;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Server\ServerReportRequest;
 use App\Services\ServerService;
 use App\WebSocket\NodeWorker;
 use Illuminate\Http\Request;
@@ -42,7 +43,7 @@ class ServerController extends Controller
     /**
      * node report api - merge traffic + alive + status + metrics
      */
-    public function report(Request $request): JsonResponse
+    public function report(ServerReportRequest $request): JsonResponse
     {
         $node = $request->attributes->get('node_info');
 
@@ -50,7 +51,7 @@ class ServerController extends Controller
 
         $traffic = $request->input('traffic');
         if (is_array($traffic) && !empty($traffic)) {
-            ServerService::processTraffic($node, $traffic);
+            ServerService::processTraffic($node, $traffic, $request->input('report_id'));
         }
 
         $alive = $request->input('alive');
