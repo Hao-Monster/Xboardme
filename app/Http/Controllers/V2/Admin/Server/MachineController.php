@@ -231,7 +231,7 @@ class MachineController extends Controller
         $releaseVersion = (string) config('server_security.node_release_version', 'v1.13');
 
         return sprintf(
-            '(set -Eeuo pipefail; XBOARD_NODE_VERSION=%s; XBOARD_NODE_RELEASE_DIR="$(mktemp -d)"; trap \'unset XBOARD_NODE_RELEASE_TOKEN; rm -rf "$XBOARD_NODE_RELEASE_DIR"\' EXIT; gh release download "$XBOARD_NODE_VERSION" -R FengHaoyun-MONSTER/Xboard-Node --pattern install.sh --pattern SHA256SUMS --dir "$XBOARD_NODE_RELEASE_DIR"; (cd "$XBOARD_NODE_RELEASE_DIR" && grep " install.sh$" SHA256SUMS | sha256sum -c -); XBOARD_NODE_RELEASE_TOKEN="$(gh auth token)"; export XBOARD_NODE_RELEASE_TOKEN; sudo --preserve-env=XBOARD_NODE_RELEASE_TOKEN bash "$XBOARD_NODE_RELEASE_DIR/install.sh" --version "$XBOARD_NODE_VERSION" --mode machine --panel %s --enrollment-code %s --machine-id %d)',
+            '(set -Eeuo pipefail; XBOARD_NODE_VERSION=%s; XBOARD_NODE_RELEASE_DIR="$(mktemp -d)"; trap \'unset XBOARD_NODE_RELEASE_TOKEN; rm -rf "$XBOARD_NODE_RELEASE_DIR"\' EXIT; gh release download "$XBOARD_NODE_VERSION" -R Hao-Monster/Xboard-Node --pattern install.sh --pattern SHA256SUMS --dir "$XBOARD_NODE_RELEASE_DIR"; (cd "$XBOARD_NODE_RELEASE_DIR" && grep " install.sh$" SHA256SUMS | sha256sum -c -); XBOARD_NODE_RELEASE_TOKEN="$(gh auth token)"; export XBOARD_NODE_RELEASE_TOKEN; sudo --preserve-env=XBOARD_NODE_RELEASE_TOKEN bash "$XBOARD_NODE_RELEASE_DIR/install.sh" --version "$XBOARD_NODE_VERSION" --mode machine --panel %s --enrollment-code %s --machine-id %d)',
             $this->quoteShellArgument($releaseVersion),
             $this->quoteShellArgument($panelUrl),
             $this->quoteShellArgument($enrollmentCode),

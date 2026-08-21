@@ -120,7 +120,7 @@ class MachineEnrollmentTest extends TestCase
 
         $this->assertStringStartsWith('(set -Eeuo pipefail; ', $command);
         $this->assertStringContainsString("trap 'unset XBOARD_NODE_RELEASE_TOKEN; rm -rf \"\$XBOARD_NODE_RELEASE_DIR\"' EXIT", $command);
-        $this->assertStringContainsString('FengHaoyun-MONSTER/Xboard-Node', $command);
+        $this->assertStringContainsString('Hao-Monster/Xboard-Node', $command);
         $this->assertStringContainsString("XBOARD_NODE_VERSION='v1.14.0'", $command);
         $this->assertStringContainsString("--enrollment-code '" . $enrollmentCode . "'", $command);
         $this->assertStringNotContainsString('--token', $command);
