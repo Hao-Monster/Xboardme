@@ -4,7 +4,7 @@
 namespace App\Jobs;
 
 use App\Models\StatUser;
-use App\Support\SqliteImmediateTransaction;
+use App\Support\ServerReportJobReceipt;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -21,6 +21,8 @@ class StatUserJob implements ShouldQueue
     protected array $server;
     protected string $protocol;
     protected string $recordType;
+    protected ?string $reportId = null;
+    protected int $chunkIndex = 0;
 
     public $tries = 3;
     public $timeout = 60;
@@ -37,13 +39,22 @@ class StatUserJob implements ShouldQueue
     /**
      * Create a new job instance.
      */
-    public function __construct(array $server, array $data, string $protocol, string $recordType = 'd')
+    public function __construct(
+        array $server,
+        array $data,
+        string $protocol,
+        string $recordType = 'd',
+        ?string $reportId = null,
+        int $chunkIndex = 0
+    )
     {
         $this->onQueue('stat');
         $this->data = $data;
         $this->server = $server;
         $this->protocol = $protocol;
         $this->recordType = $recordType;
+        $this->reportId = $reportId;
+        $this->chunkIndex = $chunkIndex;
     }
 
     public function handle(): void
@@ -63,13 +74,13 @@ class StatUserJob implements ShouldQueue
             }
         };
 
-        if (config('database.default') === 'sqlite') {
-            SqliteImmediateTransaction::run($processBatch);
-
-            return;
-        }
-
-        $processBatch();
+        ServerReportJobReceipt::run(
+            (int) ($this->server['id'] ?? 0),
+            $this->reportId,
+            'stat_user',
+            $this->chunkIndex,
+            $processBatch
+        );
     }
 
     protected function processUserStat(int $uid, array $v, int $recordAt): void

@@ -5,7 +5,7 @@ namespace App\Jobs;
 
 use App\Models\Server;
 use App\Models\StatServer;
-use App\Support\SqliteImmediateTransaction;
+use App\Support\ServerReportJobReceipt;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -23,6 +23,8 @@ class StatServerJob implements ShouldQueue
     protected array $server;
     protected string $protocol;
     protected string $recordType;
+    protected ?string $reportId = null;
+    protected int $chunkIndex = 0;
 
     public $tries = 3;
     public $timeout = 60;
@@ -39,13 +41,22 @@ class StatServerJob implements ShouldQueue
     /**
      * Create a new job instance.
      */
-    public function __construct(array $server, array $data, $protocol, string $recordType = 'd')
+    public function __construct(
+        array $server,
+        array $data,
+        $protocol,
+        string $recordType = 'd',
+        ?string $reportId = null,
+        int $chunkIndex = 0
+    )
     {
         $this->onQueue('stat');
         $this->data = $data;
         $this->server = $server;
         $this->protocol = $protocol;
         $this->recordType = $recordType;
+        $this->reportId = $reportId;
+        $this->chunkIndex = $chunkIndex;
     }
 
     public function handle(): void
@@ -66,11 +77,13 @@ class StatServerJob implements ShouldQueue
                 $this->updateServerTraffic($u, $d);
             };
 
-            if (config('database.default') === 'sqlite') {
-                SqliteImmediateTransaction::run($processBatch);
-            } else {
-                $processBatch();
-            }
+            ServerReportJobReceipt::run(
+                (int) $this->server['id'],
+                $this->reportId,
+                'stat_server',
+                $this->chunkIndex,
+                $processBatch
+            );
         } catch (\Throwable $e) {
             Log::error('StatServerJob failed for server ' . $this->server['id'] . ': ' . $e->getMessage());
             throw $e;

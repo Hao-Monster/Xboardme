@@ -23,7 +23,6 @@ class UniProxyController extends Controller
 
     public function user(Request $request)
     {
-        ini_set('memory_limit', -1);
         $node = $this->getNodeInfo($request);
 
         ServerService::touchNode($node);

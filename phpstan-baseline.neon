@@ -115,18 +115,6 @@ parameters:
 			path: app/Scope/FilterScope.php
 
 		-
-			message: '#^Binary operation "\-" between int\<1, max\> and string results in an error\.$#'
-			identifier: binaryOp.invalid
-			count: 2
-			path: app/Services/DeviceStateService.php
-
-		-
-			message: '#^Constant App\\Services\\DeviceStateService\:\:DB_THROTTLE is unused\.$#'
-			identifier: classConstant.unused
-			count: 1
-			path: app/Services/DeviceStateService.php
-
-		-
 			message: '#^Access to an undefined property Illuminate\\Database\\Eloquent\\Model\:\:\$body\.$#'
 			identifier: property.notFound
 			count: 1

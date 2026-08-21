@@ -16,29 +16,37 @@ class ServerRoute
         ], function ($router) {
             $router->group([
                 'prefix' => 'UniProxy',
-                'middleware' => 'server'
             ], function ($route) {
-                $route->get('config', [UniProxyController::class, 'config']);
-                $route->get('user', [UniProxyController::class, 'user']);
-                $route->post('push', [UniProxyController::class, 'push']);
-                $route->post('alive', [UniProxyController::class, 'alive']);
-                $route->get('alivelist', [UniProxyController::class, 'alivelist']);
-                $route->post('status', [UniProxyController::class, 'status']);
+                $route->get('config', [UniProxyController::class, 'config'])
+                    ->middleware(['server.body:control', 'throttle:server-pull', 'server']);
+                $route->get('user', [UniProxyController::class, 'user'])
+                    ->middleware(['server.body:control', 'throttle:server-pull', 'server']);
+                $route->post('push', [UniProxyController::class, 'push'])
+                    ->middleware(['server.body:report', 'throttle:server-report', 'server']);
+                $route->post('alive', [UniProxyController::class, 'alive'])
+                    ->middleware(['server.body:report', 'throttle:server-report', 'server']);
+                $route->get('alivelist', [UniProxyController::class, 'alivelist'])
+                    ->middleware(['server.body:control', 'throttle:server-pull', 'server']);
+                $route->post('status', [UniProxyController::class, 'status'])
+                    ->middleware(['server.body:control', 'throttle:server-report', 'server']);
             });
             $router->group([
                 'prefix' => 'ShadowsocksTidalab',
-                'middleware' => 'server:shadowsocks'
             ], function ($route) {
-                $route->get('user', [ShadowsocksTidalabController::class, 'user']);
-                $route->post('submit', [ShadowsocksTidalabController::class, 'submit']);
+                $route->get('user', [ShadowsocksTidalabController::class, 'user'])
+                    ->middleware(['server.body:control', 'throttle:server-pull', 'server:shadowsocks']);
+                $route->post('submit', [ShadowsocksTidalabController::class, 'submit'])
+                    ->middleware(['server.body:report', 'throttle:server-report', 'server:shadowsocks']);
             });
             $router->group([
                 'prefix' => 'TrojanTidalab',
-                'middleware' => 'server:trojan'
             ], function ($route) {
-                $route->get('config', [TrojanTidalabController::class, 'config']);
-                $route->get('user', [TrojanTidalabController::class, 'user']);
-                $route->post('submit', [TrojanTidalabController::class, 'submit']);
+                $route->get('config', [TrojanTidalabController::class, 'config'])
+                    ->middleware(['server.body:control', 'throttle:server-pull', 'server:trojan']);
+                $route->get('user', [TrojanTidalabController::class, 'user'])
+                    ->middleware(['server.body:control', 'throttle:server-pull', 'server:trojan']);
+                $route->post('submit', [TrojanTidalabController::class, 'submit'])
+                    ->middleware(['server.body:report', 'throttle:server-report', 'server:trojan']);
             });
         });
     }

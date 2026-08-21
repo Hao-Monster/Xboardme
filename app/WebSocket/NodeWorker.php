@@ -3,10 +3,10 @@
 namespace App\WebSocket;
 
 use App\Models\Server;
-use App\Models\ServerMachine;
 use App\Services\DeviceStateService;
 use App\Services\NodeRegistry;
 use App\Services\ServerService;
+use App\Services\ServerMachineCredentialService;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
@@ -119,6 +119,16 @@ class NodeWorker
                 }
             }
         });
+
+        Timer::add(5, function () {
+            try {
+                app(DeviceStateService::class)->flushPendingUpdates();
+            } catch (\Throwable $e) {
+                Log::warning('[WS] Failed to flush pending device states', [
+                    'exception' => $e::class,
+                ]);
+            }
+        });
     }
 
     public function onConnect(TcpConnection $conn): void
@@ -136,13 +146,24 @@ class NodeWorker
     public function onWebSocketConnect(TcpConnection $conn, $httpMessage): void
     {
         $queryString = '';
+        $authorization = '';
         if (is_string($httpMessage)) {
             $queryString = parse_url($httpMessage, PHP_URL_QUERY) ?? '';
+            if (preg_match('/\r\nAuthorization:\s*Bearer\s+([^\s]+)\s*\r\n/i', $httpMessage, $matches)) {
+                $authorization = $matches[1];
+            }
         } elseif ($httpMessage instanceof \Workerman\Protocols\Http\Request) {
             $queryString = $httpMessage->queryString();
+            $header = (string) $httpMessage->header('authorization', '');
+            if (preg_match('/^Bearer\s+([^\s]+)$/i', trim($header), $matches)) {
+                $authorization = $matches[1];
+            }
         }
 
         parse_str($queryString, $params);
+        if ($authorization !== '') {
+            $params['token'] = $authorization;
+        }
 
         if (isset($conn->authTimer)) {
             Timer::del($conn->authTimer);
@@ -209,11 +230,9 @@ class NodeWorker
         $machineId = (int) ($params['machine_id'] ?? 0);
         $token = $params['token'] ?? '';
 
-        $machine = ServerMachine::where('id', $machineId)
-            ->where('token', $token)
-            ->first();
+        $machine = app(ServerMachineCredentialService::class)->authenticate($machineId, $token);
 
-        if (!$machine || !$machine->is_active) {
+        if (!$machine) {
             $conn->close(json_encode([
                 'event' => 'error',
                 'data' => ['message' => 'invalid machine credentials'],
@@ -308,10 +327,7 @@ class NodeWorker
                 NodeRegistry::remove($nodeId, $conn);
                 Cache::forget("node_ws_alive:{$nodeId}");
 
-                $affectedUserIds = $service->clearAllNodeDevices($nodeId);
-                foreach ($affectedUserIds as $userId) {
-                    $service->notifyUpdate($userId);
-                }
+                $service->clearAllNodeDevices($nodeId);
             }
 
             if (!empty($conn->machineId)) {
@@ -333,9 +349,6 @@ class NodeWorker
             Cache::forget("node_ws_alive:{$nodeId}");
 
             $affectedUserIds = $service->clearAllNodeDevices($nodeId);
-            foreach ($affectedUserIds as $userId) {
-                $service->notifyUpdate($userId);
-            }
 
             Log::debug("[WS] Node#{$nodeId} disconnected", [
                 'total' => NodeRegistry::count(),

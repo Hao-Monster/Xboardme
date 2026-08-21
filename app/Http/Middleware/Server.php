@@ -15,6 +15,10 @@ class Server
 {
     public function handle(Request $request, Closure $next, ?string $nodeType = null)
     {
+        if (!$request->filled('token') && $request->bearerToken()) {
+            $request->merge(['token' => $request->bearerToken()]);
+        }
+
         $request->validate([
             'token' => [
                 'string', 'required',
