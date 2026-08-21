@@ -15,9 +15,45 @@ check_redis_cluster_support() {
   esac
 }
 
-if [[ "${XBOARD_PREFLIGHT_SELF_TEST:-}" == redis-topology ]]; then
-  check_redis_cluster_support "${XBOARD_REDIS_CLUSTER_ENABLED:-}"
-  exit
+check_scheduler_reaper() {
+  local required=${1:-false}
+  local init=${2:-not_applicable}
+  local pid1=${3:-not_applicable}
+  local zombies=${4:-not_applicable}
+  local scheduler_revision=${5:-not_applicable}
+  local web_revision=${6:-not_applicable}
+
+  if [[ "$required" != true ]]; then
+    return 0
+  fi
+  if [[ "$init" != true || "$pid1" == php || "$zombies" != 0 ||
+        "$scheduler_revision" != "$web_revision" ]]; then
+    echo 'PREFLIGHT_FAIL=scheduler_init_or_zombie_reaping'
+    return 1
+  fi
+}
+
+case "${XBOARD_PREFLIGHT_SELF_TEST:-}" in
+  redis-topology)
+    check_redis_cluster_support "${XBOARD_REDIS_CLUSTER_ENABLED:-}"
+    exit
+    ;;
+  scheduler-reaper)
+    check_scheduler_reaper \
+      "${XBOARD_SCHEDULER_REAPER_REQUIRED:-false}" \
+      "${XBOARD_SCHEDULER_INIT:-not_applicable}" \
+      "${XBOARD_SCHEDULER_PID1:-not_applicable}" \
+      "${XBOARD_SCHEDULER_ZOMBIES:-not_applicable}" \
+      "${XBOARD_SCHEDULER_REVISION:-not_applicable}" \
+      "${XBOARD_WEB_REVISION:-not_applicable}"
+    exit
+    ;;
+esac
+
+expected_workflow_sha=${EXPECTED_WORKFLOW_SHA:-}
+if [[ -n "$expected_workflow_sha" && ! "$expected_workflow_sha" =~ ^[a-f0-9]{40}$ ]]; then
+  echo 'PREFLIGHT_FAIL=invalid_expected_workflow_sha'
+  exit 1
 fi
 
 command -v docker >/dev/null
@@ -182,7 +218,34 @@ current_container_memory=$(docker stats --no-stream --format '{{.MemUsage}}' "$p
 
 release_web_count=$(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=web | wc -l)
 release_horizon_count=$(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=horizon | wc -l)
-release_scheduler_count=$(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=scheduler | wc -l)
+mapfile -t release_scheduler_ids < <(
+  docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=scheduler
+)
+release_scheduler_count=${#release_scheduler_ids[@]}
+scheduler_init=not_applicable
+scheduler_pid1=not_applicable
+scheduler_zombies=not_applicable
+scheduler_revision=not_applicable
+scheduler_reaper_required=false
+if [[ -n "$active_release_id" && $release_scheduler_count -eq 1 ]]; then
+  scheduler_id=${release_scheduler_ids[0]}
+  scheduler_init=$(docker inspect -f '{{.HostConfig.Init}}' "$scheduler_id")
+  scheduler_pid1=$(docker exec "$scheduler_id" sh -c 'cat /proc/1/comm')
+  scheduler_revision=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$scheduler_id")
+  scheduler_zombies=$(docker exec "$scheduler_id" sh -c '
+    count=0
+    for status in /proc/[0-9]*/status; do
+      [ -r "$status" ] || continue
+      if grep -q "^State:[[:space:]]*Z" "$status"; then
+        count=$((count + 1))
+      fi
+    done
+    printf "%s\n" "$count"
+  ')
+  if [[ -n "$expected_workflow_sha" && "$current_revision" == "$expected_workflow_sha" ]]; then
+    scheduler_reaper_required=true
+  fi
+fi
 candidate_7003_listeners=unknown
 if command -v ss >/dev/null 2>&1; then
   candidate_7003_listeners=$(ss -H -lnt '( sport = :7003 )' 2>/dev/null | wc -l)
@@ -212,6 +275,11 @@ echo "PREFLIGHT_PLUGIN_SYNTAX=$plugin_syntax"
 echo "PREFLIGHT_RELEASE_WEBS=$release_web_count"
 echo "PREFLIGHT_RELEASE_HORIZONS=$release_horizon_count"
 echo "PREFLIGHT_RELEASE_SCHEDULERS=$release_scheduler_count"
+echo "PREFLIGHT_SCHEDULER_INIT=$scheduler_init"
+echo "PREFLIGHT_SCHEDULER_PID1=$scheduler_pid1"
+echo "PREFLIGHT_SCHEDULER_ZOMBIES=$scheduler_zombies"
+echo "PREFLIGHT_SCHEDULER_REVISION=$scheduler_revision"
+echo "PREFLIGHT_SCHEDULER_REAPER_REQUIRED=$scheduler_reaper_required"
 echo "PREFLIGHT_CANDIDATE_7003_LISTENERS=$candidate_7003_listeners"
 echo "PREFLIGHT_AVAILABLE_KIB=$available_kib"
 echo "PREFLIGHT_MEMORY_AVAILABLE_KIB=$memory_available_kib"
@@ -271,11 +339,18 @@ if [[ -n "$active_release_id" ]] &&
   echo 'PREFLIGHT_FAIL=release_role_ownership_is_not_unique'
   failures=1
 fi
+if ! check_scheduler_reaper "$scheduler_reaper_required" "$scheduler_init" "$scheduler_pid1" \
+    "$scheduler_zombies" "$scheduler_revision" "$current_revision"; then
+  failures=1
+fi
 if ((failures != 0)); then
   exit 1
 fi
 
 if [[ "$restart_policy" != always && "$restart_policy" != unless-stopped ]]; then
   echo 'PREFLIGHT_WARN=active_web_restart_policy_will_be_repaired_by_next_release'
+fi
+if [[ -n "$active_release_id" && "$scheduler_reaper_required" != true && "$scheduler_init" != true ]]; then
+  echo 'PREFLIGHT_WARN=scheduler_reaper_pending_release_upgrade'
 fi
 echo 'PREFLIGHT_BASELINE=PASS'

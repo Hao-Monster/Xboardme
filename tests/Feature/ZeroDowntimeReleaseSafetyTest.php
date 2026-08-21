@@ -138,6 +138,40 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringNotContainsString('php /www/artisan horizon:status', $rollback);
     }
 
+    public function test_release_scheduler_uses_init_and_proves_zombie_reaping_before_role_activation_passes(): void
+    {
+        $activation = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
+        $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));
+        $preflightWorkflow = file_get_contents(base_path('.github/workflows/distributor-preflight.yml'));
+        $publishWorkflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $reaperTest = file_get_contents(base_path('.github/scripts/test-preflight-scheduler-reaper.sh'));
+
+        $schedulerStart = strpos($activation, '--name "$scheduler_name"');
+        $schedulerEnd = strpos(
+            $activation,
+            '"$RELEASE_IMAGE" php /www/artisan schedule:work',
+            $schedulerStart
+        );
+
+        $this->assertNotFalse($schedulerStart);
+        $this->assertNotFalse($schedulerEnd);
+        $schedulerBlock = substr($activation, $schedulerStart, $schedulerEnd - $schedulerStart);
+        $this->assertStringContainsString('--init', $schedulerBlock);
+        $this->assertStringContainsString('scheduler_reaper_observation_seconds=185', $activation);
+        $this->assertStringContainsString('scheduler_zombie_count()', $activation);
+        $this->assertStringContainsString('RELEASE_ROLES_FAIL=scheduler_init_disabled', $activation);
+        $this->assertStringContainsString('RELEASE_ROLES_FAIL=scheduler_pid1_not_init', $activation);
+        $this->assertStringContainsString('RELEASE_ROLES_FAIL=scheduler_zombies_detected', $activation);
+        $this->assertStringContainsString('RELEASE_ROLES_FAIL=scheduler_did_not_tick', $activation);
+        $this->assertStringContainsString('PREFLIGHT_SCHEDULER_INIT=', $preflight);
+        $this->assertStringContainsString('PREFLIGHT_SCHEDULER_ZOMBIES=', $preflight);
+        $this->assertStringContainsString('PREFLIGHT_FAIL=scheduler_init_or_zombie_reaping', $preflight);
+        $this->assertStringContainsString('EXPECTED_WORKFLOW_SHA', $preflightWorkflow);
+        $this->assertStringContainsString('XBOARD_PREFLIGHT_SELF_TEST=scheduler-reaper', $reaperTest);
+        $this->assertStringContainsString('bash .github/scripts/test-preflight-scheduler-reaper.sh', $preflightWorkflow);
+        $this->assertStringContainsString('bash .github/scripts/test-preflight-scheduler-reaper.sh', $publishWorkflow);
+    }
+
     public function test_role_recovery_is_explicit_and_failed_rollback_preserves_current_roles(): void
     {
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
