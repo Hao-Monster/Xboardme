@@ -58,6 +58,10 @@ fi
 
 command -v docker >/dev/null
 command -v caddy >/dev/null
+if ! command -v jq >/dev/null 2>&1; then
+  echo 'PREFLIGHT_FAIL=jq_missing'
+  exit 1
+fi
 docker info >/dev/null
 
 mapfile -t compose_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)

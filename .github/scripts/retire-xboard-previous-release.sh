@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if ! declare -F release_state_get >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck source=release-state.sh
+  source "$script_dir/release-state.sh"
+fi
+
 : "${RELEASE_ID:?RELEASE_ID is required}"
 : "${EXPECTED_RELEASE_SHA:?EXPECTED_RELEASE_SHA is required}"
 
@@ -19,13 +25,29 @@ if ((${#compose_ids[@]} != 1)); then
   exit 1
 fi
 workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${compose_ids[0]}")
-state_file="$workdir/.codex-release/$RELEASE_ID/state.env"
-if [[ ! -f "$state_file" ]]; then
+release_dir="$workdir/.codex-release/$RELEASE_ID"
+if ! state_file=$(release_state_open "$release_dir"); then
   echo 'RELEASE_RETIRE_FAIL=state_missing'
   exit 1
 fi
-# shellcheck disable=SC1090
-source "$state_file"
+STATE_RELEASE_ID=$(release_state_get "$state_file" release_id)
+RELEASE_SHA=$(release_state_get "$state_file" release_sha)
+BLUE_CONTAINER=$(release_state_get "$state_file" blue_container)
+BLUE_PORT=$(release_state_get "$state_file" blue_port)
+GREEN_CONTAINER=$(release_state_get "$state_file" green_container)
+GREEN_PORT=$(release_state_get "$state_file" green_port)
+TRAFFIC_STATE=$(release_state_get "$state_file" traffic_state)
+ROLE_STATE=$(release_state_get "$state_file" role_state)
+PREVIOUS_RELEASE_ID=$(release_state_get_optional "$state_file" previous_release_id)
+ROLE_MODE=$(release_state_get_optional "$state_file" role_mode)
+HORIZON_CONTAINER=$(release_state_get_optional "$state_file" horizon_container)
+SCHEDULER_CONTAINER=$(release_state_get_optional "$state_file" scheduler_container)
+PREVIOUS_HORIZON_CONTAINER=$(release_state_get_optional "$state_file" previous_horizon_container)
+PREVIOUS_SCHEDULER_CONTAINER=$(release_state_get_optional "$state_file" previous_scheduler_container)
+if [[ "$STATE_RELEASE_ID" != "$RELEASE_ID" ]]; then
+  echo 'RELEASE_RETIRE_FAIL=release_state_identity_mismatch'
+  exit 1
+fi
 
 if [[ "$RELEASE_SHA" != "$EXPECTED_RELEASE_SHA" ]]; then
   echo 'RELEASE_RETIRE_FAIL=release_commit_mismatch'
@@ -193,15 +215,7 @@ if [[ "$(grep -Eo 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' "$caddy_con
 fi
 docker rm -f "${previous_containers[@]}" >/dev/null
 
-set_state() {
-  local key=$1 value=$2 temporary
-  temporary=$(mktemp "${state_file}.XXXXXX")
-  awk -F= -v key="$key" '$1 != key {print}' "$state_file" > "$temporary"
-  printf '%s=%q\n' "$key" "$value" >> "$temporary"
-  chmod 600 "$temporary"
-  mv -f -- "$temporary" "$state_file"
-}
-set_state PREVIOUS_RELEASE_RETIRED_ID "$PREVIOUS_RELEASE_ID"
-set_state PREVIOUS_RELEASE_RETIRED_AT "$(date -u +%FT%TZ)"
+release_state_set "$state_file" previous_release_retired_id "$PREVIOUS_RELEASE_ID"
+release_state_set "$state_file" previous_release_retired_at "$(date -u +%FT%TZ)"
 
 echo "RELEASE_RETIRE=PASS current=$RELEASE_ID previous=$PREVIOUS_RELEASE_ID containers=${#previous_containers[@]} evidence=preserved"

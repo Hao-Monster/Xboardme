@@ -8,6 +8,54 @@ use Tests\TestCase;
 
 class ZeroDowntimeReleaseSafetyTest extends TestCase
 {
+    public function test_v2_runtime_roles_are_single_purpose_and_opt_in(): void
+    {
+        $entrypoint = file_get_contents(base_path('.docker/entrypoint.sh'));
+        $runner = file_get_contents(base_path('.docker/run-role.sh'));
+        $dockerfile = file_get_contents(base_path('Dockerfile'));
+
+        $this->assertStringContainsString('XBOARD_RUNTIME_ROLE:=legacy', $entrypoint);
+        $this->assertStringContainsString('ENABLE_SCHEDULER=false', $entrypoint);
+        $this->assertStringContainsString('LOG_CHANNEL:=stderr', $entrypoint);
+        $this->assertStringContainsString('case "$XBOARD_RUNTIME_ROLE"', $runner);
+        $this->assertStringContainsString("php /www/artisan schedule:work", $runner);
+        $this->assertStringContainsString('exec su-exec www "$@"', $runner);
+        $this->assertStringContainsString('if [ "$XBOARD_RUNTIME_ROLE" != legacy ]', $entrypoint);
+        $this->assertStringContainsString('chmod +x /entrypoint.sh /run-role.sh', $dockerfile);
+    }
+
+    public function test_release_state_is_json_and_is_never_executed_as_shell_code(): void
+    {
+        $scripts = [
+            '.github/scripts/prepare-xboard-live-green.sh',
+            '.github/scripts/switch-xboard-live-green.sh',
+            '.github/scripts/activate-xboard-green-roles.sh',
+            '.github/scripts/rollback-xboard-live-green.sh',
+            '.github/scripts/cleanup-xboard-live-release.sh',
+            '.github/scripts/retire-xboard-previous-release.sh',
+        ];
+
+        foreach ($scripts as $index => $path) {
+            $script = file_get_contents(base_path($path));
+
+            $this->assertStringContainsString(
+                $index === 0 ? 'state.json' : 'release_state_open',
+                $script,
+                $path
+            );
+            $this->assertStringNotContainsString('source "$state_file"', $script, $path);
+        }
+
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $library = file_get_contents(base_path('.github/scripts/release-state.sh'));
+
+        $this->assertStringContainsString('.github/scripts/release-state.sh', $workflow);
+        $this->assertStringContainsString('release_state_get()', $library);
+        $this->assertStringContainsString('release_state_import_legacy()', $library);
+        $this->assertStringContainsString('jq -er', $library);
+        $this->assertStringNotContainsString('eval ', $library);
+    }
+
     public function test_supervisor_control_socket_is_unique_per_runtime_instance(): void
     {
         $entrypoint = file_get_contents(base_path('.docker/entrypoint.sh'));
@@ -58,6 +106,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringNotContainsString('pgrep -f', $script);
         $this->assertStringContainsString('PRAGMA integrity_check;', $script);
         $this->assertStringContainsString('redis-cli -s /data/redis.sock BGSAVE', $script);
+        $this->assertStringContainsString('release_state_require_tool', $script);
     }
 
     public function test_cutover_validates_caddy_and_has_an_exact_rollback_artifact(): void
@@ -68,7 +117,8 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('caddy-before-switch.conf', $switch);
         $this->assertStringContainsString('caddy validate --config "$candidate" --adapter caddyfile', $switch);
         $this->assertTrue(
-            strpos($switch, 'set_state CADDY_BACKUP "$caddy_backup"') < strpos($switch, 'mv -f -- "$candidate" "$proxy_file"')
+            strpos($switch, 'release_state_set "$state_file" caddy_backup "$caddy_backup"')
+                < strpos($switch, 'mv -f -- "$candidate" "$proxy_file"')
         );
         $this->assertStringContainsString('systemctl is-active caddy', $switch);
         $this->assertStringContainsString('external_smoke_required', $switch);
@@ -103,7 +153,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringNotContainsString('php /www/artisan horizon:status', $script);
         $this->assertStringContainsString('horizon_ready_samples >= 10', $script);
         $this->assertStringContainsString('SIGSTOP', $script);
-        $this->assertStringContainsString('BLUE_OCTANE_PGID', $script);
+        $this->assertStringContainsString('blue_octane_pgid', $script);
         $this->assertStringNotContainsString('supervisorctl stop horizon', $script);
         $this->assertStringNotContainsString('supervisorctl stop octane', $script);
         $this->assertStringContainsString('php /www/artisan schedule:work', $script);
@@ -214,7 +264,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('horizon_ready_samples >= 3', $retirement);
         $this->assertStringContainsString('previous_release_roles_still_running', $retirement);
         $this->assertStringContainsString('previous_container_set_mismatch', $retirement);
-        $this->assertStringContainsString('PREVIOUS_RELEASE_RETIRED_ID', $retirement);
+        $this->assertStringContainsString('previous_release_retired_id', $retirement);
 
         $activeHealth = strpos($retirement, 'horizon_ready_samples < 3');
         $removal = strpos($retirement, 'docker rm -f "${previous_containers[@]}"');

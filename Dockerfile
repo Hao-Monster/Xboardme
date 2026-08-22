@@ -72,6 +72,6 @@ ENV RUNTIME_INSTANCE_ID=default \
 
 EXPOSE 7001
 COPY .docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /run-role.sh
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]

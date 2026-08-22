@@ -139,12 +139,6 @@ parameters:
 			path: app/Services/MailService.php
 
 		-
-			message: '#^Access to an undefined property Workerman\\Connection\\TcpConnection\:\:\$machineNodeIds\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/Services/NodeRegistry.php
-
-		-
 			message: '#^Right side of && is always true\.$#'
 			identifier: booleanAnd.rightAlwaysTrue
 			count: 1
@@ -182,12 +176,6 @@ parameters:
 
 		-
 			message: '#^Access to an undefined property Workerman\\Connection\\TcpConnection\:\:\$machineId\.$#'
-			identifier: property.notFound
-			count: 1
-			path: app/WebSocket/NodeWorker.php
-
-		-
-			message: '#^Access to an undefined property Workerman\\Connection\\TcpConnection\:\:\$machineNodeIds\.$#'
 			identifier: property.notFound
 			count: 1
 			path: app/WebSocket/NodeWorker.php

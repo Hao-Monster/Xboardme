@@ -1,6 +1,38 @@
 #!/bin/sh
 set -e
 
+# V2 roles are opt-in. The legacy default preserves the current all-in-one
+# image behaviour until the dedicated runtime Compose definition is deployed.
+: "${XBOARD_RUNTIME_ROLE:=legacy}"
+case "$XBOARD_RUNTIME_ROLE" in
+    legacy) ;;
+    web|ws|horizon|scheduler|maintenance)
+        ENABLE_WEB=false
+        ENABLE_HORIZON=false
+        ENABLE_REDIS=false
+        ENABLE_WS_SERVER=false
+        ENABLE_CADDY=false
+        ENABLE_SCHEDULER=false
+        : "${LOG_CHANNEL:=stderr}"
+        : "${LOG_DEPRECATIONS_CHANNEL:=stderr}"
+        case "$XBOARD_RUNTIME_ROLE" in
+            web) ENABLE_WEB=true ;;
+            ws)
+                ENABLE_WS_SERVER=true
+                : "${WS_LOG_FILE:=/dev/stderr}"
+                ;;
+            horizon) ENABLE_HORIZON=true ;;
+        esac
+        ;;
+    *)
+        echo "[entrypoint] Unsupported XBOARD_RUNTIME_ROLE=${XBOARD_RUNTIME_ROLE}." >&2
+        exit 64
+        ;;
+esac
+export XBOARD_RUNTIME_ROLE ENABLE_WEB ENABLE_HORIZON ENABLE_REDIS ENABLE_WS_SERVER \
+       ENABLE_CADDY ENABLE_SCHEDULER LOG_CHANNEL LOG_DEPRECATIONS_CHANNEL
+[ -z "${WS_LOG_FILE:-}" ] || export WS_LOG_FILE
+
 # Resolve the binding scheme based on whether the embedded Caddy is enabled.
 #
 # When ENABLE_CADDY=true (default), Caddy owns the public port (7001) and
@@ -172,7 +204,9 @@ redis_reachable() {
     esac
 }
 
-if [ "${SKIP_XBOARD_UPDATE:-false}" = "true" ]; then
+if [ "$XBOARD_RUNTIME_ROLE" != legacy ]; then
+    echo "[entrypoint] Skipping automatic xboard:update for dedicated role=${XBOARD_RUNTIME_ROLE}."
+elif [ "${SKIP_XBOARD_UPDATE:-false}" = "true" ]; then
     echo "[entrypoint] Skipping xboard:update by explicit release-stage request."
 elif [ ! -s /www/.env ] || ! grep -qE '^INSTALLED=(1|true)$' /www/.env || echo " $* " | grep -q ' xboard:install '; then
     echo "[entrypoint] Skipping xboard:update (not yet installed or running xboard:install)."
@@ -189,7 +223,7 @@ else
     fi
 fi
 
-echo "[entrypoint] Starting services (caddy=${ENABLE_CADDY} web=${ENABLE_WEB} horizon=${ENABLE_HORIZON} ws=${ENABLE_WS_SERVER} scheduler=${ENABLE_SCHEDULER})..."
+echo "[entrypoint] Starting role=${XBOARD_RUNTIME_ROLE} (caddy=${ENABLE_CADDY} web=${ENABLE_WEB} horizon=${ENABLE_HORIZON} ws=${ENABLE_WS_SERVER} scheduler=${ENABLE_SCHEDULER})..."
 # Drop stale Octane/WorkerMan state files so the new master does not signal
 # PIDs left over from a previous container run (causes Swoole kill EPERM).
 rm -f "${OCTANE_STATE_FILE}" "${WS_PID_FILE}" "${SUPERVISOR_PID_FILE}" "${SUPERVISOR_SOCKET_FILE}" 2>/dev/null || true
