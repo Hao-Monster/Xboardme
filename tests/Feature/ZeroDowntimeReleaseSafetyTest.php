@@ -13,6 +13,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $entrypoint = file_get_contents(base_path('.docker/entrypoint.sh'));
         $runner = file_get_contents(base_path('.docker/run-role.sh'));
         $dockerfile = file_get_contents(base_path('Dockerfile'));
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
 
         $this->assertStringContainsString('XBOARD_RUNTIME_ROLE:=legacy', $entrypoint);
         $this->assertStringContainsString('ENABLE_SCHEDULER=false', $entrypoint);
@@ -22,6 +23,11 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('exec su-exec www "$@"', $runner);
         $this->assertStringContainsString('if [ "$XBOARD_RUNTIME_ROLE" != legacy ]', $entrypoint);
         $this->assertStringContainsString('chmod +x /entrypoint.sh /run-role.sh', $dockerfile);
+        $this->assertStringContainsString('pr-image-build:', $workflow);
+        $this->assertStringContainsString('Build pull request image without publishing', $workflow);
+        $this->assertStringContainsString('push: false', $workflow);
+        $this->assertStringContainsString('load: true', $workflow);
+        $this->assertStringContainsString('Inspect pull request image contract', $workflow);
     }
 
     public function test_release_state_is_json_and_is_never_executed_as_shell_code(): void

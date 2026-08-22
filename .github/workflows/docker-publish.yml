@@ -332,6 +332,73 @@ jobs:
           bash .github/scripts/test-ssh-with-password.sh
           bash .github/scripts/test-preflight-scheduler-reaper.sh
 
+  pr-image-build:
+    if: ${{ github.event_name == 'pull_request' }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout exact pull request merge commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Verify admin frontend build context
+        run: php .github/scripts/verify-admin-assets.php
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.20.0
+            network=host
+
+      - name: Stamp immutable pull request revision
+        run: |
+          VERSION="$GITHUB_SHA"
+          test "$VERSION" = "$(printf '%s' "$VERSION" | grep -E '^[0-9a-f]{40}$')"
+          sed -i "s/'version' => '.*'/'version' => '$VERSION'/g" config/app.php
+          grep -Fq "'version' => '$VERSION'" config/app.php
+          php .github/scripts/build-theme-asset-manifest.php "$VERSION" "$RUNNER_TEMP/theme-release-manifest.json"
+          php .github/scripts/verify-theme-assets.php "$VERSION" "$RUNNER_TEMP/theme-release-manifest.json"
+
+      - name: Build pull request image without publishing
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: xboard-pr:${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+            APP_REVISION=${{ github.sha }}
+          provenance: false
+          allow: |
+            network.host
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inspect pull request image contract
+        env:
+          IMAGE: xboard-pr:${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          test "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE")" = "$GITHUB_SHA"
+          docker run --rm --entrypoint sh "$IMAGE" -eu -c '
+            test -x /entrypoint.sh
+            test -x /run-role.sh
+            test -f /www/theme/Xboard/assets/release-manifest.json
+          '
+
   build:
     if: ${{ github.event_name != 'pull_request' }}
     needs: verify
