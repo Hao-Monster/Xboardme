@@ -1,0 +1,55 @@
+# Production compatibility overlay for the low-memory V2 cutover.
+#
+# The old runtime remains the rollback target until finalize. Both runtimes
+# therefore use the exact same authoritative bind mounts and Redis volume.
+# Redis remains RDB-only during this compatibility window so that a rollback
+# to the legacy RDB-only runtime cannot later be shadowed by stale AOF data.
+x-production-app-volumes: &production-app-volumes
+  - type: bind
+    source: ${XBOARD_ENV_FILE:?XBOARD_ENV_FILE is required}
+    target: /www/.env
+    read_only: true
+  - type: bind
+    source: ${XBOARD_APP_DATA_PATH:?XBOARD_APP_DATA_PATH is required}
+    target: /www/.docker/.data
+  - type: bind
+    source: ${XBOARD_APP_LOGS_PATH:?XBOARD_APP_LOGS_PATH is required}
+    target: /www/storage/logs
+  - type: bind
+    source: ${XBOARD_APP_THEME_PATH:?XBOARD_APP_THEME_PATH is required}
+    target: /www/storage/theme
+  - type: bind
+    source: ${XBOARD_APP_KNOWLEDGE_PATH:?XBOARD_APP_KNOWLEDGE_PATH is required}
+    target: /www/storage/app/knowledge-attachments
+  - type: bind
+    source: ${XBOARD_APP_PLUGINS_PATH:?XBOARD_APP_PLUGINS_PATH is required}
+    target: /www/plugins
+
+services:
+  web:
+    volumes: *production-app-volumes
+    mem_limit: ${XBOARD_WEB_MEMORY_LIMIT:-512m}
+
+  ws:
+    volumes: *production-app-volumes
+    mem_limit: ${XBOARD_WS_MEMORY_LIMIT:-192m}
+
+  horizon:
+    volumes: *production-app-volumes
+    mem_limit: ${XBOARD_HORIZON_MEMORY_LIMIT:-768m}
+
+  scheduler:
+    volumes: *production-app-volumes
+    mem_limit: ${XBOARD_SCHEDULER_MEMORY_LIMIT:-128m}
+
+  maintenance:
+    volumes: *production-app-volumes
+
+  redis:
+    environment:
+      XBOARD_REDIS_APPENDONLY: no
+
+volumes:
+  redis_data:
+    external: true
+    name: ${XBOARD_REDIS_VOLUME_NAME:?XBOARD_REDIS_VOLUME_NAME is required}

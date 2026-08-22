@@ -10,6 +10,18 @@ inputs:
     description: Verify the public route and CDN assets after traffic has switched.
     required: false
     default: 'false'
+  verify_public_route:
+    description: Verify the public origin; disable only while traffic is intentionally on maintenance.
+    required: false
+    default: 'true'
+  expected_asset_version:
+    description: Full candidate commit SHA; defaults to the workflow commit for legacy release jobs.
+    required: false
+    default: ''
+  v2_release_id:
+    description: Resolve the candidate loopback port from this protected V2 release state.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -27,5 +39,8 @@ runs:
       env:
         SMOKE_VALIDATION_MODE: ${{ inputs.validation_mode }}
         SMOKE_VERIFY_PUBLIC_ASSETS: ${{ inputs.verify_public_assets }}
+        SMOKE_VERIFY_PUBLIC_ROUTE: ${{ inputs.verify_public_route }}
         EXPECTED_ASSET_VERSION: ${{ github.sha }}
+        V2_EXPECTED_ASSET_VERSION: ${{ inputs.expected_asset_version }}
+        V2_RELEASE_ID: ${{ inputs.v2_release_id }}
       run: bash "$GITHUB_WORKSPACE/.github/scripts/smoke-distributor-remote.sh"

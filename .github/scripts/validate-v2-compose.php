@@ -8,7 +8,7 @@ function fail(string $message): never
     exit(1);
 }
 
-if ($argc !== 3) {
+if ($argc < 3 || $argc > 5) {
     fail('usage');
 }
 
@@ -31,8 +31,16 @@ if ($actualServices !== $expectedServices) {
 }
 
 $expectedImage = $argv[2];
+$expectedPort = isset($argv[3]) ? (int) $argv[3] : 17003;
+$mode = $argv[4] ?? 'sample';
 if (!preg_match('/\A[^\s@]+@sha256:[0-9a-f]{64}\z/', $expectedImage)) {
     fail('application_image_not_immutable');
+}
+if ($expectedPort < 1 || $expectedPort > 65535) {
+    fail('invalid_expected_port');
+}
+if (!in_array($mode, ['sample', 'production'], true)) {
+    fail('invalid_mode');
 }
 
 $roles = ['web', 'ws', 'horizon', 'scheduler', 'maintenance'];
@@ -61,7 +69,7 @@ foreach ($roles as $role) {
 $edgePorts = $services['edge']['ports'] ?? [];
 if (count($edgePorts) !== 1
     || (int) ($edgePorts[0]['target'] ?? 0) !== 7001
-    || (int) ($edgePorts[0]['published'] ?? 0) !== 17003
+    || (int) ($edgePorts[0]['published'] ?? 0) !== $expectedPort
     || (string) ($edgePorts[0]['host_ip'] ?? '') !== '127.0.0.1') {
     fail('edge_not_loopback_only');
 }
@@ -90,6 +98,34 @@ foreach (['web', 'ws', 'horizon', 'scheduler'] as $role) {
 }
 if (empty($services['redis']['healthcheck']['test'])) {
     fail('redis_healthcheck_missing');
+}
+
+if ($mode === 'production') {
+    if (($services['redis']['environment']['XBOARD_REDIS_APPENDONLY'] ?? null) !== 'no') {
+        fail('redis_rollback_compatibility_mode');
+    }
+    foreach ($roles as $role) {
+        $volumes = $services[$role]['volumes'] ?? [];
+        $targets = array_column($volumes, 'target');
+        sort($targets);
+        $expectedTargets = [
+            '/www/.env',
+            '/www/.docker/.data',
+            '/www/storage/logs',
+            '/www/storage/theme',
+            '/www/storage/app/knowledge-attachments',
+            '/www/plugins',
+        ];
+        sort($expectedTargets);
+        if ($targets !== $expectedTargets) {
+            fail("{$role}_authoritative_mounts");
+        }
+        foreach ($volumes as $volume) {
+            if (($volume['type'] ?? null) !== 'bind') {
+                fail("{$role}_non_bind_mount");
+            }
+        }
+    }
 }
 
 echo "V2_COMPOSE=PASS services=" . count($services) . "\n";

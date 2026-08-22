@@ -55,7 +55,7 @@ on:
         required: false
         type: string
       production_release_action:
-        description: Release phase (none, prepare, switch, activate_roles, repair_roles, retire_previous, rollback, cleanup, admin_assets, admin_assets_rollback)
+        description: Release phase (legacy actions or v2_prepare, v2_start, v2_switch, v2_rollback, v2_finalize)
         required: true
         default: none
         type: string
@@ -139,7 +139,8 @@ jobs:
       ${{ github.event_name != 'workflow_dispatch' ||
           (inputs.cleanup_stage_run_id == '' &&
            (inputs.production_release_action == 'none' ||
-            inputs.production_release_action == 'admin_assets')) }}
+            inputs.production_release_action == 'admin_assets' ||
+            inputs.production_release_action == 'v2_prepare')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -311,11 +312,20 @@ jobs:
           bash -n .github/scripts/test-release-state.sh
           bash -n .github/scripts/validate-v2-compose.sh
           bash -n .github/scripts/test-v2-redis.sh
+          bash -n .github/scripts/v2-low-memory-common.sh
+          bash -n .github/scripts/resolve-xboard-v2-port.sh
+          bash -n .github/scripts/prepare-xboard-v2-low-memory.sh
+          bash -n .github/scripts/start-xboard-v2-low-memory.sh
+          bash -n .github/scripts/switch-xboard-v2-low-memory.sh
+          bash -n .github/scripts/rollback-xboard-v2-low-memory.sh
+          bash -n .github/scripts/finalize-xboard-v2-low-memory.sh
+          bash -n .github/scripts/test-v2-low-memory-common.sh
           sh -n .docker/redis/run-v2-redis.sh
           sh -n .docker/redis/healthcheck-v2-redis.sh
           php -l .github/scripts/validate-v2-compose.php
           bash .github/scripts/validate-v2-compose.sh
           bash .github/scripts/test-v2-redis.sh
+          bash .github/scripts/test-v2-low-memory-common.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
           bash .github/scripts/test-release-state.sh
@@ -463,7 +473,7 @@ jobs:
 
       - name: Get version
         id: get_version
-        run: echo "version=$(git describe --tags --always)" >> $GITHUB_OUTPUT
+        run: echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
 
       - name: Extract metadata
         id: meta
@@ -1353,6 +1363,531 @@ jobs:
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' bash -s"
+
+  prepare-v2-low-memory:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_prepare' &&
+          inputs.deploy_production == false &&
+          inputs.stage_production_green == false &&
+          inputs.stage_production_dry_run == false &&
+          inputs.cleanup_stage_run_id == '' }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-server
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Verify exact V2 preparation commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$EXPECTED_SHA" = "$(printf '%s' "$EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+      - uses: actions/checkout@v7
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Login server to GHCR for V2 preparation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+      - name: Prepare immutable low-memory V2 release without production mutation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          EXPECTED_RELEASE_SHA: ${{ github.sha }}
+          RELEASE_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+          MAINTENANCE_PORT: ${{ inputs.stage_target_port }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/prepare-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' RELEASE_IMAGE='$RELEASE_IMAGE' MAINTENANCE_PORT='$MAINTENANCE_PORT' bash -s"
+      - name: Logout server from GHCR
+        if: ${{ always() }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  start-v2-low-memory:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_start' &&
+          inputs.deploy_production == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Verify exact prepared V2 identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+      - uses: actions/checkout@v7
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Enter maintenance and cold-start V2
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/start-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+
+  smoke-started-v2:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_start' }}
+    needs: start-v2-low-memory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify V2 privately while public traffic remains on maintenance
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_route: false
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.rollback_target_port }}
+
+  auto-rollback-failed-v2-start:
+    if: >-
+      ${{ always() &&
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_start' &&
+          inputs.deploy_production == false &&
+          (needs.start-v2-low-memory.result != 'success' ||
+           needs.smoke-started-v2.result != 'success') }}
+    needs:
+      - start-v2-low-memory
+      - smoke-started-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Restore legacy after failed V2 start or private smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/rollback-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+
+  pre-switch-v2-smoke:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_switch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Recheck V2 privately before traffic switch
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_route: false
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.rollback_target_port }}
+
+  switch-v2-low-memory:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_switch' &&
+          inputs.deploy_production == false }}
+    needs: pre-switch-v2-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Verify exact ready V2 identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+      - uses: actions/checkout@v7
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Atomically switch public traffic to V2
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/switch-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+
+  smoke-switched-v2:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_switch' }}
+    needs: switch-v2-low-memory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify V2 through loopback and public origin
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.rollback_target_port }}
+
+  auto-rollback-failed-v2-switch:
+    if: >-
+      ${{ always() &&
+          github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_switch' &&
+          inputs.deploy_production == false &&
+          (needs.switch-v2-low-memory.result != 'success' ||
+           needs.smoke-switched-v2.result != 'success') }}
+    needs:
+      - switch-v2-low-memory
+      - smoke-switched-v2
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Restore legacy after failed external V2 smoke
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/rollback-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+
+  smoke-auto-rolled-back-v2:
+    if: >-
+      ${{ always() &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          (needs.auto-rollback-failed-v2-start.result == 'success' ||
+           needs.auto-rollback-failed-v2-switch.result == 'success') }}
+    needs:
+      - auto-rollback-failed-v2-start
+      - auto-rollback-failed-v2-switch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify legacy after automatic V2 rollback
+        uses: ./.github/actions/distributor-smoke
+        with:
+          validation_mode: rollback
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.rollback_target_port }}
+
+  rollback-v2-low-memory:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_rollback' &&
+          inputs.deploy_production == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Verify exact V2 rollback identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+      - uses: actions/checkout@v7
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Restore exact legacy runtime and storage owners
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/rollback-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+
+  smoke-manual-v2-rollback:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_rollback' }}
+    needs: rollback-v2-low-memory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify legacy after manual V2 rollback
+        uses: ./.github/actions/distributor-smoke
+        with:
+          validation_mode: rollback
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.rollback_target_port }}
+
+  pre-finalize-v2-smoke:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_finalize' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify public V2 before retiring rollback containers
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.rollback_target_port }}
+
+  finalize-v2-low-memory:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.production_release_action == 'v2_finalize' &&
+          inputs.deploy_production == false }}
+    needs: pre-finalize-v2-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Verify exact V2 finalize identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+      - uses: actions/checkout@v7
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Retire only the recorded stopped legacy containers
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/finalize-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
 
   smoke-distributor:
     if: ${{ github.ref == 'refs/heads/codex/distributor' }}

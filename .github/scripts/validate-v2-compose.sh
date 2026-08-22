@@ -39,6 +39,27 @@ compose \
 "$php_bin" "$repo_root/.github/scripts/validate-v2-compose.php" \
     "$temporary_dir/compose.json" "$application_image"
 
+for directory in data logs theme knowledge plugins; do
+    mkdir -p "$temporary_dir/$directory"
+done
+export XBOARD_APP_DATA_PATH=$temporary_dir/data
+export XBOARD_APP_LOGS_PATH=$temporary_dir/logs
+export XBOARD_APP_THEME_PATH=$temporary_dir/theme
+export XBOARD_APP_KNOWLEDGE_PATH=$temporary_dir/knowledge
+export XBOARD_APP_PLUGINS_PATH=$temporary_dir/plugins
+export XBOARD_REDIS_VOLUME_NAME=xboard-v2-validation-external-redis
+
+compose \
+    --project-name xboard-v2-validation \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    --file "$repo_root/compose.v2.production.yaml" \
+    --profile maintenance \
+    --profile owners \
+    config --format json > "$temporary_dir/compose-production.json"
+
+"$php_bin" "$repo_root/.github/scripts/validate-v2-compose.php" \
+    "$temporary_dir/compose-production.json" "$application_image" 17003 production
+
 compose \
     --project-name xboard-v2-validation \
     --file "$repo_root/compose.v2.sample.yaml" \
