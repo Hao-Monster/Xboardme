@@ -115,7 +115,7 @@ php artisan runtime:health <role>
 
 ## 后续 PR 顺序
 
-1. V2 拓扑与独立 Redis：建立独立网络、数据卷、角色容器和资源限制。
+1. V2 拓扑与独立 Redis：建立独立网络、数据卷、角色容器和资源限制。设计与本地门禁见 `docs-dev/deployment-v2-topology.md`。
 2. 影子环境与数据演练：备份、恢复、迁移、回滚和故障注入。
 3. WS 灰度切换：先 rollout，再切流并退役旧 WS，最后 strict。
 4. Redis ACL 与密钥轮换：按角色最小权限授权并验证回滚。

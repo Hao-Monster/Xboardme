@@ -309,6 +309,13 @@ jobs:
           bash -n .github/scripts/cleanup-xboard-live-release.sh
           bash -n .github/scripts/release-state.sh
           bash -n .github/scripts/test-release-state.sh
+          bash -n .github/scripts/validate-v2-compose.sh
+          bash -n .github/scripts/test-v2-redis.sh
+          sh -n .docker/redis/run-v2-redis.sh
+          sh -n .docker/redis/healthcheck-v2-redis.sh
+          php -l .github/scripts/validate-v2-compose.php
+          bash .github/scripts/validate-v2-compose.sh
+          bash .github/scripts/test-v2-redis.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
           bash .github/scripts/test-release-state.sh

@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Support\RuntimeHealthKey;
 use App\Support\RuntimeRole;
 use App\Utils\CacheKey;
 use App\WebSocket\NodeWorker;
@@ -27,13 +28,19 @@ class RuntimeHealth extends Command
         ];
 
         if ($role === RuntimeRole::WS) {
-            $checks['ws_process'] = $this->freshCacheTimestamp(NodeWorker::HEARTBEAT_CACHE_KEY, 30);
-            $checks['ws_redis_subscription'] = $this->freshCacheTimestamp(NodeWorker::REDIS_READY_CACHE_KEY, 30);
+            $checks['ws_process'] = $this->freshCacheTimestamp(
+                RuntimeHealthKey::forInstance(NodeWorker::HEARTBEAT_CACHE_KEY),
+                30
+            );
+            $checks['ws_redis_subscription'] = $this->freshCacheTimestamp(
+                RuntimeHealthKey::forInstance(NodeWorker::REDIS_READY_CACHE_KEY),
+                30
+            );
         }
 
         if ($role === RuntimeRole::SCHEDULER) {
             $checks['scheduler_tick'] = $this->freshCacheTimestamp(
-                CacheKey::get('SCHEDULE_LAST_CHECK_AT', null),
+                RuntimeHealthKey::forInstance(CacheKey::get('SCHEDULE_LAST_CHECK_AT', null)),
                 120
             );
         }

@@ -34,5 +34,8 @@ bun.lockb
 compose.yaml
 compose.host.yaml
 compose.split.yaml
+compose.v2.yaml
+.docker/v2/secrets/*
+!.docker/v2/secrets/.gitignore
 .scribe
 /docs-dev/

@@ -8,6 +8,7 @@ use App\Services\NodeConnectionOwnership;
 use App\Services\NodeRegistry;
 use App\Services\ServerService;
 use App\Services\ServerMachineCredentialService;
+use App\Support\RuntimeHealthKey;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
@@ -88,11 +89,17 @@ class NodeWorker
     {
         $refreshHealth = function (): void {
             try {
-                Cache::put(self::HEARTBEAT_CACHE_KEY, time(), self::HEARTBEAT_TTL);
+                foreach (RuntimeHealthKey::compatibilityKeys(self::HEARTBEAT_CACHE_KEY) as $key) {
+                    Cache::put($key, time(), self::HEARTBEAT_TTL);
+                }
                 if ($this->redisSubscriber->isReady()) {
-                    Cache::put(self::REDIS_READY_CACHE_KEY, time(), self::HEARTBEAT_TTL);
+                    foreach (RuntimeHealthKey::compatibilityKeys(self::REDIS_READY_CACHE_KEY) as $key) {
+                        Cache::put($key, time(), self::HEARTBEAT_TTL);
+                    }
                 } else {
-                    Cache::forget(self::REDIS_READY_CACHE_KEY);
+                    foreach (RuntimeHealthKey::compatibilityKeys(self::REDIS_READY_CACHE_KEY) as $key) {
+                        Cache::forget($key);
+                    }
                 }
             } catch (\Throwable $e) {
                 Log::warning('[WS] Unable to publish runtime health.', [
