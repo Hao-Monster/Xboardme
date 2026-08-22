@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if ! declare -F release_state_get >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck source=release-state.sh
+  source "$script_dir/release-state.sh"
+fi
+
 : "${RELEASE_ID:?RELEASE_ID is required}"
 if [[ ! "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
   echo 'RELEASE_CLEANUP_FAIL=invalid_run_id'
@@ -12,13 +18,20 @@ if ((${#compose_ids[@]} != 1)); then
   exit 1
 fi
 workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${compose_ids[0]}")
-state_file="$workdir/.codex-release/$RELEASE_ID/state.env"
-if [[ ! -f "$state_file" ]]; then
+release_dir="$workdir/.codex-release/$RELEASE_ID"
+if ! state_file=$(release_state_open "$release_dir"); then
   echo 'RELEASE_CLEANUP_FAIL=state_missing'
   exit 1
 fi
-# shellcheck disable=SC1090
-source "$state_file"
+STATE_RELEASE_ID=$(release_state_get "$state_file" release_id)
+BLUE_PORT=$(release_state_get "$state_file" blue_port)
+GREEN_PORT=$(release_state_get "$state_file" green_port)
+TRAFFIC_STATE=$(release_state_get "$state_file" traffic_state)
+CADDY_CONFIG=$(release_state_get_optional "$state_file" caddy_config)
+if [[ "$STATE_RELEASE_ID" != "$RELEASE_ID" ]]; then
+  echo 'RELEASE_CLEANUP_FAIL=release_state_identity_mismatch'
+  exit 1
+fi
 caddy_config=${CADDY_CONFIG:-}
 if [[ -z "$caddy_config" ]]; then
   mapfile -t caddy_candidates < <(

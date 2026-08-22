@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if ! declare -F release_state_get >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck source=release-state.sh
+  source "$script_dir/release-state.sh"
+fi
+
 : "${RELEASE_ID:?RELEASE_ID is required}"
 : "${EXPECTED_RELEASE_SHA:?EXPECTED_RELEASE_SHA is required}"
 if [[ ! "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
@@ -27,13 +33,22 @@ if ((${#compose_ids[@]} != 1)); then
 fi
 workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${compose_ids[0]}")
 release_dir="$workdir/.codex-release/$RELEASE_ID"
-state_file="$release_dir/state.env"
-if [[ ! -f "$state_file" ]]; then
+if ! state_file=$(release_state_open "$release_dir"); then
   echo 'RELEASE_SWITCH_FAIL=state_missing'
   exit 1
 fi
-# shellcheck disable=SC1090
-source "$state_file"
+STATE_RELEASE_ID=$(release_state_get "$state_file" release_id)
+RELEASE_IMAGE=$(release_state_get "$state_file" release_image)
+RELEASE_SHA=$(release_state_get "$state_file" release_sha)
+BLUE_CONTAINER=$(release_state_get "$state_file" blue_container)
+BLUE_PORT=$(release_state_get "$state_file" blue_port)
+GREEN_CONTAINER=$(release_state_get "$state_file" green_container)
+GREEN_PORT=$(release_state_get "$state_file" green_port)
+TRAFFIC_STATE=$(release_state_get "$state_file" traffic_state)
+if [[ "$STATE_RELEASE_ID" != "$RELEASE_ID" ]]; then
+  echo 'RELEASE_SWITCH_FAIL=release_state_identity_mismatch'
+  exit 1
+fi
 blue=$BLUE_CONTAINER
 if [[ "$(docker inspect -f '{{.State.Running}}' "$blue" 2>/dev/null || true)" != true ]]; then
   echo 'RELEASE_SWITCH_FAIL=blue_missing'
@@ -87,18 +102,10 @@ else
   cp -p -- "$proxy_file" "$caddy_backup"
   chmod 600 "$caddy_backup"
 fi
-set_state() {
-  local key=$1 value=$2 temporary
-  temporary=$(mktemp "${state_file}.XXXXXX")
-  awk -F= -v key="$key" '$1 != key {print}' "$state_file" > "$temporary"
-  printf '%s=%q\n' "$key" "$value" >> "$temporary"
-  chmod 600 "$temporary"
-  mv -f -- "$temporary" "$state_file"
-}
 # Persist the exact recovery paths before the first configuration mutation so
 # an independent rollback remains possible even if the cutover exits early.
-set_state CADDY_CONFIG "$proxy_file"
-set_state CADDY_BACKUP "$caddy_backup"
+release_state_set "$state_file" caddy_config "$proxy_file"
+release_state_set "$state_file" caddy_backup "$caddy_backup"
 
 candidate=$(mktemp "${proxy_file}.codex-${RELEASE_ID}.XXXXXX")
 cleanup_candidate() { rm -f -- "$candidate"; }
@@ -145,8 +152,8 @@ if [[ "$(grep -o "127\\.0\\.0\\.1:$GREEN_PORT" "$proxy_file" | wc -l)" != 1 ]] |
   exit 1
 fi
 
-set_state SWITCHED_AT "$(date -u +%FT%TZ)"
-set_state TRAFFIC_STATE green
+release_state_set "$state_file" switched_at "$(date -u +%FT%TZ)"
+release_state_set "$state_file" traffic_state green
 
 config_changed=0
 trap - EXIT

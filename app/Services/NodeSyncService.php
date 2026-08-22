@@ -16,6 +16,25 @@ class NodeSyncService
      */
     public static function isNodeOnline(int $nodeId): bool
     {
+        try {
+            $ownership = app(NodeConnectionOwnership::class);
+            if ($ownership->ownershipEnabled()) {
+                if ($ownership->hasActiveOwner($nodeId)) {
+                    return true;
+                }
+                if ($ownership->strictModeEnabled()) {
+                    return false;
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[NodePush] Unable to inspect connection ownership.', [
+                'node_id' => $nodeId,
+                'exception' => $e::class,
+            ]);
+        }
+
+        // Compatibility remains active until deployment explicitly enables
+        // strict ownership after every legacy WS process has been retired.
         return (bool) Cache::get("node_ws_alive:{$nodeId}");
     }
 

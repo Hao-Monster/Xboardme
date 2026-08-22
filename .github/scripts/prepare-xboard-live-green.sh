@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if ! declare -F release_state_get >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck source=release-state.sh
+  source "$script_dir/release-state.sh"
+fi
+
 : "${RELEASE_ID:?RELEASE_ID is required}"
 : "${STAGE_RUN_ID:?STAGE_RUN_ID is required}"
 : "${RELEASE_SHA:?RELEASE_SHA is required}"
@@ -18,6 +24,11 @@ for identifier in "$RELEASE_ID" "$STAGE_RUN_ID"; do
 done
 if [[ ! "$RELEASE_PORT" =~ ^[0-9]+$ ]] || ((RELEASE_PORT < 1024 || RELEASE_PORT > 65535)); then
   echo 'RELEASE_PREPARE_FAIL=invalid_release_port'
+  exit 1
+fi
+
+if ! release_state_require_tool; then
+  echo 'RELEASE_PREPARE_FAIL=jq_missing'
   exit 1
 fi
 
@@ -215,30 +226,28 @@ docker exec -u 0 "$blue" rm -f "$snapshot_path"
 chmod 600 "$release_dir/backups/database.sqlite"
 backup_sha256=$(sha256sum "$release_dir/backups/database.sqlite" | awk '{print $1}')
 
-state_file="$release_dir/state.env"
+state_file="$release_dir/state.json"
 blue_image_id=$(docker inspect -f '{{.Image}}' "$blue")
 blue_image_name=$(docker inspect -f '{{.Config.Image}}' "$blue")
-{
-  printf 'RELEASE_ID=%q\n' "$RELEASE_ID"
-  printf 'RELEASE_IMAGE=%q\n' "$RELEASE_IMAGE"
-  printf 'RELEASE_SHA=%q\n' "$RELEASE_SHA"
-  printf 'APPROVED_STAGE_RUN_ID=%q\n' "$STAGE_RUN_ID"
-  printf 'PROJECT=%q\n' "$project"
-  printf 'WORKDIR=%q\n' "$workdir"
-  printf 'BLUE_CONTAINER=%q\n' "$blue"
-  printf 'BLUE_CONTAINER_NAME=%q\n' "$blue_name"
-  printf 'BLUE_PORT=%q\n' "$blue_port"
-  printf 'BLUE_IMAGE_ID=%q\n' "$blue_image_id"
-  printf 'BLUE_IMAGE_NAME=%q\n' "$blue_image_name"
-  printf 'PREVIOUS_RELEASE_ID=%q\n' "$previous_release_id"
-  printf 'GREEN_PORT=%q\n' "$RELEASE_PORT"
-  printf 'DATABASE_BACKUP=%q\n' "$release_dir/backups/database.sqlite"
-  printf 'DATABASE_BACKUP_SHA256=%q\n' "$backup_sha256"
-  printf 'PREPARED_AT=%q\n' "$(date -u +%FT%TZ)"
-  printf 'TRAFFIC_STATE=%q\n' blue
-  printf 'ROLE_STATE=%q\n' blue
-} > "$state_file"
-chmod 600 "$state_file"
+release_state_create "$state_file" \
+  release_id "$RELEASE_ID" \
+  release_image "$RELEASE_IMAGE" \
+  release_sha "$RELEASE_SHA" \
+  approved_stage_run_id "$STAGE_RUN_ID" \
+  project "$project" \
+  workdir "$workdir" \
+  blue_container "$blue" \
+  blue_container_name "$blue_name" \
+  blue_port "$blue_port" \
+  blue_image_id "$blue_image_id" \
+  blue_image_name "$blue_image_name" \
+  previous_release_id "$previous_release_id" \
+  green_port "$RELEASE_PORT" \
+  database_backup "$release_dir/backups/database.sqlite" \
+  database_backup_sha256 "$backup_sha256" \
+  prepared_at "$(date -u +%FT%TZ)" \
+  traffic_state blue \
+  role_state blue
 
 # The approved clone has completed its purpose. Remove only that exact stage
 # so the live candidate can bind the already validated loopback port.
@@ -394,10 +403,10 @@ if [[ -n "$state_owner_process" ]]; then
   exit 1
 fi
 
-printf 'GREEN_CONTAINER=%q\n' "$green_name" >> "$state_file"
-printf 'GREEN_RUNTIME=%q\n' "$runtime" >> "$state_file"
-printf 'CONTINUITY_SHA256=%q\n' "$(printf '%s' "$green_continuity" | sha256sum | awk '{print $1}')" >> "$state_file"
-printf 'MIGRATED_AT=%q\n' "$(date -u +%FT%TZ)" >> "$state_file"
+release_state_set "$state_file" green_container "$green_name"
+release_state_set "$state_file" green_runtime "$runtime"
+release_state_set "$state_file" continuity_sha256 "$(printf '%s' "$green_continuity" | sha256sum | awk '{print $1}')"
+release_state_set "$state_file" migrated_at "$(date -u +%FT%TZ)"
 trap - EXIT
 echo "RELEASE_PREPARE=PASS id=$RELEASE_ID image=$RELEASE_IMAGE blue=$blue_name:$blue_port green=$green_name:$RELEASE_PORT"
 echo "RELEASE_BACKUP=PASS sha256=$backup_sha256"

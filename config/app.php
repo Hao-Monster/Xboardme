@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\RuntimeRole;
+
 return [
 
     /*
@@ -59,7 +61,12 @@ return [
     // A blue/green release must have exactly one scheduler owner. Web-only
     // candidates disable the Octane tick until scheduler ownership is moved
     // explicitly after the traffic switch.
-    'scheduler_enabled' => env('ENABLE_SCHEDULER', true),
+    'runtime_role' => RuntimeRole::normalize((string) env('XBOARD_RUNTIME_ROLE', RuntimeRole::LEGACY)),
+
+    'scheduler_enabled' => RuntimeRole::schedulerEnabled(
+        (string) env('XBOARD_RUNTIME_ROLE', RuntimeRole::LEGACY),
+        env('ENABLE_SCHEDULER')
+    ),
 
     /*
     |--------------------------------------------------------------------------
@@ -197,4 +204,6 @@ return [
     'version' => '1.0.0',
 
     'ws_pid_file' => env('WS_PID_FILE', storage_path('logs/xboard-ws-server.pid')),
+
+    'ws_log_file' => env('WS_LOG_FILE', storage_path('logs/xboard-ws-server.log')),
 ];

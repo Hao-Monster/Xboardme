@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if ! declare -F release_state_get >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck source=release-state.sh
+  source "$script_dir/release-state.sh"
+fi
+
 : "${RELEASE_ID:?RELEASE_ID is required}"
 if [[ ! "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
   echo 'RELEASE_ROLLBACK_FAIL=invalid_run_id'
@@ -13,13 +19,28 @@ if ((${#compose_ids[@]} != 1)); then
   exit 1
 fi
 workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${compose_ids[0]}")
-state_file="$workdir/.codex-release/$RELEASE_ID/state.env"
-if [[ ! -f "$state_file" ]]; then
+release_dir="$workdir/.codex-release/$RELEASE_ID"
+if ! state_file=$(release_state_open "$release_dir"); then
   echo 'RELEASE_ROLLBACK_FAIL=state_missing'
   exit 1
 fi
-# shellcheck disable=SC1090
-source "$state_file"
+STATE_RELEASE_ID=$(release_state_get "$state_file" release_id)
+BLUE_CONTAINER=$(release_state_get "$state_file" blue_container)
+BLUE_PORT=$(release_state_get "$state_file" blue_port)
+GREEN_PORT=$(release_state_get "$state_file" green_port)
+ROLE_STATE=$(release_state_get "$state_file" role_state)
+CADDY_BACKUP=$(release_state_get_optional "$state_file" caddy_backup)
+CADDY_CONFIG=$(release_state_get_optional "$state_file" caddy_config)
+ROLE_MODE=$(release_state_get_optional "$state_file" role_mode)
+HORIZON_CONTAINER=$(release_state_get_optional "$state_file" horizon_container)
+SCHEDULER_CONTAINER=$(release_state_get_optional "$state_file" scheduler_container)
+PREVIOUS_HORIZON_CONTAINER=$(release_state_get_optional "$state_file" previous_horizon_container)
+PREVIOUS_SCHEDULER_CONTAINER=$(release_state_get_optional "$state_file" previous_scheduler_container)
+BLUE_OCTANE_PGID=$(release_state_get_optional "$state_file" blue_octane_pgid)
+if [[ "$STATE_RELEASE_ID" != "$RELEASE_ID" ]]; then
+  echo 'RELEASE_ROLLBACK_FAIL=release_state_identity_mismatch'
+  exit 1
+fi
 blue=$BLUE_CONTAINER
 if [[ "$(docker inspect -f '{{.State.Running}}' "$blue" 2>/dev/null || true)" != true ]] ||
    [[ ! "$BLUE_PORT" =~ ^[0-9]+$ ]] || [[ ! "$GREEN_PORT" =~ ^[0-9]+$ ]]; then
@@ -204,19 +225,11 @@ if [[ "$(grep -o "127\\.0\\.0\\.1:$BLUE_PORT" "$caddy_config" | wc -l)" != 1 ]] 
 fi
 echo 'RELEASE_ROLLBACK_CHECK=previous_web_roles_and_caddy_ready external_smoke_required'
 
-set_state() {
-  local key=$1 value=$2 temporary
-  temporary=$(mktemp "${state_file}.XXXXXX")
-  awk -F= -v key="$key" '$1 != key {print}' "$state_file" > "$temporary"
-  printf '%s=%q\n' "$key" "$value" >> "$temporary"
-  chmod 600 "$temporary"
-  mv -f -- "$temporary" "$state_file"
-}
-set_state TRAFFIC_STATE blue
-set_state ROLE_STATE blue
-set_state CADDY_CONFIG "$caddy_config"
-set_state CADDY_BACKUP "$caddy_backup"
-set_state ROLLED_BACK_AT "$(date -u +%FT%TZ)"
+release_state_set "$state_file" traffic_state blue
+release_state_set "$state_file" role_state blue
+release_state_set "$state_file" caddy_config "$caddy_config"
+release_state_set "$state_file" caddy_backup "$caddy_backup"
+release_state_set "$state_file" rolled_back_at "$(date -u +%FT%TZ)"
 
 trap - EXIT
 if ((role_handoff_started == 1)); then

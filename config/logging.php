@@ -5,6 +5,11 @@ use Monolog\Handler\SyslogUdpHandler;
 
 return [
 
+    'deprecations' => [
+        'channel' => env('LOG_DEPRECATIONS_CHANNEL', 'deprecations'),
+        'trace' => false,
+    ],
+
     'default' => env('LOG_CHANNEL', 'daily'),
 
     'channels' => [

@@ -287,6 +287,7 @@ jobs:
           bash -n init.sh
           bash -n update.sh
           sh -n .docker/entrypoint.sh
+          sh -n .docker/run-role.sh
           bash -n .github/scripts/deploy-xboard-compose.sh
           bash -n .github/scripts/preflight-xboard-compose.sh
           bash -n .github/scripts/stage-xboard-green.sh
@@ -306,8 +307,11 @@ jobs:
           bash -n .github/scripts/smoke-distributor-remote.sh
           bash -n .github/scripts/smoke-distributor-mobile-browser.sh
           bash -n .github/scripts/cleanup-xboard-live-release.sh
+          bash -n .github/scripts/release-state.sh
+          bash -n .github/scripts/test-release-state.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
+          bash .github/scripts/test-release-state.sh
           XBOARD_PREFLIGHT_SELF_TEST=redis-topology \
             XBOARD_REDIS_CLUSTER_ENABLED=0 \
             bash .github/scripts/preflight-xboard-compose.sh
@@ -327,6 +331,73 @@ jobs:
           test "$unknown_output" = 'PREFLIGHT_FAIL=redis_cluster_topology_unknown'
           bash .github/scripts/test-ssh-with-password.sh
           bash .github/scripts/test-preflight-scheduler-reaper.sh
+
+  pr-image-build:
+    if: ${{ github.event_name == 'pull_request' }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout exact pull request merge commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Verify admin frontend build context
+        run: php .github/scripts/verify-admin-assets.php
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.20.0
+            network=host
+
+      - name: Stamp immutable pull request revision
+        run: |
+          VERSION="$GITHUB_SHA"
+          test "$VERSION" = "$(printf '%s' "$VERSION" | grep -E '^[0-9a-f]{40}$')"
+          sed -i "s/'version' => '.*'/'version' => '$VERSION'/g" config/app.php
+          grep -Fq "'version' => '$VERSION'" config/app.php
+          php .github/scripts/build-theme-asset-manifest.php "$VERSION" "$RUNNER_TEMP/theme-release-manifest.json"
+          php .github/scripts/verify-theme-assets.php "$VERSION" "$RUNNER_TEMP/theme-release-manifest.json"
+
+      - name: Build pull request image without publishing
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: xboard-pr:${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+            APP_REVISION=${{ github.sha }}
+          provenance: false
+          allow: |
+            network.host
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Inspect pull request image contract
+        env:
+          IMAGE: xboard-pr:${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          test "$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE")" = "$GITHUB_SHA"
+          docker run --rm --entrypoint sh "$IMAGE" -eu -c '
+            test -x /entrypoint.sh
+            test -x /run-role.sh
+            test -f /www/theme/Xboard/assets/release-manifest.json
+          '
 
   build:
     if: ${{ github.event_name != 'pull_request' }}
@@ -861,10 +932,10 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           RELEASE_PORT: ${{ inputs.candidate_target_port }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+          cat .github/scripts/release-state.sh .github/scripts/prepare-xboard-live-green.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' RELEASE_PORT='$RELEASE_PORT' bash -s" \
-            < .github/scripts/prepare-xboard-live-green.sh
+            "RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' RELEASE_PORT='$RELEASE_PORT' bash -s"
 
       - name: Logout server from GHCR
         if: ${{ always() }}
@@ -932,10 +1003,10 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+          cat .github/scripts/release-state.sh .github/scripts/cleanup-xboard-live-release.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' bash -s" \
-            < .github/scripts/cleanup-xboard-live-release.sh
+            "RELEASE_ID='$RELEASE_ID' bash -s"
 
   pre-switch-smoke:
     if: >-
@@ -998,10 +1069,10 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+          cat .github/scripts/release-state.sh .github/scripts/switch-xboard-live-green.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s" \
-            < .github/scripts/switch-xboard-live-green.sh
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
 
   smoke-switched-green:
     if: >-
@@ -1062,10 +1133,10 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+          cat .github/scripts/release-state.sh .github/scripts/rollback-xboard-live-green.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' bash -s" \
-            < .github/scripts/rollback-xboard-live-green.sh
+            "RELEASE_ID='$RELEASE_ID' bash -s"
 
   smoke-auto-rolled-back-blue:
     if: >-
@@ -1134,10 +1205,10 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
           ALLOW_ROLE_REPAIR: ${{ inputs.production_release_action == 'repair_roles' }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+          cat .github/scripts/release-state.sh .github/scripts/activate-xboard-green-roles.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' ALLOW_ROLE_REPAIR='$ALLOW_ROLE_REPAIR' bash -s" \
-            < .github/scripts/activate-xboard-green-roles.sh
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' ALLOW_ROLE_REPAIR='$ALLOW_ROLE_REPAIR' bash -s"
 
   retire-previous-release:
     if: >-
@@ -1178,10 +1249,10 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+          cat .github/scripts/release-state.sh .github/scripts/retire-xboard-previous-release.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s" \
-            < .github/scripts/retire-xboard-previous-release.sh
+            "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
 
   rollback-live-release:
     if: >-
@@ -1212,10 +1283,10 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+          cat .github/scripts/release-state.sh .github/scripts/rollback-xboard-live-green.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' bash -s" \
-            < .github/scripts/rollback-xboard-live-green.sh
+            "RELEASE_ID='$RELEASE_ID' bash -s"
 
   smoke-rolled-back-blue:
     if: >-
@@ -1271,10 +1342,10 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+          cat .github/scripts/release-state.sh .github/scripts/cleanup-xboard-live-release.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "RELEASE_ID='$RELEASE_ID' bash -s" \
-            < .github/scripts/cleanup-xboard-live-release.sh
+            "RELEASE_ID='$RELEASE_ID' bash -s"
 
   smoke-distributor:
     if: ${{ github.ref == 'refs/heads/codex/distributor' }}

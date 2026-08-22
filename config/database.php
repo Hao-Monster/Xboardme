@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\EnvironmentSecret;
+
 use Illuminate\Support\Str;
 
 return [
@@ -140,7 +142,16 @@ return [
         'default' => [
             'url' => env('REDIS_URL'),
             'host' => env('REDIS_HOST', '127.0.0.1'),
-            'password' => env('REDIS_PASSWORD', null),
+            'username' => EnvironmentSecret::resolveValue(
+                env('REDIS_USERNAME'),
+                env('REDIS_USERNAME_FILE'),
+                'REDIS_USERNAME'
+            ),
+            'password' => EnvironmentSecret::resolveValue(
+                env('REDIS_PASSWORD'),
+                env('REDIS_PASSWORD_FILE'),
+                'REDIS_PASSWORD'
+            ),
             'port' => env('REDIS_PORT', 6379),
             'database' => env('REDIS_DB', 0),
             'persistent' => true, // 开启持久连接
@@ -149,7 +160,16 @@ return [
         'cache' => [
             'url' => env('REDIS_URL'),
             'host' => env('REDIS_HOST', '127.0.0.1'),
-            'password' => env('REDIS_PASSWORD', null),
+            'username' => EnvironmentSecret::resolveValue(
+                env('REDIS_USERNAME'),
+                env('REDIS_USERNAME_FILE'),
+                'REDIS_USERNAME'
+            ),
+            'password' => EnvironmentSecret::resolveValue(
+                env('REDIS_PASSWORD'),
+                env('REDIS_PASSWORD_FILE'),
+                'REDIS_PASSWORD'
+            ),
             'port' => env('REDIS_PORT', 6379),
             'database' => env('REDIS_CACHE_DB', 1),
         ],
