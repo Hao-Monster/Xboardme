@@ -63,6 +63,10 @@ return [
     // explicitly after the traffic switch.
     'runtime_role' => RuntimeRole::normalize((string) env('XBOARD_RUNTIME_ROLE', RuntimeRole::LEGACY)),
 
+    // Health signals from overlapping blue/green releases must not satisfy one
+    // another. The container entrypoint validates the same identifier syntax.
+    'runtime_instance_id' => env('RUNTIME_INSTANCE_ID', 'default'),
+
     'scheduler_enabled' => RuntimeRole::schedulerEnabled(
         (string) env('XBOARD_RUNTIME_ROLE', RuntimeRole::LEGACY),
         env('ENABLE_SCHEDULER')

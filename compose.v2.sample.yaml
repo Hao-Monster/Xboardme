@@ -1,0 +1,235 @@
+# Opt-in V2 topology. This file does not replace the legacy Compose templates.
+# XBOARD_IMAGE must be the exact release image digest for one full commit.
+x-app-environment: &app-environment
+  docker: "true"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_URL: ""
+  REDIS_CLUSTER: redis
+  REDIS_USERNAME: ""
+  REDIS_USERNAME_FILE: ""
+  REDIS_PASSWORD: ""
+  REDIS_PASSWORD_FILE: /run/secrets/xboard_redis_password
+  KNOWLEDGE_ATTACHMENT_ROOT: /www/storage/app/knowledge-attachments
+
+x-app-service: &app-service
+  image: ${XBOARD_IMAGE:?XBOARD_IMAGE must be an immutable image digest}
+  pull_policy: missing
+  init: true
+  restart: unless-stopped
+  env_file:
+    - ${XBOARD_ENV_FILE:-./.env}
+  environment: *app-environment
+  secrets:
+    - source: redis_password
+      target: xboard_redis_password
+      uid: "1000"
+      gid: "1000"
+      mode: 0400
+  volumes: &app-volumes
+    - app_data:/www/.docker/.data
+    - app_logs:/www/storage/logs
+    - app_theme:/www/storage/theme
+    - app_knowledge:/www/storage/app/knowledge-attachments
+    - app_plugins:/www/plugins
+  networks:
+    - backplane
+    - egress
+  security_opt:
+    - no-new-privileges:true
+  stop_grace_period: 30s
+  logging:
+    driver: json-file
+    options:
+      max-size: 20m
+      max-file: "3"
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  edge:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    pull_policy: missing
+    init: true
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - target: 7001
+        published: ${XBOARD_HTTP_PORT:?XBOARD_HTTP_PORT is required}
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - ./.docker/caddy/Caddyfile.v2:/etc/caddy/Caddyfile:ro
+    tmpfs:
+      - /config:size=8m,mode=0700
+      - /data:size=8m,mode=0700
+    networks:
+      - edge
+    depends_on:
+      web:
+        condition: service_healthy
+      ws:
+        condition: service_healthy
+    mem_limit: ${XBOARD_EDGE_MEMORY_LIMIT:-64m}
+    cpus: ${XBOARD_EDGE_CPU_LIMIT:-0.25}
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  web:
+    <<: *app-service
+    environment:
+      <<: *app-environment
+      XBOARD_RUNTIME_ROLE: web
+      RUNTIME_INSTANCE_ID: ${XBOARD_RELEASE_ID:?XBOARD_RELEASE_ID is required}-web
+    command: ["/run-role.sh"]
+    networks:
+      - edge
+      - backplane
+      - egress
+    healthcheck:
+      test: ["CMD", "php", "/www/artisan", "runtime:health", "web"]
+      interval: 15s
+      timeout: 10s
+      retries: 4
+      start_period: 45s
+    mem_limit: ${XBOARD_WEB_MEMORY_LIMIT:-768m}
+    cpus: ${XBOARD_WEB_CPU_LIMIT:-2.0}
+    pids_limit: 256
+
+  ws:
+    <<: *app-service
+    environment:
+      <<: *app-environment
+      XBOARD_RUNTIME_ROLE: ws
+      RUNTIME_INSTANCE_ID: ${XBOARD_RELEASE_ID:?XBOARD_RELEASE_ID is required}-ws
+      WS_HOST: 0.0.0.0
+      WS_PORT: "8076"
+    command: ["/run-role.sh"]
+    networks:
+      - edge
+      - backplane
+      - egress
+    healthcheck:
+      test: ["CMD", "php", "/www/artisan", "runtime:health", "ws"]
+      interval: 15s
+      timeout: 10s
+      retries: 4
+      start_period: 45s
+    mem_limit: ${XBOARD_WS_MEMORY_LIMIT:-256m}
+    cpus: ${XBOARD_WS_CPU_LIMIT:-1.0}
+    pids_limit: 128
+
+  horizon:
+    <<: *app-service
+    profiles: ["owners"]
+    environment:
+      <<: *app-environment
+      XBOARD_RUNTIME_ROLE: horizon
+      RUNTIME_INSTANCE_ID: ${XBOARD_RELEASE_ID:?XBOARD_RELEASE_ID is required}-horizon
+    command: ["/run-role.sh"]
+    healthcheck:
+      test: ["CMD", "php", "/www/artisan", "runtime:health", "horizon"]
+      interval: 20s
+      timeout: 10s
+      retries: 4
+      start_period: 45s
+    mem_limit: ${XBOARD_HORIZON_MEMORY_LIMIT:-768m}
+    cpus: ${XBOARD_HORIZON_CPU_LIMIT:-2.0}
+    pids_limit: 256
+
+  scheduler:
+    <<: *app-service
+    profiles: ["owners"]
+    environment:
+      <<: *app-environment
+      XBOARD_RUNTIME_ROLE: scheduler
+      RUNTIME_INSTANCE_ID: ${XBOARD_RELEASE_ID:?XBOARD_RELEASE_ID is required}-scheduler
+    command: ["/run-role.sh"]
+    healthcheck:
+      test: ["CMD", "php", "/www/artisan", "runtime:health", "scheduler"]
+      interval: 30s
+      timeout: 10s
+      retries: 4
+      start_period: 120s
+    mem_limit: ${XBOARD_SCHEDULER_MEMORY_LIMIT:-256m}
+    cpus: ${XBOARD_SCHEDULER_CPU_LIMIT:-1.0}
+    pids_limit: 256
+
+  maintenance:
+    <<: *app-service
+    profiles: ["maintenance"]
+    restart: "no"
+    environment:
+      <<: *app-environment
+      XBOARD_RUNTIME_ROLE: maintenance
+      RUNTIME_INSTANCE_ID: ${XBOARD_RELEASE_ID:?XBOARD_RELEASE_ID is required}-maintenance
+    entrypoint: ["/entrypoint.sh", "/run-role.sh"]
+    mem_limit: ${XBOARD_MAINTENANCE_MEMORY_LIMIT:-512m}
+    cpus: ${XBOARD_MAINTENANCE_CPU_LIMIT:-1.0}
+    pids_limit: 256
+
+  redis:
+    image: redis:8.4.2-alpine@sha256:e1b6db24cb4fdd89f4bc9be09f671ea3bec92fbd7042554f76c34aa2be9b59ad
+    pull_policy: missing
+    init: true
+    restart: unless-stopped
+    read_only: true
+    entrypoint: ["/run-v2-redis.sh"]
+    environment:
+      REDIS_PASSWORD_FILE: /run/secrets/xboard_redis_password
+      XBOARD_REDIS_MAXMEMORY: ${XBOARD_REDIS_MAXMEMORY:-256mb}
+    secrets:
+      - source: redis_password
+        target: xboard_redis_password
+        mode: 0400
+    volumes:
+      - redis_data:/data
+      - ./.docker/redis/run-v2-redis.sh:/run-v2-redis.sh:ro
+      - ./.docker/redis/healthcheck-v2-redis.sh:/healthcheck-v2-redis.sh:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    networks:
+      - backplane
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/healthcheck-v2-redis.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    mem_limit: ${XBOARD_REDIS_MEMORY_LIMIT:-384m}
+    cpus: ${XBOARD_REDIS_CPU_LIMIT:-0.75}
+    pids_limit: 128
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  edge:
+    internal: true
+  backplane:
+    internal: true
+  egress: {}
+
+volumes:
+  app_data: {}
+  app_logs: {}
+  app_theme: {}
+  app_knowledge: {}
+  app_plugins: {}
+  redis_data: {}
+
+secrets:
+  redis_password:
+    file: ${XBOARD_REDIS_PASSWORD_FILE:?XBOARD_REDIS_PASSWORD_FILE is required}

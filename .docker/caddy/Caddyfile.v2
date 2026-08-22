@@ -1,0 +1,25 @@
+{
+	admin off
+	auto_https off
+	persist_config off
+	log {
+		output stdout
+		format console
+	}
+	servers {
+		# The edge service is published only on host loopback. Trust private
+		# upstream addresses without accepting arbitrary public spoofed hops.
+		trusted_proxies static private_ranges
+		trusted_proxies_strict
+	}
+}
+
+:7001 {
+	@ws path /ws
+	reverse_proxy @ws ws:8076
+
+	reverse_proxy web:7001 {
+		header_up Host {host}
+		header_up X-Real-IP {client_ip}
+	}
+}
