@@ -150,6 +150,7 @@ v2_compose() {
     --env-file "$V2_RELEASE_DIR/runtime.env" \
     --file "$V2_RELEASE_DIR/compose.v2.sample.yaml" \
     --file "$V2_RELEASE_DIR/compose.v2.production.yaml" \
+    --profile maintenance \
     --profile owners \
     "$@"
 }
