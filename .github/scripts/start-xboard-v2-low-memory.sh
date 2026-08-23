@@ -55,6 +55,7 @@ v2_compose up --detach --wait --wait-timeout 120 redis web ws edge
 for service in redis web ws edge; do
   v2_wait_service_healthy "$service" 45
 done
+v2_wait_loopback_http "$ACTIVE_PORT" 30
 
 web_id=$(v2_service_id web)
 docker exec "$web_id" php /www/.github/scripts/validate-approved-migrations.php --require-clean
@@ -76,15 +77,17 @@ scheduler_id=$(v2_service_id scheduler)
 [[ "$(docker inspect -f '{{.HostConfig.Init}}' "$scheduler_id")" == true ]] || v2_fail scheduler_init_disabled
 start_epoch=$(date +%s)
 while (( $(date +%s) - start_epoch < scheduler_reaper_observation_seconds )); do
-  for service in redis web ws horizon scheduler; do
+  for service in redis web ws edge horizon scheduler; do
     v2_service_healthy "$service" || v2_fail "sustained_health_failed:$service"
   done
+  v2_loopback_http_ready "$ACTIVE_PORT" || v2_fail edge_loopback_unhealthy
   [[ "$(v2_scheduler_zombie_count)" == 0 ]] || v2_fail scheduler_zombies_detected
   v2_assert_v2_owners
   sleep 5
 done
 docker exec "$scheduler_id" php /www/artisan runtime:health scheduler >/dev/null
 [[ "$(v2_scheduler_zombie_count)" == 0 ]] || v2_fail scheduler_zombies_detected
+v2_loopback_http_ready "$ACTIVE_PORT" || v2_fail edge_loopback_unhealthy
 v2_assert_v2_owners
 
 release_state_set "$V2_STATE_FILE" traffic_state ready

@@ -207,11 +207,28 @@ v2_service_healthy() {
   state=$(docker inspect -f '{{.State.Running}}' "$id" 2>/dev/null || true)
   [[ "$state" == true ]] || return 1
   health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id")
-  [[ "$health" == healthy || "$service" == edge ]] || return 1
+  [[ "$health" == healthy ]] || return 1
   revision=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$id")
   if [[ "$service" != edge && "$service" != redis && "$revision" != "$RELEASE_SHA" ]]; then
     return 1
   fi
+}
+
+v2_loopback_http_ready() {
+  local port=$1
+  curl --silent --show-error --fail --max-time 3 "http://127.0.0.1:$port/" >/dev/null
+}
+
+v2_wait_loopback_http() {
+  local port=$1 attempts=${2:-30}
+  local attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if v2_loopback_http_ready "$port"; then
+      return 0
+    fi
+    sleep 2
+  done
+  v2_fail edge_loopback_unhealthy
 }
 
 v2_wait_service_healthy() {

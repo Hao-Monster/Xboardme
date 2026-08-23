@@ -81,3 +81,20 @@ compose \
     --project-name xboard-v2-validation \
     --file "$repo_root/compose.v2.sample.yaml" \
     run --rm --no-deps edge caddy validate --config /etc/caddy/Caddyfile
+
+compose \
+    --project-name xboard-v2-validation \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    up --detach --no-deps edge
+edge_port_ready=0
+for _ in $(seq 1 10); do
+    # The upstream roles are intentionally absent here. Any HTTP response
+    # (normally 502) proves Docker published the edge port on host loopback.
+    if curl --silent --show-error --output /dev/null --max-time 3 \
+        'http://127.0.0.1:17003/'; then
+        edge_port_ready=1
+        break
+    fi
+    sleep 1
+done
+test "$edge_port_ready" = 1

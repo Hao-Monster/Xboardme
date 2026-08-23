@@ -41,13 +41,21 @@ class DeploymentV2TopologyTest extends TestCase
         $this->assertCount(1, $services['edge']['ports']);
         $this->assertSame('127.0.0.1', $services['edge']['ports'][0]['host_ip']);
         $this->assertSame('${XBOARD_HTTP_PORT:?XBOARD_HTTP_PORT is required}', $services['edge']['ports'][0]['published']);
+        $this->assertSame(['ingress', 'edge'], $services['edge']['networks']);
+        $this->assertSame(
+            ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:7001/'],
+            $services['edge']['healthcheck']['test']
+        );
         foreach (['web', 'ws', 'horizon', 'scheduler', 'maintenance', 'redis'] as $service) {
             $this->assertArrayNotHasKey('ports', $services[$service]);
+            $this->assertNotContains('ingress', $services[$service]['networks'] ?? [], $service);
         }
 
         $this->assertSame(['backplane'], $services['redis']['networks']);
         $this->assertTrue($services['redis']['read_only']);
         $this->assertContains('/tmp:size=16m,mode=1777', $services['redis']['tmpfs']);
+        $this->assertArrayHasKey('ingress', $this->topology['networks']);
+        $this->assertFalse($this->topology['networks']['ingress']['internal'] ?? false);
         $this->assertTrue($this->topology['networks']['edge']['internal']);
         $this->assertTrue($this->topology['networks']['backplane']['internal']);
     }

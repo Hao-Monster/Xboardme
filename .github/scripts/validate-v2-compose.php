@@ -73,12 +73,26 @@ if (count($edgePorts) !== 1
     || (string) ($edgePorts[0]['host_ip'] ?? '') !== '127.0.0.1') {
     fail('edge_not_loopback_only');
 }
+$edgeNetworks = array_keys($services['edge']['networks'] ?? []);
+sort($edgeNetworks);
+if ($edgeNetworks !== ['edge', 'ingress']) {
+    fail('edge_network_scope');
+}
+foreach (['web', 'ws', 'horizon', 'scheduler', 'maintenance', 'redis'] as $serviceName) {
+    if (array_key_exists('ingress', $services[$serviceName]['networks'] ?? [])) {
+        fail("{$serviceName}_must_not_join_ingress");
+    }
+}
 
 if (!empty($services['redis']['ports'])) {
     fail('redis_port_published');
 }
 if (array_keys($services['redis']['networks'] ?? []) !== ['backplane']) {
     fail('redis_network_scope');
+}
+if (!array_key_exists('ingress', $config['networks'] ?? [])
+    || ($config['networks']['ingress']['internal'] ?? false) === true) {
+    fail('host_ingress_network_missing');
 }
 if (($config['networks']['backplane']['internal'] ?? false) !== true
     || ($config['networks']['edge']['internal'] ?? false) !== true) {
@@ -91,7 +105,7 @@ foreach (['edge', 'redis'] as $serviceName) {
     }
 }
 
-foreach (['web', 'ws', 'horizon', 'scheduler'] as $role) {
+foreach (['edge', 'web', 'ws', 'horizon', 'scheduler'] as $role) {
     if (empty($services[$role]['healthcheck']['test'])) {
         fail("{$role}_healthcheck_missing");
     }
