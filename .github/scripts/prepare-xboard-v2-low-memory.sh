@@ -211,29 +211,10 @@ docker run --rm --entrypoint php \
   --volume "$release_dir:/release:ro" \
   "$RELEASE_IMAGE" /release/validate-v2-compose.php "/release/$(basename -- "$compose_json")" "$RELEASE_IMAGE" "$active_port" production
 
-jq -e \
-  --arg env "$env_file" \
-  --arg data "$app_data_path" \
-  --arg logs "$app_logs_path" \
-  --arg theme "$app_theme_path" \
-  --arg knowledge "$app_knowledge_path" \
-  --arg plugins "$app_plugins_path" \
-  --arg redis_volume "$redis_volume_name" '
-    def expected: [
-      {type:"bind", source:$env, target:"/www/.env", read_only:true},
-      {type:"bind", source:$data, target:"/www/.docker/.data"},
-      {type:"bind", source:$logs, target:"/www/storage/logs"},
-      {type:"bind", source:$theme, target:"/www/storage/theme"},
-      {type:"bind", source:$knowledge, target:"/www/storage/app/knowledge-attachments"},
-      {type:"bind", source:$plugins, target:"/www/plugins"}
-    ];
-    all(["web","ws","horizon","scheduler","maintenance"][] as $role;
-      (.services[$role].volumes | map({type, source, target, read_only}) | map(with_entries(select(.value != null))) | sort_by(.target))
-        == (expected | sort_by(.target))
-    )
-    and (.services.redis.environment.XBOARD_REDIS_APPENDONLY == "no")
-    and ([.volumes[] | select(.name == $redis_volume and .external == true)] | length == 1)
-  ' "$compose_json" >/dev/null || v2_fail rendered_production_compose_invalid
+v2_validate_rendered_production_compose \
+  "$compose_json" "$env_file" "$app_data_path" "$app_logs_path" "$app_theme_path" \
+  "$app_knowledge_path" "$app_plugins_path" "$redis_volume_name" || \
+  v2_fail rendered_production_compose_invalid
 
 v2_compose pull --quiet
 maintenance_image=$(jq -er '.services.edge.image' "$compose_json")

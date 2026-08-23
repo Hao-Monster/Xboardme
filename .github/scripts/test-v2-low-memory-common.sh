@@ -31,6 +31,53 @@ source "$repo_root/.github/scripts/release-state.sh"
 # shellcheck source=v2-low-memory-common.sh
 source "$repo_root/.github/scripts/v2-low-memory-common.sh"
 
+env_file="$temporary_dir/work/.env"
+data_path="$temporary_dir/work/data"
+logs_path="$temporary_dir/work/logs"
+theme_path="$temporary_dir/work/theme"
+knowledge_path="$temporary_dir/work/knowledge"
+plugins_path="$temporary_dir/work/plugins"
+redis_volume_name=xboard_redis
+compose_json="$temporary_dir/rendered-compose.json"
+jq -n \
+  --arg env "$env_file" \
+  --arg data "$data_path" \
+  --arg logs "$logs_path" \
+  --arg theme "$theme_path" \
+  --arg knowledge "$knowledge_path" \
+  --arg plugins "$plugins_path" \
+  --arg redis_volume "$redis_volume_name" '
+    def volumes: [
+      {type:"bind", source:$env, target:"/www/.env", read_only:true},
+      {type:"bind", source:$data, target:"/www/.docker/.data"},
+      {type:"bind", source:$logs, target:"/www/storage/logs"},
+      {type:"bind", source:$theme, target:"/www/storage/theme"},
+      {type:"bind", source:$knowledge, target:"/www/storage/app/knowledge-attachments"},
+      {type:"bind", source:$plugins, target:"/www/plugins"}
+    ];
+    {
+      services: {
+        web: {volumes: volumes},
+        ws: {volumes: volumes},
+        horizon: {volumes: volumes},
+        scheduler: {volumes: volumes},
+        maintenance: {volumes: volumes},
+        redis: {environment: {XBOARD_REDIS_APPENDONLY: "no"}}
+      },
+      volumes: {redis_data: {name: $redis_volume, external: true}}
+    }
+  ' > "$compose_json"
+v2_validate_rendered_production_compose \
+  "$compose_json" "$env_file" "$data_path" "$logs_path" "$theme_path" \
+  "$knowledge_path" "$plugins_path" "$redis_volume_name"
+jq 'del(.services.scheduler.volumes[0])' "$compose_json" > "$temporary_dir/invalid-compose.json"
+if v2_validate_rendered_production_compose \
+  "$temporary_dir/invalid-compose.json" "$env_file" "$data_path" "$logs_path" "$theme_path" \
+  "$knowledge_path" "$plugins_path" "$redis_volume_name" 2>/dev/null; then
+  echo 'V2_COMMON_TEST_FAIL=invalid_production_mounts_were_accepted' >&2
+  exit 1
+fi
+
 CADDY_CONFIG="$temporary_dir/Caddyfile"
 CADDY_BACKUP="$temporary_dir/Caddyfile.backup"
 ACTIVE_PORT=7002

@@ -103,6 +103,8 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $this->assertStringContainsString('redis_secret_permissions', $common);
         $this->assertStringContainsString('--profile maintenance', $common);
         $this->assertStringContainsString('--profile owners', $common);
+        $this->assertStringContainsString('v2_validate_rendered_production_compose()', $common);
+        $this->assertStringContainsString('v2_validate_rendered_production_compose', $prepare);
         $this->assertStringContainsString('"$legacy_horizon_id" "$legacy_scheduler_id"', $prepare);
 
         $maintenanceSwitch = strpos($start, 'v2_replace_caddy_upstream "$ACTIVE_PORT" "$MAINTENANCE_PORT"');
