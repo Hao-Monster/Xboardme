@@ -302,6 +302,10 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString("127\\.0\\.0\\.1:700[123]", $resolver);
         $this->assertStringContainsString('tls_connection_policies', $resolver);
         $this->assertStringContainsString('ambiguous_caddy_origin', $resolver);
+        $this->assertStringContainsString('command -v jq', $resolver);
+        $this->assertStringContainsString('| jq -r', $resolver);
+        $this->assertStringNotContainsString('docker', $resolver);
+        $this->assertStringNotContainsString('blue_', $resolver);
         $this->assertStringContainsString('bash -n .github/scripts/resolve-xboard-public-url.sh', file_get_contents(base_path('.github/workflows/docker-publish.yml')));
     }
 
