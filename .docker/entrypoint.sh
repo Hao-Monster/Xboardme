@@ -19,7 +19,6 @@ case "$XBOARD_RUNTIME_ROLE" in
             web) ENABLE_WEB=true ;;
             ws)
                 ENABLE_WS_SERVER=true
-                : "${WS_LOG_FILE:=/dev/stderr}"
                 ;;
             horizon) ENABLE_HORIZON=true ;;
         esac
@@ -31,7 +30,6 @@ case "$XBOARD_RUNTIME_ROLE" in
 esac
 export XBOARD_RUNTIME_ROLE ENABLE_WEB ENABLE_HORIZON ENABLE_REDIS ENABLE_WS_SERVER \
        ENABLE_CADDY ENABLE_SCHEDULER LOG_CHANNEL LOG_DEPRECATIONS_CHANNEL
-[ -z "${WS_LOG_FILE:-}" ] || export WS_LOG_FILE
 
 # Resolve the binding scheme based on whether the embedded Caddy is enabled.
 #
@@ -69,6 +67,13 @@ esac
 : "${SUPERVISOR_PID_FILE:=/tmp/xboard-supervisord-${RUNTIME_INSTANCE_ID}.pid}"
 : "${SUPERVISOR_SOCKET_FILE:=/tmp/xboard-supervisor-${RUNTIME_INSTANCE_ID}.sock}"
 export RUNTIME_INSTANCE_ID OCTANE_STATE_FILE WS_PID_FILE SUPERVISOR_PID_FILE SUPERVISOR_SOCKET_FILE
+if [ "$XBOARD_RUNTIME_ROLE" = ws ]; then
+    # Workerman treats its log target as a regular file: it calls touch/chmod
+    # before starting. Character devices such as /dev/stderr therefore abort
+    # the dedicated non-root WS role before its health check can become ready.
+    : "${WS_LOG_FILE:=/tmp/xboard-ws-${RUNTIME_INSTANCE_ID}.log}"
+    export WS_LOG_FILE
+fi
 
 # Keep knowledge attachments on a private, writable filesystem. The directory
 # is mounted by the Compose templates and remains outside the public web root.

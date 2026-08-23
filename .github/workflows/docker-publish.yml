@@ -320,6 +320,7 @@ jobs:
           bash -n .github/scripts/rollback-xboard-v2-low-memory.sh
           bash -n .github/scripts/finalize-xboard-v2-low-memory.sh
           bash -n .github/scripts/test-v2-low-memory-common.sh
+          bash -n .github/scripts/test-v2-redis-owner-restore.sh
           sh -n .docker/redis/run-v2-redis.sh
           sh -n .docker/redis/healthcheck-v2-redis.sh
           php -l .github/scripts/validate-v2-compose.php
@@ -415,6 +416,20 @@ jobs:
             test -x /run-role.sh
             test -f /www/theme/Xboard/assets/release-manifest.json
           '
+          docker run --rm \
+            --entrypoint /entrypoint.sh \
+            --env XBOARD_RUNTIME_ROLE=ws \
+            --env RUNTIME_INSTANCE_ID=ci-ws \
+            "$IMAGE" sh -eu -c '
+              test "$WS_LOG_FILE" = /tmp/xboard-ws-ci-ws.log
+              su-exec www sh -eu -c '\''
+                touch "$1"
+                test -f "$1"
+                test -w "$1"
+              '\'' sh "$WS_LOG_FILE"
+              printf "%s\n" WS_RUNTIME_LOG=PASS
+            ' | grep -Fxq 'WS_RUNTIME_LOG=PASS'
+          IMAGE="$IMAGE" bash .github/scripts/test-v2-redis-owner-restore.sh
 
   build:
     if: ${{ github.event_name != 'pull_request' }}

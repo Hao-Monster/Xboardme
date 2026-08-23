@@ -437,6 +437,57 @@ v2_stop_legacy_runtime() {
   done
 }
 
+v2_restore_legacy_redis_owner() {
+  local legacy_image_id
+
+  v2_assert_legacy_identity || return 1
+  if v2_container_running "$LEGACY_ANCHOR_ID" &&
+     docker exec "$LEGACY_ANCHOR_ID" redis-cli -s /data/redis.sock ping 2>/dev/null | grep -qx PONG; then
+    return 0
+  fi
+  if v2_container_running "$LEGACY_ANCHOR_ID"; then
+    docker stop --time 30 "$LEGACY_ANCHOR_ID" >/dev/null || {
+      v2_fail legacy_anchor_stop_before_owner_restore_failed
+      return 1
+    }
+  fi
+  ! v2_container_running "$LEGACY_ANCHOR_ID" || {
+    v2_fail legacy_anchor_running_during_owner_restore
+    return 1
+  }
+
+  legacy_image_id=$(docker inspect -f '{{.Image}}' "$LEGACY_ANCHOR_ID")
+  [[ "$legacy_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    v2_fail invalid_legacy_image_id_for_owner_restore
+    return 1
+  }
+
+  docker run --rm \
+    --network none \
+    --read-only \
+    --security-opt no-new-privileges:true \
+    --user 0:0 \
+    --memory 64m \
+    --pids-limit 32 \
+    --volume "$REDIS_VOLUME_NAME:/data" \
+    --entrypoint /bin/sh \
+    "$legacy_image_id" -eu -c '
+      test -d /data && test ! -L /data
+      test -f /data/dump.rdb && test ! -L /data/dump.rdb
+      before=$(sha256sum /data/dump.rdb)
+      before=${before%% *}
+      chown redis:redis /data /data/dump.rdb
+      after=$(sha256sum /data/dump.rdb)
+      after=${after%% *}
+      test "$before" = "$after"
+      test "$(stat -c %u:%g /data)" = "$(id -u redis):$(id -g redis)"
+      test "$(stat -c %u:%g /data/dump.rdb)" = "$(id -u redis):$(id -g redis)"
+    ' >/dev/null || {
+      v2_fail legacy_redis_owner_restore_failed
+      return 1
+    }
+}
+
 v2_start_legacy_runtime() {
   local attempt redis_ready=0 runtime_ready=0 horizon_ready_samples=0
   v2_assert_legacy_identity || return 1
@@ -665,6 +716,7 @@ v2_rollback_runtime() {
     }
   fi
 
+  v2_restore_legacy_redis_owner || return 1
   v2_start_legacy_runtime || return 1
   v2_restore_caddy_backup || return 1
   docker rm -f "$MAINTENANCE_CONTAINER" >/dev/null 2>&1 || true
