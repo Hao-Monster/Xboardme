@@ -180,7 +180,8 @@ release_state_import_legacy() {
 }
 
 release_state_open() {
-  local release_dir=$1 state_file="$release_dir/state.json" legacy_file="$release_dir/state.env"
+  local release_dir=$1
+  local state_file="$release_dir/state.json" legacy_file="$release_dir/state.env"
   if [[ -e "$state_file" ]]; then
     release_state_validate "$state_file" || return 1
   elif [[ -e "$legacy_file" ]]; then
