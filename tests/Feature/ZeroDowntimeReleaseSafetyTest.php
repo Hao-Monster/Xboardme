@@ -395,10 +395,10 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('smoke-auto-rolled-back-blue:', $workflow);
         $this->assertStringContainsString('needs.auto-rollback-failed-switch.result == \'success\'', $workflow);
         $this->assertStringContainsString('TARGET_PORT: ${{ inputs.rollback_target_port }}', $workflow);
-        $this->assertSame(
-            2,
+        $this->assertGreaterThanOrEqual(
+            4,
             substr_count($workflow, 'validation_mode: rollback'),
-            'Both manual and automatic rollback smoke jobs must accept the previous release contract.'
+            'Legacy and V2 manual/automatic rollback smoke jobs must accept the previous release contract.'
         );
 
         $action = file_get_contents(base_path('.github/actions/distributor-smoke/action.yml'));

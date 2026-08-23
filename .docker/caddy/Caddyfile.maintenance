@@ -1,0 +1,16 @@
+{
+	admin off
+	auto_https off
+	persist_config off
+	log {
+		output stdout
+		format console
+	}
+}
+
+:7001 {
+	header Retry-After "300"
+	header Cache-Control "no-store"
+	respond /health 200
+	respond "系统正在进行短时维护，请稍后重试。" 503
+}

@@ -6,6 +6,7 @@ temporary_dir=$(mktemp -d)
 project_name="xboard-v2-redis-test-$$"
 password='v2RedisIntegrationPassword_0123456789abcdef'
 docker_bin=${DOCKER_BIN:-docker}
+redis_image='redis:8.4.2-alpine@sha256:e1b6db24cb4fdd89f4bc9be09f671ea3bec92fbd7042554f76c34aa2be9b59ad'
 
 compose() {
     "$docker_bin" compose "$@"
@@ -29,10 +30,20 @@ export XBOARD_HTTP_PORT=17004
 export XBOARD_ENV_FILE=$temporary_dir/.env
 export XBOARD_REDIS_PASSWORD_FILE=$temporary_dir/redis-password
 
+if ! "$docker_bin" image inspect "$redis_image" >/dev/null 2>&1; then
+    "$docker_bin" pull "$redis_image" >/dev/null
+fi
+
 compose \
     --project-name "$project_name" \
     --file "$repo_root/compose.v2.sample.yaml" \
-    up --detach --wait redis
+    up --detach --wait --pull never redis
+
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    exec --no-TTY --env "REDISCLI_AUTH=$password" redis \
+    redis-cli --no-auth-warning config get appendonly | tail -1 | grep -qx yes
 
 redis_container=$(compose \
     --project-name "$project_name" \
@@ -73,7 +84,7 @@ compose \
 compose \
     --project-name "$project_name" \
     --file "$repo_root/compose.v2.sample.yaml" \
-    up --detach --wait redis >/dev/null
+    up --detach --wait --pull never redis >/dev/null
 
 compose \
     --project-name "$project_name" \
@@ -81,4 +92,43 @@ compose \
     exec --no-TTY --env "REDISCLI_AUTH=$password" redis \
     redis-cli --no-auth-warning get v2:persistence-check | grep -qx ready
 
-echo "V2_REDIS=PASS auth=required persistence=verified user=$redis_user readonly=true"
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    down --volumes --remove-orphans >/dev/null
+
+export XBOARD_REDIS_APPENDONLY=no
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    up --detach --wait --pull never redis
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    exec --no-TTY --env "REDISCLI_AUTH=$password" redis \
+    redis-cli --no-auth-warning config get appendonly | tail -1 | grep -qx no
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    exec --no-TTY --env "REDISCLI_AUTH=$password" redis \
+    redis-cli --no-auth-warning set v2:rdb-compatibility ready >/dev/null
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    exec --no-TTY --env "REDISCLI_AUTH=$password" redis \
+    redis-cli --no-auth-warning save | grep -qx OK
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    restart redis >/dev/null
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    up --detach --wait --pull never redis >/dev/null
+compose \
+    --project-name "$project_name" \
+    --file "$repo_root/compose.v2.sample.yaml" \
+    exec --no-TTY --env "REDISCLI_AUTH=$password" redis \
+    redis-cli --no-auth-warning get v2:rdb-compatibility | grep -qx ready
+
+echo "V2_REDIS=PASS auth=required aof=verified rdb_compatibility=verified user=$redis_user readonly=true"

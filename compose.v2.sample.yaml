@@ -11,6 +11,8 @@ x-app-environment: &app-environment
   REDIS_PASSWORD: ""
   REDIS_PASSWORD_FILE: /run/secrets/xboard_redis_password
   KNOWLEDGE_ATTACHMENT_ROOT: /www/storage/app/knowledge-attachments
+  LOG_CHANNEL: stderr
+  LOG_DEPRECATIONS_CHANNEL: stderr
 
 x-app-service: &app-service
   image: ${XBOARD_IMAGE:?XBOARD_IMAGE must be an immutable image digest}
@@ -23,9 +25,6 @@ x-app-service: &app-service
   secrets:
     - source: redis_password
       target: xboard_redis_password
-      uid: "1000"
-      gid: "1000"
-      mode: 0400
   volumes: &app-volumes
     - app_data:/www/.docker/.data
     - app_logs:/www/storage/logs
@@ -185,10 +184,10 @@ services:
     environment:
       REDIS_PASSWORD_FILE: /run/secrets/xboard_redis_password
       XBOARD_REDIS_MAXMEMORY: ${XBOARD_REDIS_MAXMEMORY:-256mb}
+      XBOARD_REDIS_APPENDONLY: ${XBOARD_REDIS_APPENDONLY:-yes}
     secrets:
       - source: redis_password
         target: xboard_redis_password
-        mode: 0400
     volumes:
       - redis_data:/data
       - ./.docker/redis/run-v2-redis.sh:/run-v2-redis.sh:ro

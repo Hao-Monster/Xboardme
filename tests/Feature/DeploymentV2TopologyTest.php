@@ -77,7 +77,11 @@ class DeploymentV2TopologyTest extends TestCase
         $this->assertSame('', $services['web']['environment']['REDIS_URL']);
         $this->assertSame('', $services['web']['environment']['REDIS_USERNAME_FILE']);
         $this->assertSame('/run/secrets/xboard_redis_password', $services['web']['environment']['REDIS_PASSWORD_FILE']);
-        $this->assertSame('1000', $services['web']['secrets'][0]['uid']);
-        $this->assertSame('1000', $services['web']['secrets'][0]['gid']);
+        $this->assertSame('stderr', $services['web']['environment']['LOG_CHANNEL']);
+        $this->assertSame('stderr', $services['web']['environment']['LOG_DEPRECATIONS_CHANNEL']);
+        $this->assertSame('xboard_redis_password', $services['web']['secrets'][0]['target']);
+        $this->assertArrayNotHasKey('uid', $services['web']['secrets'][0]);
+        $this->assertArrayNotHasKey('gid', $services['web']['secrets'][0]);
+        $this->assertArrayNotHasKey('mode', $services['web']['secrets'][0]);
     }
 }

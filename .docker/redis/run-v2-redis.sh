@@ -3,6 +3,7 @@ set -eu
 
 secret_file=${REDIS_PASSWORD_FILE:-/run/secrets/xboard_redis_password}
 maxmemory=${XBOARD_REDIS_MAXMEMORY:-256mb}
+appendonly=${XBOARD_REDIS_APPENDONLY:-yes}
 
 if [ ! -r "$secret_file" ]; then
     echo "[redis] Password secret is missing or unreadable." >&2
@@ -31,6 +32,13 @@ case "$maxmemory_number" in
         exit 78
         ;;
 esac
+case "$appendonly" in
+    yes|no) ;;
+    *)
+        echo "[redis] XBOARD_REDIS_APPENDONLY must be yes or no." >&2
+        exit 78
+        ;;
+esac
 
 umask 077
 config_file=/tmp/xboard-redis.conf
@@ -40,7 +48,7 @@ config_file=/tmp/xboard-redis.conf
         'protected-mode yes' \
         'port 6379' \
         'dir /data' \
-        'appendonly yes' \
+        "appendonly $appendonly" \
         'appendfsync everysec' \
         'save 900 1' \
         'save 300 10' \

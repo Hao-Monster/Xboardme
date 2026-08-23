@@ -7,9 +7,12 @@ set -euo pipefail
 : "${SSHPASS:?SSHPASS is required}"
 : "${DISTRIBUTOR_EMAIL:?DISTRIBUTOR_EMAIL is required}"
 : "${DISTRIBUTOR_PASSWORD:?DISTRIBUTOR_PASSWORD is required}"
-: "${TARGET_PORT:?TARGET_PORT is required}"
+: "${TARGET_PORT:=}"
 : "${SMOKE_VALIDATION_MODE:=release}"
 : "${SMOKE_VERIFY_PUBLIC_ASSETS:=false}"
+: "${SMOKE_VERIFY_PUBLIC_ROUTE:=true}"
+: "${V2_RELEASE_ID:=}"
+: "${V2_EXPECTED_ASSET_VERSION:=}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ssh_with_password="$script_dir/ssh-with-password.sh"
@@ -22,13 +25,59 @@ case "$SMOKE_VERIFY_PUBLIC_ASSETS" in
   true|false) ;;
   *) echo 'Invalid public asset validation flag.' >&2; exit 1 ;;
 esac
+case "$SMOKE_VERIFY_PUBLIC_ROUTE" in
+  true|false) ;;
+  *) echo 'Invalid public route validation flag.' >&2; exit 1 ;;
+esac
+if [[ "$SMOKE_VERIFY_PUBLIC_ASSETS" == true && "$SMOKE_VERIFY_PUBLIC_ROUTE" != true ]]; then
+  echo 'Public asset validation requires public route validation.' >&2
+  exit 1
+fi
 if [[ "$SMOKE_VALIDATION_MODE" == release ]] && [[ ! "${EXPECTED_ASSET_VERSION:-}" =~ ^[a-f0-9]{40}$ ]]; then
   echo 'Expected asset version must be the full release commit SHA.' >&2
   exit 1
 fi
 
-test "$TARGET_PORT" -ge 1
-test "$TARGET_PORT" -le 65535
+if [[ -n "$V2_RELEASE_ID" ]]; then
+  [[ "$V2_RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]] || {
+    echo 'Invalid V2 release identifier.' >&2
+    exit 1
+  }
+  [[ "$SMOKE_VALIDATION_MODE" == release ]] || {
+    echo 'V2 port resolution is only valid for release smoke tests.' >&2
+    exit 1
+  }
+  [[ "$V2_EXPECTED_ASSET_VERSION" =~ ^[a-f0-9]{40}$ ]] || {
+    echo 'Invalid V2 expected asset version.' >&2
+    exit 1
+  }
+  [[ "${GITHUB_SHA:-}" =~ ^[a-f0-9]{40}$ ]] || {
+    echo 'Invalid current workflow commit.' >&2
+    exit 1
+  }
+  git cat-file -e "$V2_EXPECTED_ASSET_VERSION^{commit}" 2>/dev/null || {
+    echo 'V2 candidate commit is unavailable in the trusted production history.' >&2
+    exit 1
+  }
+  git merge-base --is-ancestor "$V2_EXPECTED_ASSET_VERSION" "$GITHUB_SHA" || {
+    echo 'V2 candidate commit is not an ancestor of the current production workflow.' >&2
+    exit 1
+  }
+  EXPECTED_ASSET_VERSION=$V2_EXPECTED_ASSET_VERSION
+  TARGET_PORT=$(
+    cat "$script_dir/release-state.sh" \
+        "$script_dir/v2-low-memory-common.sh" \
+        "$script_dir/resolve-xboard-v2-port.sh" |
+      bash "$ssh_with_password" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+        "RELEASE_ID='$V2_RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_ASSET_VERSION' bash -s"
+  )
+fi
+
+[[ "$TARGET_PORT" =~ ^[0-9]+$ ]] || {
+  echo 'Target port must be numeric.' >&2
+  exit 1
+}
+((TARGET_PORT >= 1 && TARGET_PORT <= 65535))
 
 asset_work_dir=$(mktemp -d)
 bash "$ssh_with_password" -N \
@@ -74,6 +123,7 @@ verify_release_assets() {
   local local_path
   local local_hash
   local local_bytes
+  local asset_version=$EXPECTED_ASSET_VERSION
 
   curl --silent --show-error --fail --location \
     --header 'Cache-Control: no-cache' \
@@ -84,7 +134,12 @@ verify_release_assets() {
     "$manifest" >/dev/null
 
   for asset in "${required_theme_assets[@]}"; do
-    local_path="$GITHUB_WORKSPACE/theme/Xboard/assets/$asset"
+    if [[ -n "$V2_RELEASE_ID" ]]; then
+      local_path="$asset_work_dir/expected-$asset"
+      git show "$V2_EXPECTED_ASSET_VERSION:theme/Xboard/assets/$asset" > "$local_path"
+    else
+      local_path="$GITHUB_WORKSPACE/theme/Xboard/assets/$asset"
+    fi
     test -s "$local_path"
     local_hash=$(sha256sum "$local_path" | awk '{print $1}')
     local_bytes=$(wc -c < "$local_path" | tr -d '[:space:]')
@@ -100,14 +155,14 @@ verify_release_assets() {
     test "$(sha256sum "$downloaded" | awk '{print $1}')" = "$local_hash"
   done
 
-  DISTRIBUTOR_CSS_URL="$origin/theme/Xboard/assets/distributor.css?v=$EXPECTED_ASSET_VERSION" \
-  DISTRIBUTOR_JS_URL="$origin/theme/Xboard/assets/distributor.js?v=$EXPECTED_ASSET_VERSION" \
-  EXPECTED_ASSET_VERSION="$EXPECTED_ASSET_VERSION" \
+  DISTRIBUTOR_CSS_URL="$origin/theme/Xboard/assets/distributor.css?v=$asset_version" \
+  DISTRIBUTOR_JS_URL="$origin/theme/Xboard/assets/distributor.js?v=$asset_version" \
+  EXPECTED_ASSET_VERSION="$asset_version" \
     bash "$script_dir/smoke-distributor-mobile-browser.sh"
 }
 
 tunnel_ready=0
-for attempt in $(seq 1 10); do
+for _ in $(seq 1 10); do
   if curl --silent --show-error \
     --output /dev/null --connect-timeout 2 --max-time 3 \
     'http://127.0.0.1:17001/'; then
@@ -237,29 +292,31 @@ restricted_status=$(curl --silent --show-error \
 test "$restricted_status" = '403'
 jq -e '.message == "分销商账号无权访问该功能"' restricted.json >/dev/null
 
-public_url=$(bash "$ssh_with_password" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-  'bash -s' < .github/scripts/resolve-xboard-public-url.sh)
-case "$public_url" in
-  http://*|https://*) ;;
-  *) echo 'Invalid public application URL.' >&2; exit 1 ;;
-esac
-public_ready=0
-for attempt in $(seq 1 6); do
-  if curl --silent --show-error --fail --location --max-time 15 \
-    --output /dev/null "$public_url/"; then
-    public_ready=1
-    break
+if [[ "$SMOKE_VERIFY_PUBLIC_ROUTE" == true ]]; then
+  public_url=$(bash "$ssh_with_password" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+    'bash -s' < .github/scripts/resolve-xboard-public-url.sh)
+  case "$public_url" in
+    http://*|https://*) ;;
+    *) echo 'Invalid public application URL.' >&2; exit 1 ;;
+  esac
+  public_ready=0
+  for _ in $(seq 1 6); do
+    if curl --silent --show-error --fail --location --max-time 15 \
+      --output /dev/null "$public_url/"; then
+      public_ready=1
+      break
+    fi
+    sleep 3
+  done
+  test "$public_ready" = '1'
+  if [[ "$SMOKE_VALIDATION_MODE" == release && "$SMOKE_VERIFY_PUBLIC_ASSETS" == true ]]; then
+    public_url=${public_url%/}
+    curl --silent --show-error --fail --location \
+      --header 'Cache-Control: no-cache' \
+      --output "$asset_work_dir/public-dashboard.html" "$public_url/"
+    assert_release_dashboard "$asset_work_dir/public-dashboard.html"
+    verify_release_assets "$public_url" public
   fi
-  sleep 3
-done
-test "$public_ready" = '1'
-if [[ "$SMOKE_VALIDATION_MODE" == release && "$SMOKE_VERIFY_PUBLIC_ASSETS" == true ]]; then
-  public_url=${public_url%/}
-  curl --silent --show-error --fail --location \
-    --header 'Cache-Control: no-cache' \
-    --output "$asset_work_dir/public-dashboard.html" "$public_url/"
-  assert_release_dashboard "$asset_work_dir/public-dashboard.html"
-  verify_release_assets "$public_url" public
 fi
 
 echo 'Distributor production smoke test passed.'
