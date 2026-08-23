@@ -208,4 +208,38 @@ if v2_stop_legacy_runtime 2>/dev/null; then
 fi
 ! grep -Fq 'stop --time 60 legacy-horizon' "$operation_log"
 
-echo 'V2_LOW_MEMORY_COMMON=PASS caddy_rollback=true lock_exclusive=true queue_drain=true'
+: > "$operation_log"
+REDIS_VOLUME_NAME=xboard_redis
+expected_legacy_image_id="sha256:$(printf 'c%.0s' {1..64})"
+anchor_running=1
+v2_container_running() { [[ "$1" == "$LEGACY_ANCHOR_ID" && "$anchor_running" == 1 ]]; }
+docker() {
+  if [[ "$1" == inspect ]]; then
+    printf '%s\n' "$expected_legacy_image_id"
+    return 0
+  fi
+  if [[ "$1" == stop && "$4" == "$LEGACY_ANCHOR_ID" ]]; then
+    anchor_running=0
+  fi
+  printf '%s\n' "$*" >> "$operation_log"
+}
+v2_restore_legacy_redis_owner
+grep -Fxq 'stop --time 30 legacy-anchor' "$operation_log"
+grep -Fq "run --rm --network none --read-only --security-opt no-new-privileges:true --user 0:0 --memory 64m --pids-limit 32 --volume $REDIS_VOLUME_NAME:/data --entrypoint /bin/sh $expected_legacy_image_id" "$operation_log"
+stop_line=$(grep -nF 'stop --time 30 legacy-anchor' "$operation_log" | cut -d: -f1)
+owner_line=$(grep -nF 'run --rm --network none' "$operation_log" | cut -d: -f1)
+((stop_line < owner_line))
+
+: > "$operation_log"
+anchor_running=1
+docker() {
+  if [[ "$1" == exec ]]; then
+    printf '%s\n' PONG
+    return 0
+  fi
+  printf '%s\n' "$*" >> "$operation_log"
+}
+v2_restore_legacy_redis_owner
+[[ ! -s "$operation_log" ]]
+
+echo 'V2_LOW_MEMORY_COMMON=PASS caddy_rollback=true lock_exclusive=true queue_drain=true redis_owner_restore=true redis_owner_retry=true'

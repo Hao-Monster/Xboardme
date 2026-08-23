@@ -137,14 +137,17 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $rollbackImplementation = substr($common, $rollbackStart) . $rollback;
         $save = strpos($rollbackImplementation, 'v2_redis_save');
         $redisStop = strpos($rollbackImplementation, 'v2_compose stop redis');
+        $restoreRedisOwner = strpos($rollbackImplementation, 'v2_restore_legacy_redis_owner');
         $legacyStart = strpos($rollbackImplementation, 'v2_start_legacy_runtime');
         $restoreCaddy = strpos($rollbackImplementation, 'v2_restore_caddy_backup');
         $this->assertNotFalse($save);
         $this->assertNotFalse($redisStop);
+        $this->assertNotFalse($restoreRedisOwner);
         $this->assertNotFalse($legacyStart);
         $this->assertNotFalse($restoreCaddy);
         $this->assertLessThan($redisStop, $save);
-        $this->assertLessThan($legacyStart, $redisStop);
+        $this->assertLessThan($restoreRedisOwner, $redisStop);
+        $this->assertLessThan($legacyStart, $restoreRedisOwner);
         $this->assertLessThan($restoreCaddy, $legacyStart);
         $this->assertStringContainsString('external_smoke_required', $rollbackImplementation);
 

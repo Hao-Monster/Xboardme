@@ -18,6 +18,11 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('XBOARD_RUNTIME_ROLE:=legacy', $entrypoint);
         $this->assertStringContainsString('ENABLE_SCHEDULER=false', $entrypoint);
         $this->assertStringContainsString('LOG_CHANNEL:=stderr', $entrypoint);
+        $this->assertStringContainsString(
+            'WS_LOG_FILE:=/tmp/xboard-ws-${RUNTIME_INSTANCE_ID}.log',
+            $entrypoint
+        );
+        $this->assertStringNotContainsString('WS_LOG_FILE:=/dev/stderr', $entrypoint);
         $this->assertStringContainsString('case "$XBOARD_RUNTIME_ROLE"', $runner);
         $this->assertStringContainsString("php /www/artisan schedule:work", $runner);
         $this->assertStringContainsString('exec su-exec www "$@"', $runner);
@@ -28,6 +33,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('push: false', $workflow);
         $this->assertStringContainsString('load: true', $workflow);
         $this->assertStringContainsString('Inspect pull request image contract', $workflow);
+        $this->assertStringContainsString('test-v2-redis-owner-restore.sh', $workflow);
     }
 
     public function test_release_state_is_json_and_is_never_executed_as_shell_code(): void
