@@ -104,6 +104,9 @@ if ($mode === 'production') {
     if (($services['redis']['environment']['XBOARD_REDIS_APPENDONLY'] ?? null) !== 'no') {
         fail('redis_rollback_compatibility_mode');
     }
+    if ((int) ($services['scheduler']['mem_limit'] ?? 0) < 256 * 1024 * 1024) {
+        fail('scheduler_mem_limit_below_256m');
+    }
     foreach ($roles as $role) {
         $volumes = $services[$role]['volumes'] ?? [];
         $targets = array_column($volumes, 'target');

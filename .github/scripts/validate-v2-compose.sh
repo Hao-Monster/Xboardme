@@ -60,6 +60,23 @@ compose \
 "$php_bin" "$repo_root/.github/scripts/validate-v2-compose.php" \
     "$temporary_dir/compose-production.json" "$application_image" 17003 production
 
+for scheduler_memory_limit in 128m 255m; do
+    export XBOARD_SCHEDULER_MEMORY_LIMIT=$scheduler_memory_limit
+    compose \
+        --project-name xboard-v2-validation \
+        --file "$repo_root/compose.v2.sample.yaml" \
+        --file "$repo_root/compose.v2.production.yaml" \
+        --profile maintenance \
+        --profile owners \
+        config --format json > "$temporary_dir/compose-production-undersized-scheduler.json"
+    if "$php_bin" "$repo_root/.github/scripts/validate-v2-compose.php" \
+        "$temporary_dir/compose-production-undersized-scheduler.json" "$application_image" 17003 production; then
+        echo "Expected production compose validation to reject scheduler memory limit $scheduler_memory_limit." >&2
+        exit 1
+    fi
+done
+unset XBOARD_SCHEDULER_MEMORY_LIMIT
+
 compose \
     --project-name xboard-v2-validation \
     --file "$repo_root/compose.v2.sample.yaml" \
