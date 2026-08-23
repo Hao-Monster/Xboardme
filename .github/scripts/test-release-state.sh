@@ -19,6 +19,7 @@ release_state_create "$state_file" \
   untrusted_value "$malicious_value"
 [[ "$(release_state_get "$state_file" release_id)" == '123-1' ]]
 [[ "$(release_state_get "$state_file" untrusted_value)" == "$malicious_value" ]]
+[[ "$(release_state_open "$test_root")" == "$state_file" ]]
 [[ ! -e "$execution_marker" ]]
 
 release_state_set "$state_file" traffic_state green
