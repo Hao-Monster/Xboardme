@@ -85,15 +85,24 @@ state_release_dir="$state_workdir/.codex-v2-release/$state_release_id"
 state_file="$state_release_dir/state.json"
 state_redis_password="$state_release_dir/redis-password"
 state_caddy_backup="$state_release_dir/backups/caddy.conf"
+privileged=()
+if ((EUID != 0)); then
+  sudo -n true >/dev/null 2>&1 || {
+    echo 'V2_COMMON_TEST_FAIL=privileged_fixture_setup_unavailable' >&2
+    exit 1
+  }
+  privileged=(sudo -n)
+fi
 mkdir -p "$state_release_dir/backups"
 chmod 700 "$state_release_dir"
 printf '%s\n' 'runtime=true' > "$state_release_dir/runtime.env"
 chmod 600 "$state_release_dir/runtime.env"
 printf '%s\n' '0123456789abcdef0123456789abcdef' > "$state_redis_password"
-chown 0:1000 "$state_redis_password"
+"${privileged[@]}" chown 0:1000 "$state_redis_password"
 chmod 440 "$state_redis_password"
 printf '%s\n' ':443 { respond 200 }' > "$state_caddy_backup"
 chmod 600 "$state_caddy_backup"
+"${privileged[@]}" chown 0:0 "$state_release_dir/runtime.env" "$state_caddy_backup"
 release_state_create "$state_file" \
   v2_schema_version "$V2_RELEASE_STATE_SCHEMA" \
   release_id "$state_release_id" \
