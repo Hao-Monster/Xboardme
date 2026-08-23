@@ -137,6 +137,10 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $this->assertStringContainsString('legacy_runtime_did_not_stop', $common);
         $this->assertStringContainsString('No Horizon queues were configured.', $common);
         $this->assertStringContainsString('insufficient_available_memory', $start);
+        $this->assertStringContainsString('[[ "$health" == healthy ]]', $common);
+        $this->assertStringNotContainsString('|| "$service" == edge', $common);
+        $this->assertStringContainsString('v2_wait_loopback_http "$ACTIVE_PORT"', $start);
+        $this->assertStringContainsString('edge_loopback_unhealthy', $start);
 
         $this->assertStringContainsString('[[ "$TRAFFIC_STATE" == ready ]]', $switch);
         $this->assertStringContainsString('traffic_state active_v2', $switch);

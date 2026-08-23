@@ -66,12 +66,19 @@ services:
       - /config:size=8m,mode=0700
       - /data:size=8m,mode=0700
     networks:
+      - ingress
       - edge
     depends_on:
       web:
         condition: service_healthy
       ws:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7001/"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     mem_limit: ${XBOARD_EDGE_MEMORY_LIMIT:-64m}
     cpus: ${XBOARD_EDGE_CPU_LIMIT:-0.25}
     pids_limit: 64
@@ -215,6 +222,7 @@ services:
         max-file: "3"
 
 networks:
+  ingress: {}
   edge:
     internal: true
   backplane:
