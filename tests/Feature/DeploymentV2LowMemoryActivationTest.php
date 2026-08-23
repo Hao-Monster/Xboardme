@@ -42,6 +42,16 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $this->assertSame('no', $overlay['services']['redis']['environment']['XBOARD_REDIS_APPENDONLY'] ?? null);
     }
 
+    public function test_production_scheduler_keeps_the_known_good_memory_floor(): void
+    {
+        $overlay = Yaml::parseFile(base_path('compose.v2.production.yaml'));
+
+        $this->assertSame(
+            '${XBOARD_SCHEDULER_MEMORY_LIMIT:-256m}',
+            $overlay['services']['scheduler']['mem_limit'] ?? null
+        );
+    }
+
     public function test_redis_persistence_mode_is_explicit_and_defaults_to_aof_outside_compatibility_overlay(): void
     {
         $compose = file_get_contents(base_path('compose.v2.sample.yaml'));
