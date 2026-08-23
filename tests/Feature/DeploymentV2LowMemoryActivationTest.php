@@ -88,7 +88,9 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $this->assertStringContainsString("printf '%s\\n' \"\$ACTIVE_PORT\"", $resolvePort);
 
         $this->assertStringContainsString('release_state_create', $prepare);
-        $this->assertStringContainsString('schema_version "$V2_RELEASE_STATE_SCHEMA"', $prepare);
+        $this->assertStringContainsString('v2_schema_version "$V2_RELEASE_STATE_SCHEMA"', $prepare);
+        $this->assertStringNotContainsString('  schema_version "$V2_RELEASE_STATE_SCHEMA"', $prepare);
+        $this->assertStringContainsString('release_state_get "$V2_STATE_FILE" v2_schema_version', $common);
         $this->assertStringContainsString('traffic_state prepared', $prepare);
         $this->assertStringContainsString('XBOARD_REDIS_APPENDONLY=no', $prepare);
         $this->assertStringContainsString('.compose-validation.', $prepare);

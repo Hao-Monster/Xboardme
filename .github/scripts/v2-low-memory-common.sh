@@ -2,6 +2,8 @@
 # Shared helpers for the maintenance-window V2 activation. This file is
 # concatenated after release-state.sh and before an action script over SSH.
 
+# release-state.sh owns the numeric JSON envelope schema_version. This
+# separate string version guards the V2 payload contract inside that envelope.
 readonly V2_RELEASE_STATE_SCHEMA=1
 
 v2_fail() {
@@ -107,7 +109,7 @@ v2_open_release() {
 }
 
 v2_load_state() {
-  STATE_SCHEMA_VERSION=$(release_state_get "$V2_STATE_FILE" schema_version)
+  STATE_SCHEMA_VERSION=$(release_state_get "$V2_STATE_FILE" v2_schema_version)
   STATE_RELEASE_ID=$(release_state_get "$V2_STATE_FILE" release_id)
   RELEASE_SHA=$(release_state_get "$V2_STATE_FILE" release_sha)
   RELEASE_IMAGE=$(release_state_get "$V2_STATE_FILE" release_image)
