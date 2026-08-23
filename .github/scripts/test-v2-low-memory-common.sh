@@ -78,6 +78,59 @@ if v2_validate_rendered_production_compose \
   exit 1
 fi
 
+state_release_id=1234-1
+state_release_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+state_workdir="$temporary_dir/state-workdir"
+state_release_dir="$state_workdir/.codex-v2-release/$state_release_id"
+state_file="$state_release_dir/state.json"
+state_redis_password="$state_release_dir/redis-password"
+state_caddy_backup="$state_release_dir/backups/caddy.conf"
+mkdir -p "$state_release_dir/backups"
+chmod 700 "$state_release_dir"
+printf '%s\n' 'runtime=true' > "$state_release_dir/runtime.env"
+chmod 600 "$state_release_dir/runtime.env"
+printf '%s\n' '0123456789abcdef0123456789abcdef' > "$state_redis_password"
+chown 0:1000 "$state_redis_password"
+chmod 440 "$state_redis_password"
+printf '%s\n' ':443 { respond 200 }' > "$state_caddy_backup"
+chmod 600 "$state_caddy_backup"
+release_state_create "$state_file" \
+  v2_schema_version "$V2_RELEASE_STATE_SCHEMA" \
+  release_id "$state_release_id" \
+  release_sha "$state_release_sha" \
+  release_image "ghcr.io/hao-monster/xboardme@sha256:$(printf 'b%.0s' {1..64})" \
+  project_name "xboard-v2-$state_release_id" \
+  workdir "$state_workdir" \
+  release_dir "$state_release_dir" \
+  active_port 7002 \
+  maintenance_port 7003 \
+  caddy_config "$state_workdir/Caddyfile" \
+  caddy_backup "$state_caddy_backup" \
+  legacy_anchor_id legacy-anchor \
+  legacy_web_id legacy-web \
+  legacy_horizon_id legacy-horizon \
+  legacy_scheduler_id legacy-scheduler \
+  redis_password_file "$state_redis_password" \
+  redis_volume_name xboard_redis \
+  app_data_path "$state_workdir/data" \
+  maintenance_image caddy:immutable \
+  maintenance_container "xboard-v2-maintenance-$state_release_id" \
+  traffic_state prepared
+jq -e '.schema_version == 2 and .v2_schema_version == "1"' "$state_file" >/dev/null
+export V2_WORKDIR=$state_workdir
+export V2_RELEASE_DIR=$state_release_dir
+export V2_STATE_FILE=$state_file
+export RELEASE_ID=$state_release_id
+export EXPECTED_RELEASE_SHA=$state_release_sha
+v2_load_state
+[[ "$STATE_SCHEMA_VERSION" == "$V2_RELEASE_STATE_SCHEMA" ]]
+[[ "$STATE_RELEASE_ID" == "$state_release_id" ]]
+[[ "$TRAFFIC_STATE" == prepared ]]
+release_state_set "$state_file" traffic_state maintenance
+release_state_set "$state_file" traffic_state ready
+release_state_set "$state_file" traffic_state active_v2
+[[ "$(release_state_get "$state_file" traffic_state)" == active_v2 ]]
+
 CADDY_CONFIG="$temporary_dir/Caddyfile"
 CADDY_BACKUP="$temporary_dir/Caddyfile.backup"
 ACTIVE_PORT=7002

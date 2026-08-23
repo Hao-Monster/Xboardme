@@ -281,7 +281,7 @@ caddy validate --config "$caddy_backup" --adapter caddyfile >/dev/null
 
 state_file="$release_dir/state.json"
 release_state_create "$state_file" \
-  schema_version "$V2_RELEASE_STATE_SCHEMA" \
+  v2_schema_version "$V2_RELEASE_STATE_SCHEMA" \
   release_id "$RELEASE_ID" \
   release_sha "$EXPECTED_RELEASE_SHA" \
   release_image "$RELEASE_IMAGE" \
