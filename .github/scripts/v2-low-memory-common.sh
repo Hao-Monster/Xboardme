@@ -155,6 +155,42 @@ v2_compose() {
     "$@"
 }
 
+v2_validate_rendered_production_compose() {
+  local compose_json=$1 env_file=$2 data_path=$3 logs_path=$4 theme_path=$5
+  local knowledge_path=$6 plugins_path=$7 redis_volume_name=$8
+
+  jq -e \
+    --arg env "$env_file" \
+    --arg data "$data_path" \
+    --arg logs "$logs_path" \
+    --arg theme "$theme_path" \
+    --arg knowledge "$knowledge_path" \
+    --arg plugins "$plugins_path" \
+    --arg redis_volume "$redis_volume_name" '
+      def expected: [
+        {type:"bind", source:$env, target:"/www/.env", read_only:true},
+        {type:"bind", source:$data, target:"/www/.docker/.data"},
+        {type:"bind", source:$logs, target:"/www/storage/logs"},
+        {type:"bind", source:$theme, target:"/www/storage/theme"},
+        {type:"bind", source:$knowledge, target:"/www/storage/app/knowledge-attachments"},
+        {type:"bind", source:$plugins, target:"/www/plugins"}
+      ];
+      . as $root
+      | (
+          all(
+            ["web","ws","horizon","scheduler","maintenance"][];
+            . as $role
+            | ($root.services[$role].volumes
+                | map({type, source, target, read_only})
+                | map(with_entries(select(.value != null)))
+                | sort_by(.target)) == (expected | sort_by(.target))
+          )
+          and ($root.services.redis.environment.XBOARD_REDIS_APPENDONLY == "no")
+          and ([$root.volumes[] | select(.name == $redis_volume and .external == true)] | length == 1)
+        )
+    ' "$compose_json" >/dev/null
+}
+
 v2_service_id() {
   local id
   id=$(v2_compose ps --quiet "$1")
