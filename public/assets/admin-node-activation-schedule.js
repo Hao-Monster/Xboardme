@@ -495,7 +495,7 @@
     const root = document.getElementById('root');
     if (!root) return false;
     observer = new window.MutationObserver(scheduleMount);
-    observer.observe(root, { childList: true, subtree: true });
+    observer.observe(document.body, { childList: true, subtree: true });
     window.addEventListener('hashchange', scheduleMount);
     document.addEventListener('keydown', handleKeydown);
     scheduleMount();
