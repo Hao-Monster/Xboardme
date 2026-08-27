@@ -258,6 +258,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));
         $this->assertStringContainsString('active_upstream=', $preflight);
         $this->assertStringContainsString('ambiguous_active_web', $preflight);
+        $this->assertStringContainsString('XBOARD_ACTIVE_TOPOLOGY', $preflight);
         $this->assertStringContainsString('active_runtime_is_not_laravel_13', $preflight);
     }
 

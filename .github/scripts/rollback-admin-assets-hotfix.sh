@@ -8,12 +8,17 @@ if [[ ! "$HOTFIX_ID" =~ ^[0-9]+-[0-9]+$ ]]; then
 fi
 requested_hotfix_id=$HOTFIX_ID
 
-mapfile -t blue_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
-if ((${#blue_ids[@]} != 1)); then
-  echo 'ADMIN_ASSET_ROLLBACK_FAIL=blue_metadata_container_ambiguous'
+if ! declare -F xboard_find_compose_anchor >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck disable=SC1091
+  source "$script_dir/production-runtime-discovery.sh"
+fi
+
+if ! xboard_find_compose_anchor; then
+  echo "ADMIN_ASSET_ROLLBACK_FAIL=blue_metadata_container_ambiguous detail=$XBOARD_DISCOVERY_ERROR"
   exit 1
 fi
-workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${blue_ids[0]}")
+workdir=$XBOARD_ANCHOR_WORKDIR
 state_file="$workdir/.codex-admin-hotfix/$HOTFIX_ID/state.env"
 if [[ ! -f "$state_file" ]]; then
   echo 'ADMIN_ASSET_ROLLBACK_FAIL=state_missing'

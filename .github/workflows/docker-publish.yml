@@ -129,10 +129,10 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           STAGE_RUN_ID: ${{ inputs.cleanup_stage_run_id }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
-            < .github/scripts/cleanup-xboard-stage.sh
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/cleanup-xboard-stage.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s"
 
   verify:
     if: >-
@@ -290,6 +290,7 @@ jobs:
           sh -n .docker/entrypoint.sh
           sh -n .docker/run-role.sh
           bash -n .github/scripts/deploy-xboard-compose.sh
+          bash -n .github/scripts/production-runtime-discovery.sh
           bash -n .github/scripts/preflight-xboard-compose.sh
           bash -n .github/scripts/stage-xboard-green.sh
           bash -n .github/scripts/cleanup-xboard-stage.sh
@@ -303,6 +304,7 @@ jobs:
           bash -n .github/scripts/ssh-with-password.sh
           bash -n .github/scripts/test-ssh-with-password.sh
           bash -n .github/scripts/test-preflight-scheduler-reaper.sh
+          bash -n .github/scripts/test-production-runtime-discovery.sh
           bash -n .github/scripts/smoke-admin-assets.sh
           bash -n .github/scripts/smoke-admin-assets-remote.sh
           bash -n .github/scripts/smoke-distributor-remote.sh
@@ -349,6 +351,7 @@ jobs:
           test "$unknown_output" = 'PREFLIGHT_FAIL=redis_cluster_topology_unknown'
           bash .github/scripts/test-ssh-with-password.sh
           bash .github/scripts/test-preflight-scheduler-reaper.sh
+          bash .github/scripts/test-production-runtime-discovery.sh
 
   pr-image-build:
     if: ${{ github.event_name == 'pull_request' }}
@@ -586,10 +589,10 @@ jobs:
           STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "HOTFIX_ID='$HOTFIX_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s" \
-            < .github/scripts/deploy-admin-assets-hotfix.sh
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/deploy-admin-assets-hotfix.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "HOTFIX_ID='$HOTFIX_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s"
 
   smoke-admin-assets-hotfix:
     if: >-
@@ -666,10 +669,10 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           HOTFIX_ID: ${{ inputs.release_id }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "HOTFIX_ID='$HOTFIX_ID' bash -s" \
-            < .github/scripts/rollback-admin-assets-hotfix.sh
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/rollback-admin-assets-hotfix.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "HOTFIX_ID='$HOTFIX_ID' bash -s"
 
   deploy-distributor:
     if: >-
@@ -810,10 +813,10 @@ jobs:
           STAGE_DRY_RUN: ${{ inputs.stage_production_dry_run }}
           STAGE_PORT: ${{ inputs.stage_target_port }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "STAGE_IMAGE='$STAGE_IMAGE' STAGE_RUN_ID='$STAGE_RUN_ID' STAGE_DRY_RUN='$STAGE_DRY_RUN' STAGE_PORT='$STAGE_PORT' bash -s" \
-            < .github/scripts/stage-xboard-green.sh
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/stage-xboard-green.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "STAGE_IMAGE='$STAGE_IMAGE' STAGE_RUN_ID='$STAGE_RUN_ID' STAGE_DRY_RUN='$STAGE_DRY_RUN' STAGE_PORT='$STAGE_PORT' bash -s"
 
       - name: Logout server from GHCR
         if: ${{ always() }}
@@ -895,10 +898,10 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
-            < .github/scripts/cleanup-xboard-stage.sh
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/cleanup-xboard-stage.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s"
 
   prepare-live-green:
     if: >-

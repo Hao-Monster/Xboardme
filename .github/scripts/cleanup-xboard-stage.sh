@@ -20,33 +20,23 @@ if ((${#containers[@]} > 1)); then
   exit 1
 fi
 
-mapfile -t candidates < <(
-  {
-    docker ps --format '{{.ID}} {{.Image}}' |
-      awk 'tolower($2) ~ /xboard/ {print $1}'
-    docker ps -q --filter label=com.docker.compose.service=xboard
-  } | sort -u
-)
-production_ids=()
-for container_id in "${candidates[@]}"; do
-  is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
-  [[ "$is_stage" == true ]] || production_ids+=("$container_id")
-done
-workdir=''
-for container_id in "${production_ids[@]}"; do
-  candidate_workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_id")
-  if [[ -n "$candidate_workdir" ]]; then
-    if [[ -n "$workdir" && "$workdir" != "$candidate_workdir" ]]; then
-      echo 'STAGE_CLEANUP_FAIL=ambiguous_production_workdir'
-      exit 1
-    fi
-    workdir=$candidate_workdir
-  fi
-done
-if [[ -z "$workdir" || ! -d "$workdir" ]]; then
-  echo 'STAGE_CLEANUP_FAIL=production_workdir_missing'
+if ! declare -F xboard_resolve_active_runtime >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck disable=SC1091
+  source "$script_dir/production-runtime-discovery.sh"
+fi
+
+if ! xboard_find_compose_anchor; then
+  echo "STAGE_CLEANUP_FAIL=production_workdir_missing detail=$XBOARD_DISCOVERY_ERROR"
   exit 1
 fi
+workdir=$XBOARD_ANCHOR_WORKDIR
+
+if ! xboard_find_caddy_upstream || ! xboard_resolve_active_runtime "$XBOARD_ACTIVE_PORT"; then
+  echo "STAGE_CLEANUP_FAIL=active_web_discovery detail=$XBOARD_DISCOVERY_ERROR"
+  exit 1
+fi
+primary=$XBOARD_ACTIVE_WEB
 
 stage_root="$workdir/.codex-stage"
 stage_dir="$stage_root/$STAGE_RUN_ID"
@@ -55,7 +45,7 @@ case "$stage_dir" in
   *) echo 'STAGE_CLEANUP_FAIL=unsafe_stage_path'; exit 1 ;;
 esac
 
-cleanup_image=$(docker inspect -f '{{.Image}}' "${production_ids[0]}")
+cleanup_image=$(docker inspect -f '{{.Image}}' "$primary")
 if ((${#containers[@]} == 1)); then
   stage_image=$(docker inspect -f '{{.Image}}' "${containers[0]}")
   docker rm -f "${containers[0]}" >/dev/null
@@ -66,6 +56,6 @@ if [[ -d "$stage_dir" ]]; then
     -c 'find /stage -mindepth 1 -delete' >/dev/null
   rmdir -- "$stage_dir"
 fi
-docker exec -u 0 "${production_ids[0]}" rm -f "/www/.docker/.data/.codex-stage-$STAGE_RUN_ID.sqlite"
+docker exec -u 0 "$primary" rm -f "/www/.docker/.data/.codex-stage-$STAGE_RUN_ID.sqlite"
 
 echo "STAGE_CLEANUP=PASS run=$STAGE_RUN_ID"

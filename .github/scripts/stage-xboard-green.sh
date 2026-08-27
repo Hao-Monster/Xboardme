@@ -26,51 +26,31 @@ fi
 command -v docker >/dev/null
 docker info >/dev/null
 
-mapfile -t candidates < <(
-  {
-    docker ps --format '{{.ID}} {{.Image}}' |
-      awk 'tolower($2) ~ /xboard/ {print $1}'
-    docker ps -q --filter label=com.docker.compose.service=xboard
-  } | sort -u
-)
-production_candidates=()
-for container_id in "${candidates[@]}"; do
-  is_stage=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.stage" }}' "$container_id")
-  [[ "$is_stage" == true ]] || production_candidates+=("$container_id")
-done
-if ((${#production_candidates[@]} == 0)); then
-  echo 'STAGE_FAIL=no_running_production_container'
-  exit 1
+if ! declare -F xboard_resolve_active_runtime >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck disable=SC1091
+  source "$script_dir/production-runtime-discovery.sh"
 fi
 
-declare -A projects=()
-for container_id in "${production_candidates[@]}"; do
-  project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")
-  workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$container_id")
-  if [[ -n "$project" && -n "$workdir" ]]; then
-    projects["$project|$workdir"]=1
-  fi
-done
-if ((${#projects[@]} != 1)); then
-  echo "STAGE_FAIL=ambiguous_production_project count=${#projects[@]}"
+if ! xboard_find_compose_anchor; then
+  echo "STAGE_FAIL=compose_anchor_discovery detail=$XBOARD_DISCOVERY_ERROR"
   exit 1
 fi
+workdir=$XBOARD_ANCHOR_WORKDIR
 
-project_key=${!projects[@]}
-project=${project_key%%|*}
-workdir=${project_key#*|}
-primary=''
-for container_id in "${production_candidates[@]}"; do
-  candidate_project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")
-  if [[ "$candidate_project" == "$project" ]]; then
-    primary=$container_id
-    break
-  fi
-done
-if [[ -z "$primary" || ! -d "$workdir" ]]; then
-  echo 'STAGE_FAIL=invalid_production_project'
+if ! xboard_find_caddy_upstream; then
+  echo "STAGE_FAIL=unsupported_caddy_proxy detail=$XBOARD_DISCOVERY_ERROR"
   exit 1
 fi
+active_upstream=$XBOARD_ACTIVE_UPSTREAM
+active_port=$XBOARD_ACTIVE_PORT
+
+if ! xboard_resolve_active_runtime "$active_port"; then
+  echo "STAGE_FAIL=active_web_discovery detail=$XBOARD_DISCOVERY_ERROR"
+  exit 1
+fi
+primary=$XBOARD_ACTIVE_WEB
+project=${XBOARD_ACTIVE_PROJECT:-$XBOARD_ANCHOR_PROJECT}
 cleanup_image=$(docker inspect -f '{{.Image}}' "$primary")
 
 if docker ps -q --filter label=codex.xboard.stage=true | grep -q .; then
@@ -144,25 +124,11 @@ if ((available_kib < required_kib)); then
   exit 1
 fi
 
-mapfile -t proxy_files < <(
-  grep -RIlE --include='*.conf' --include='Caddyfile' \
-    -- 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' /etc/caddy 2>/dev/null || true
-)
-proxy_references=0
-if ((${#proxy_files[@]} == 1)); then
-  mapfile -t active_upstreams < <(
-    grep -Eo 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' "${proxy_files[0]}" |
-      awk '{print $2}' | sort -u
-  )
-  proxy_references=${#active_upstreams[@]}
-fi
 if ! command -v caddy >/dev/null 2>&1 ||
-   ! systemctl is-active --quiet caddy 2>/dev/null ||
-   ((${#proxy_files[@]} != 1 || proxy_references != 1)); then
-  echo "STAGE_FAIL=unsupported_caddy_proxy files=${#proxy_files[@]} references=$proxy_references"
+   ! systemctl is-active --quiet caddy 2>/dev/null; then
+  echo 'STAGE_FAIL=unsupported_caddy_proxy service=inactive'
   exit 1
 fi
-active_port=${active_upstreams[0]##*:}
 if [[ "$active_port" == "$STAGE_PORT" ]]; then
   echo "STAGE_FAIL=stage_port_is_active port=$STAGE_PORT"
   exit 1
@@ -172,7 +138,7 @@ if [[ "$STAGE_DRY_RUN" == true ]]; then
   echo "STAGE_DRY_RUN=PASS project=$project image=$STAGE_IMAGE"
   echo "STAGE_RESOURCES=available_kib:$available_kib required_kib:$required_kib memory_available_kib:$memory_available_kib"
   echo "STAGE_DATABASE=driver:$db_driver journal:$journal_mode"
-  echo "STAGE_ACTIVE_UPSTREAM=${active_upstreams[0]}"
+  echo "STAGE_ACTIVE_UPSTREAM=$active_upstream"
   exit 0
 fi
 
