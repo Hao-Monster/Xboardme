@@ -45,7 +45,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           STAGE_RUN_ID: ${{ inputs.stage_run_id }}
         run: |
-          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s" \
-            < .github/scripts/cleanup-xboard-stage.sh
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/cleanup-xboard-stage.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s"

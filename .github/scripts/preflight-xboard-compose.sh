@@ -64,61 +64,39 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 docker info >/dev/null
 
-mapfile -t compose_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
-if ((${#compose_ids[@]} != 1)); then
-  echo "PREFLIGHT_FAIL=ambiguous_compose_base count=${#compose_ids[@]}"
-  exit 1
-fi
-compose_base=${compose_ids[0]}
-project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$compose_base")
-workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$compose_base")
-if [[ -z "$project" || -z "$workdir" || ! -d "$workdir" ]]; then
-  echo 'PREFLIGHT_FAIL=invalid_compose_metadata'
-  exit 1
+if ! declare -F xboard_resolve_active_runtime >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck disable=SC1091
+  source "$script_dir/production-runtime-discovery.sh"
 fi
 
-mapfile -t proxy_files < <(
-  grep -RIlE --include='*.conf' --include='Caddyfile' \
-    -- 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' /etc/caddy 2>/dev/null || true
-)
-if ((${#proxy_files[@]} != 1)); then
-  echo "PREFLIGHT_FAIL=ambiguous_caddy_file count=${#proxy_files[@]}"
+if ! xboard_find_compose_anchor; then
+  echo "PREFLIGHT_FAIL=compose_anchor_discovery detail=$XBOARD_DISCOVERY_ERROR"
   exit 1
 fi
-proxy_file=${proxy_files[0]}
-mapfile -t active_upstreams < <(
-  grep -Eo 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' "$proxy_file" |
-    awk '{print $2}' | sort -u
-)
-if ((${#active_upstreams[@]} != 1)); then
-  echo "PREFLIGHT_FAIL=ambiguous_caddy_upstream count=${#active_upstreams[@]}"
-  exit 1
-fi
-active_upstream=${active_upstreams[0]}
-active_port=${active_upstream##*:}
+compose_base=$XBOARD_ANCHOR_CONTAINER
+workdir=$XBOARD_ANCHOR_WORKDIR
 
-mapfile -t web_candidates < <(
-  {
-    docker ps -q --filter label=com.docker.compose.service=xboard
-    docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=web
-  } | sort -u
-)
-active_web=()
-for container_id in "${web_candidates[@]}"; do
-  if docker inspect -f '{{range $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}' "$container_id" |
-      grep -qx "$active_port"; then
-    active_web+=("$container_id")
-  fi
-done
-if ((${#active_web[@]} != 1)); then
-  echo "PREFLIGHT_FAIL=ambiguous_active_web port=$active_port count=${#active_web[@]}"
+if ! xboard_find_caddy_upstream; then
+  echo "PREFLIGHT_FAIL=caddy_route_discovery detail=$XBOARD_DISCOVERY_ERROR"
   exit 1
 fi
-primary=${active_web[0]}
+proxy_file=$XBOARD_CADDY_FILE
+active_upstream=$XBOARD_ACTIVE_UPSTREAM
+active_port=$XBOARD_ACTIVE_PORT
+
+if ! xboard_resolve_active_runtime "$active_port"; then
+  echo "PREFLIGHT_FAIL=ambiguous_active_web port=$active_port detail=$XBOARD_DISCOVERY_ERROR"
+  exit 1
+fi
+primary=$XBOARD_ACTIVE_WEB
+project=${XBOARD_ACTIVE_PROJECT:-$XBOARD_ANCHOR_PROJECT}
 primary_name=$(docker inspect -f '{{.Name}}' "$primary" | sed 's#^/##')
-active_release_id=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.release.run" }}' "$primary")
-if [[ "$active_release_id" == '<no value>' ]]; then
-  active_release_id=''
+bound_name=$(docker inspect -f '{{.Name}}' "$XBOARD_BOUND_CONTAINER" | sed 's#^/##')
+if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
+  active_release_id=$project
+else
+  active_release_id=$(xboard_container_label "$primary" codex.xboard.release.run)
 fi
 
 architecture=$(uname -m)
@@ -191,13 +169,25 @@ if [[ "$runtime_json" == *'"db_driver":"sqlite"'* ]]; then
   sqlite_journal_mode=$(docker exec "$primary" sqlite3 "$db_path" 'PRAGMA journal_mode;')
   sqlite_integrity=$(docker exec "$primary" sqlite3 "$db_path" 'PRAGMA integrity_check;')
 fi
-redis_version=$(docker exec "$primary" sh -lc \
-  'redis-cli -s /data/redis.sock INFO server 2>/dev/null | sed -n "s/^redis_version:\(.*\)\r$/\1/p"' || true)
-redis_persistence=$(docker exec "$primary" sh -lc \
-  'redis-cli -s /data/redis.sock INFO persistence 2>/dev/null | sed -n "s/^rdb_last_bgsave_status:\(.*\)\r$/\1/p"' || true)
-redis_ping=$(docker exec "$primary" redis-cli -s /data/redis.sock ping 2>/dev/null || true)
-redis_cluster_enabled=$(docker exec "$primary" sh -lc \
-  'redis-cli -s /data/redis.sock INFO cluster 2>/dev/null | tr -d "\r" | sed -n "s/^cluster_enabled://p"' || true)
+if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
+  redis_container=$XBOARD_ACTIVE_REDIS
+  redis_command='REDISCLI_AUTH=$(cat "${REDIS_PASSWORD_FILE:-/run/secrets/xboard_redis_password}"); export REDISCLI_AUTH; redis-cli --no-auth-warning'
+  redis_version=$(docker exec "$redis_container" sh -lc \
+    "$redis_command INFO server 2>/dev/null | sed -n 's/^redis_version:\(.*\)\r$/\1/p'" || true)
+  redis_persistence=$(docker exec "$redis_container" sh -lc \
+    "$redis_command INFO persistence 2>/dev/null | sed -n 's/^rdb_last_bgsave_status:\(.*\)\r$/\1/p'" || true)
+  redis_ping=$(docker exec "$redis_container" sh -lc "$redis_command ping 2>/dev/null" || true)
+  redis_cluster_enabled=$(docker exec "$redis_container" sh -lc \
+    "$redis_command INFO cluster 2>/dev/null | tr -d '\r' | sed -n 's/^cluster_enabled://p'" || true)
+else
+  redis_version=$(docker exec "$primary" sh -lc \
+    'redis-cli -s /data/redis.sock INFO server 2>/dev/null | sed -n "s/^redis_version:\(.*\)\r$/\1/p"' || true)
+  redis_persistence=$(docker exec "$primary" sh -lc \
+    'redis-cli -s /data/redis.sock INFO persistence 2>/dev/null | sed -n "s/^rdb_last_bgsave_status:\(.*\)\r$/\1/p"' || true)
+  redis_ping=$(docker exec "$primary" redis-cli -s /data/redis.sock ping 2>/dev/null || true)
+  redis_cluster_enabled=$(docker exec "$primary" sh -lc \
+    'redis-cli -s /data/redis.sock INFO cluster 2>/dev/null | tr -d "\r" | sed -n "s/^cluster_enabled://p"' || true)
+fi
 
 plugin_user_php_files=$(docker exec "$primary" sh -lc 'find /www/plugins -type f -name "*.php" 2>/dev/null | wc -l')
 plugin_core_php_files=$(docker exec "$primary" sh -lc 'find /www/plugins-core -type f -name "*.php" 2>/dev/null | wc -l')
@@ -220,11 +210,17 @@ backup_command=$(docker exec "$primary" php /www/artisan list --raw | grep -c '^
 current_container_cpu=$(docker stats --no-stream --format '{{.CPUPerc}}' "$primary")
 current_container_memory=$(docker stats --no-stream --format '{{.MemUsage}}' "$primary")
 
-release_web_count=$(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=web | wc -l)
-release_horizon_count=$(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=horizon | wc -l)
-mapfile -t release_scheduler_ids < <(
-  docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=scheduler
-)
+if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
+  release_web_count=$(xboard_project_service_ids "$project" web | wc -l)
+  release_horizon_count=$(xboard_project_service_ids "$project" horizon | wc -l)
+  mapfile -t release_scheduler_ids < <(xboard_project_service_ids "$project" scheduler)
+else
+  release_web_count=$(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=web | wc -l)
+  release_horizon_count=$(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=horizon | wc -l)
+  mapfile -t release_scheduler_ids < <(
+    docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=scheduler
+  )
+fi
 release_scheduler_count=${#release_scheduler_ids[@]}
 scheduler_init=not_applicable
 scheduler_pid1=not_applicable
@@ -235,7 +231,8 @@ if [[ -n "$active_release_id" && $release_scheduler_count -eq 1 ]]; then
   scheduler_id=${release_scheduler_ids[0]}
   scheduler_init=$(docker inspect -f '{{.HostConfig.Init}}' "$scheduler_id")
   scheduler_pid1=$(docker exec "$scheduler_id" sh -c 'cat /proc/1/comm')
-  scheduler_revision=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$scheduler_id")
+  scheduler_image_id=$(docker inspect -f '{{.Image}}' "$scheduler_id")
+  scheduler_revision=$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$scheduler_image_id")
   scheduler_zombies=$(docker exec "$scheduler_id" sh -c '
     count=0
     for status in /proc/[0-9]*/status; do
@@ -257,6 +254,8 @@ fi
 
 echo "PREFLIGHT_ARCHITECTURE=$architecture"
 echo "PREFLIGHT_PROJECT=$project"
+echo "PREFLIGHT_ACTIVE_TOPOLOGY=$XBOARD_ACTIVE_TOPOLOGY"
+echo "PREFLIGHT_BOUND_CONTAINER=$bound_name"
 echo "PREFLIGHT_ACTIVE_CONTAINER=$primary_name"
 echo "PREFLIGHT_ACTIVE_RELEASE_ID=${active_release_id:-compose}"
 echo "PREFLIGHT_ACTIVE_UPSTREAM=$active_upstream"

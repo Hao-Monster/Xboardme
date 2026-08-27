@@ -37,52 +37,29 @@ if [[ "$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.im
 fi
 docker exec "$stage" php /www/.github/scripts/verify-admin-assets.php >/dev/null
 
-mapfile -t proxy_files < <(
-  grep -RIlE --include='*.conf' --include='Caddyfile' \
-    -- 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' /etc/caddy 2>/dev/null || true
-)
-if ((${#proxy_files[@]} != 1)); then
-  echo 'ADMIN_ASSET_HOTFIX_FAIL=active_caddy_file_ambiguous'
-  exit 1
+if ! declare -F xboard_resolve_active_runtime >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck disable=SC1091
+  source "$script_dir/production-runtime-discovery.sh"
 fi
-mapfile -t active_upstreams < <(
-  grep -Eo 'reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}' "${proxy_files[0]}" |
-    awk '{print $2}' | sort -u
-)
-if ((${#active_upstreams[@]} != 1)); then
-  echo 'ADMIN_ASSET_HOTFIX_FAIL=active_caddy_route_ambiguous'
-  exit 1
-fi
-active_port=${active_upstreams[0]##*:}
-mapfile -t web_candidates < <(
-  {
-    docker ps -q --filter label=com.docker.compose.service=xboard
-    docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=web
-  } | sort -u
-)
-active_ids=()
-for container_id in "${web_candidates[@]}"; do
-  if docker inspect -f '{{range $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}' "$container_id" |
-      grep -qx "$active_port"; then
-    active_ids+=("$container_id")
-  fi
-done
-if ((${#active_ids[@]} != 1)); then
-  echo "ADMIN_ASSET_HOTFIX_FAIL=active_web_ambiguous port=$active_port count=${#active_ids[@]}"
-  exit 1
-fi
-active=${active_ids[0]}
 
-mapfile -t blue_ids < <(docker ps -q --filter label=com.docker.compose.service=xboard)
-if ((${#blue_ids[@]} != 1)); then
-  echo 'ADMIN_ASSET_HOTFIX_FAIL=blue_metadata_container_ambiguous'
+if ! xboard_find_caddy_upstream; then
+  echo "ADMIN_ASSET_HOTFIX_FAIL=active_caddy_route_ambiguous detail=$XBOARD_DISCOVERY_ERROR"
   exit 1
 fi
-workdir=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${blue_ids[0]}")
-if [[ -z "$workdir" || ! -d "$workdir" ]]; then
-  echo 'ADMIN_ASSET_HOTFIX_FAIL=invalid_compose_workdir'
+active_port=$XBOARD_ACTIVE_PORT
+
+if ! xboard_resolve_active_runtime "$active_port"; then
+  echo "ADMIN_ASSET_HOTFIX_FAIL=active_web_ambiguous port=$active_port detail=$XBOARD_DISCOVERY_ERROR"
   exit 1
 fi
+active=$XBOARD_ACTIVE_WEB
+
+if ! xboard_find_compose_anchor; then
+  echo "ADMIN_ASSET_HOTFIX_FAIL=blue_metadata_container_ambiguous detail=$XBOARD_DISCOVERY_ERROR"
+  exit 1
+fi
+workdir=$XBOARD_ANCHOR_WORKDIR
 
 hotfix_root="$workdir/.codex-admin-hotfix"
 hotfix_dir="$hotfix_root/$HOTFIX_ID"

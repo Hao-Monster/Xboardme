@@ -204,6 +204,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
     {
         $activation = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
         $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));
+        $runtimeDiscovery = file_get_contents(base_path('.github/scripts/production-runtime-discovery.sh'));
         $preflightWorkflow = file_get_contents(base_path('.github/workflows/distributor-preflight.yml'));
         $publishWorkflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
         $reaperTest = file_get_contents(base_path('.github/scripts/test-preflight-scheduler-reaper.sh'));
@@ -228,6 +229,10 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('PREFLIGHT_SCHEDULER_INIT=', $preflight);
         $this->assertStringContainsString('PREFLIGHT_SCHEDULER_ZOMBIES=', $preflight);
         $this->assertStringContainsString('PREFLIGHT_FAIL=scheduler_init_or_zombie_reaping', $preflight);
+        $this->assertStringContainsString('xboard_resolve_active_runtime', $preflight);
+        $this->assertStringContainsString('docker ps -aq --filter label=com.docker.compose.service=xboard', $runtimeDiscovery);
+        $this->assertStringContainsString('xboard_project_service_ids "$project" web', $runtimeDiscovery);
+        $this->assertStringContainsString('xboard_project_service_ids "$project" redis', $runtimeDiscovery);
         $this->assertStringContainsString('EXPECTED_WORKFLOW_SHA', $preflightWorkflow);
         $this->assertStringContainsString('XBOARD_PREFLIGHT_SELF_TEST=scheduler-reaper', $reaperTest);
         $this->assertStringContainsString('bash .github/scripts/test-preflight-scheduler-reaper.sh', $preflightWorkflow);
@@ -340,6 +345,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
         $deploy = file_get_contents(base_path('.github/scripts/deploy-admin-assets-hotfix.sh'));
         $rollback = file_get_contents(base_path('.github/scripts/rollback-admin-assets-hotfix.sh'));
+        $runtimeDiscovery = file_get_contents(base_path('.github/scripts/production-runtime-discovery.sh'));
         $remoteSmoke = file_get_contents(base_path('.github/scripts/smoke-admin-assets-remote.sh'));
 
         $this->assertStringContainsString("inputs.production_release_action == 'admin_assets'", $workflow);
@@ -364,7 +370,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         );
         $this->assertStringContainsString('active_web_ambiguous', $deploy);
         $this->assertStringContainsString('active_caddy_route_ambiguous', $deploy);
-        $this->assertStringContainsString('reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}', $deploy);
+        $this->assertStringContainsString('xboard_find_caddy_upstream', $deploy);
+        $this->assertStringContainsString('xboard_resolve_active_runtime', $deploy);
+        $this->assertStringContainsString('reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}', $runtimeDiscovery);
         $this->assertStringContainsString('.admin-candidate-$HOTFIX_ID', $deploy);
         $this->assertStringContainsString('.admin-before-$HOTFIX_ID', $deploy);
         $this->assertStringContainsString('restore_on_error', $deploy);
@@ -377,6 +385,7 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
     {
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
         $stage = file_get_contents(base_path('.github/scripts/stage-xboard-green.sh'));
+        $runtimeDiscovery = file_get_contents(base_path('.github/scripts/production-runtime-discovery.sh'));
 
         $this->assertStringContainsString('stage_target_port:', $workflow);
         $this->assertStringContainsString('STAGE_PORT: ${{ inputs.stage_target_port }}', $workflow);
@@ -391,8 +400,9 @@ class ZeroDowntimeReleaseSafetyTest extends TestCase
         $this->assertStringContainsString('STAGE_FAIL=invalid_stage_port', $stage);
         $this->assertStringContainsString('"127.0.0.1:$STAGE_PORT:7001"', $stage);
         $this->assertStringContainsString('codex.xboard.stage.port=$STAGE_PORT', $stage);
-        $this->assertStringContainsString('reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}', $stage);
-        $this->assertStringContainsString('((${#proxy_files[@]} != 1 || proxy_references != 1))', $stage);
+        $this->assertStringContainsString('xboard_find_caddy_upstream', $stage);
+        $this->assertStringContainsString('xboard_resolve_active_runtime', $stage);
+        $this->assertStringContainsString('reverse_proxy[[:space:]]+127\.0\.0\.1:[0-9]{4,5}', $runtimeDiscovery);
     }
 
     public function test_failed_external_green_smoke_automatically_restores_and_verifies_blue(): void
