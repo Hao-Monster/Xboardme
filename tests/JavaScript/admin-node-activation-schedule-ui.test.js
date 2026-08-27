@@ -93,6 +93,49 @@ test('node activation schedule uses protected admin endpoints and existing token
   assert.deepEqual(JSON.parse(requests[2].options.body), { server_id: 42 });
 });
 
+test('node activation schedule observes body portals used by the server detail sheet', () => {
+  const root = {};
+  const body = {};
+  let observation = null;
+  class MutationObserver {
+    constructor(callback) {
+      this.callback = callback;
+    }
+
+    observe(target, options) {
+      observation = { target, options };
+    }
+
+    disconnect() {}
+  }
+  const document = {
+    body,
+    getElementById: (id) => (id === 'root' ? root : null),
+    querySelectorAll: () => [],
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const app = createNodeActivationSchedule({
+    document,
+    location: { hash: '#/server/machine' },
+    MutationObserver,
+    requestAnimationFrame: (callback) => callback(),
+    addEventListener() {},
+    removeEventListener() {},
+  });
+
+  assert.equal(app.start(), true);
+  assert.equal(observation.target, body);
+  assert.deepEqual(observation.options, { childList: true, subtree: true });
+  app.stop();
+});
+
+test('activation schedule overlay remains interactive above a modal server detail sheet', () => {
+  const styles = fs.readFileSync('public/assets/admin-node-activation-schedule.css', 'utf8');
+
+  assert.match(styles, /\.xboard-node-schedule-overlay\s*\{[^}]*pointer-events:\s*auto/s);
+});
+
 test('admin template and pinned bundle expose the activation schedule UI contracts', () => {
   const blade = fs.readFileSync('resources/views/admin.blade.php', 'utf8');
   const styles = fs.readFileSync('public/assets/admin-node-activation-schedule.css', 'utf8');
