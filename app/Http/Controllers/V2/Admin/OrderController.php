@@ -158,9 +158,16 @@ class OrderController extends Controller
         $pageSize = $request->input('pageSize', 10);
         $orderModel = Order::with([
             'plan:id,name',
-            'distributorSubscription:id,order_id,distributor_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,settled_at',
+            'distributorSubscription' => function ($query) {
+                $query->select([
+                    'id', 'order_id', 'distributor_user_id', 'subscriber_user_id', 'customer_name', 'remark',
+                    'delivery_status', 'settlement_status', 'config_issued_at', 'connected_at', 'connected_node_id',
+                    'connected_node_name', 'settled_at',
+                ])->withCount('hwidDevices');
+            },
             'distributorSubscription.order:id,trade_no',
             'distributorSubscription.distributor:id,email,distributor_name',
+            'distributorSubscription.subscriber:id,u,d',
         ]);
 
         $request->validate([
@@ -221,6 +228,12 @@ class OrderController extends Controller
             $orderArray['distributor_name'] = $distributorOrder?->distributor?->distributor_name
                 ?: $distributorOrder?->distributor?->email;
             $orderArray['customer_name'] = $distributorOrder?->customer_name;
+            $orderArray['bound_device_count'] = $distributorOrder
+                ? (int) $distributorOrder->hwid_devices_count
+                : null;
+            $orderArray['used_traffic'] = $distributorOrder?->subscriber
+                ? max(0, (int) $distributorOrder->subscriber->u + (int) $distributorOrder->subscriber->d)
+                : null;
             $orderArray['remark'] = $distributorOrder?->remark;
             $orderArray['delivery_status'] = $distributorOrder?->delivery_status;
             $orderArray['config_issued_at'] = $distributorOrder?->config_issued_at;

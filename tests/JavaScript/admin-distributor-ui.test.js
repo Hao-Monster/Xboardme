@@ -190,6 +190,8 @@ test('admin order page exposes distributor filters, summary and settlement actio
           id: 99,
           trade_no: 'DIST-ORDER-1',
           customer_name: '终端客户甲',
+          bound_device_count: 2,
+          used_traffic: 5 * 1073741824,
           created_at: 1785580800,
           distributor_email: 'dealer@example.com',
           distributor_name: '华东渠道',
@@ -253,6 +255,10 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(host.innerHTML, /DIST-ORDER-1/);
   assert.match(host.innerHTML, /用户名称/);
   assert.match(host.innerHTML, /终端客户甲/);
+  assert.match(host.innerHTML, /已绑定设备/);
+  assert.match(host.innerHTML, /2 台/);
+  assert.match(host.innerHTML, /已用流量/);
+  assert.match(host.innerHTML, /5 GB/);
   assert.match(host.innerHTML, /备注/);
   assert.match(host.innerHTML, /线下补款后结算/);
   assert.match(host.innerHTML, /data-edit-remark="99"/);

@@ -601,13 +601,15 @@
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
       const boundDevices = Array.isArray(order.bound_devices) ? order.bound_devices : [];
+      const boundDeviceCount = Math.max(0, Number(order.bound_device_count ?? boundDevices.length) || 0);
+      const usedTraffic = order.used_traffic ?? entitlement?.used_traffic ?? 0;
       const boundDeviceContent = !order.hwid_enabled
         ? `<span class="dist-device-state">${t('hwidDisabled')}</span>`
         : boundDevices.length
           ? `<div class="dist-bound-device-list">${boundDevices.map((hwid) => `<code>${escapeHtml(hwid)}</code>`).join('')}</div>`
           : `<span class="dist-device-state">${t('unboundDevice')}</span>`;
       const entitlementTarget = `dist-entitlement-${order.id}`;
-      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr id="${entitlementTarget}" class="dist-entitlement-row" data-entitlement-for="${escapeHtml(order.trade_no)}" hidden><td colspan="9"><div><strong>${t('entitlement')}</strong><dl>
+      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr id="${entitlementTarget}" class="dist-entitlement-row" data-entitlement-for="${escapeHtml(order.trade_no)}" hidden><td colspan="11"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
         <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
@@ -640,6 +642,8 @@
         <td class="dist-order-customer" data-label="${t('customerName')}">${escapeHtml(order.customer_name || '-')}</td>
         <td class="dist-order-plan" data-label="${t('plan')}">${escapeHtml(order.plan?.name || '-')}</td><td class="dist-order-period" data-label="${t('period')}">${escapeHtml(periodLabel(order.period))}</td>
         <td class="dist-order-amount" data-label="${t('amount')}">${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
+        <td class="dist-order-bound-devices" data-label="${t('boundDevices')}">${boundDeviceCount} ${state.locale === 'zh-CN' ? '台' : 'devices'}</td>
+        <td class="dist-order-used-traffic" data-label="${t('usedTraffic')}">${formatTraffic(usedTraffic)}</td>
         <td class="dist-order-settlement"><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
         <td class="dist-order-remark-cell" data-label="${t('remark')}"><div class="dist-order-remark">${order.remark ? escapeHtml(order.remark) : '—'}</div></td>
         <td class="${actionCellClass}"><div class="dist-order-actions utility-count-${utilityActionCount}">${order.is_subscription_origin ? qrAction : ''}${entitlementAction}${renewAction}</div></td>
@@ -647,8 +651,8 @@
     }).join('');
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
       <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
-      <div class="dist-table-wrap dist-order-list"><table class="dist-orders-table"><thead><tr><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
-      <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="9" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
+      <div class="dist-table-wrap dist-order-list"><table class="dist-orders-table"><thead><tr><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
+      <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="11" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
   }
 
   function periodLabel(period) {
