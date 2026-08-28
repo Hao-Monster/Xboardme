@@ -1,0 +1,451 @@
+name: Distributor Production Release
+
+run-name: Release ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact full SHA currently at codex/distributor
+        required: true
+        type: string
+      stage_target_port:
+        description: Inactive loopback port used first by the isolated stage and then by maintenance
+        required: true
+        default: 7004
+        type: number
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xboard-production-release
+  cancel-in-progress: false
+
+jobs:
+  resolve-signed-image:
+    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+      digest: ${{ steps.resolve.outputs.digest }}
+      image_ref: ${{ steps.resolve.outputs.image_ref }}
+      build_run_id: ${{ steps.resolve.outputs.build_run_id }}
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Reject stale or non-production dispatches
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$EXPECTED_SHA" = "$(printf '%s' "$EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Resolve immutable image manifest from the successful production push
+        id: resolve
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/resolve-production-image.sh
+
+      - name: Login to GHCR for provenance verification
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify signed provenance and exact source identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          IMAGE_REF: ${{ steps.resolve.outputs.image_ref }}
+        run: |
+          test "$IMAGE_REF" = "${{ steps.resolve.outputs.image }}@${{ steps.resolve.outputs.digest }}"
+          gh attestation verify "oci://$IMAGE_REF" \
+            -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/docker-publish.yml" \
+            --signer-digest "$EXPECTED_SHA" \
+            --source-digest "$EXPECTED_SHA" \
+            --source-ref refs/heads/codex/distributor \
+            --deny-self-hosted-runners >/dev/null
+          echo "PRODUCTION_IMAGE_PROVENANCE=PASS sha=$EXPECTED_SHA image=$IMAGE_REF"
+
+  production-preflight:
+    needs: resolve-signed-image
+    uses: ./.github/workflows/distributor-preflight.yml
+    secrets: inherit
+
+  stage-signed-image:
+    needs:
+      - resolve-signed-image
+      - production-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-staging
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify stage identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_IMAGE: ${{ needs.resolve-signed-image.outputs.image_ref }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_IMAGE" = "$(printf '%s' "$RELEASE_IMAGE" | grep -E '^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$')"
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Login server to GHCR for isolated staging
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+
+      - name: Start isolated database-clone stage with the signed image
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_IMAGE: ${{ needs.resolve-signed-image.outputs.image_ref }}
+          STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          STAGE_PORT: ${{ inputs.stage_target_port }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/stage-xboard-green.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "STAGE_IMAGE='$STAGE_IMAGE' STAGE_RUN_ID='$STAGE_RUN_ID' STAGE_DRY_RUN=false STAGE_PORT='$STAGE_PORT' bash -s"
+
+      - name: Authenticated browser smoke against the isolated stage
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_route: false
+          expected_asset_version: ${{ inputs.expected_sha }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.stage_target_port }}
+
+      - name: Remove the exact isolated stage
+        if: ${{ always() }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/cleanup-xboard-stage.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "STAGE_RUN_ID='$STAGE_RUN_ID' bash -s"
+
+      - name: Logout server from GHCR
+        if: ${{ always() }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  prepare-approved-release:
+    name: Prepare approval / immutable release preparation
+    needs:
+      - resolve-signed-image
+      - stage-signed-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-server
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      release_id: ${{ steps.release-identity.outputs.release_id }}
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+
+      - name: Verify approved release identity
+        id: release-identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_IMAGE: ${{ needs.resolve-signed-image.outputs.image_ref }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_IMAGE" = "$(printf '%s' "$RELEASE_IMAGE" | grep -E '^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$')"
+          echo "release_id=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Login server to GHCR for preparation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+
+      - name: Prepare the exact signed release without production mutation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ steps.release-identity.outputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+          RELEASE_IMAGE: ${{ needs.resolve-signed-image.outputs.image_ref }}
+          MAINTENANCE_PORT: ${{ inputs.stage_target_port }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/prepare-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' RELEASE_IMAGE='$RELEASE_IMAGE' MAINTENANCE_PORT='$MAINTENANCE_PORT' bash -s"
+
+      - name: Logout server from GHCR
+        if: ${{ always() }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+            -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker logout ghcr.io >/dev/null 2>&1 || true"
+
+  switch-approved-release:
+    name: Switch approval / cold start, switch and public verification
+    needs:
+      - resolve-signed-image
+      - prepare-approved-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify ready release identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_IMAGE: ${{ needs.resolve-signed-image.outputs.image_ref }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_IMAGE" = "$(printf '%s' "$RELEASE_IMAGE" | grep -E '^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$')"
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Enter maintenance and cold-start the prepared release
+        id: start
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ needs.prepare-approved-release.outputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/start-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+
+      - name: Authenticated private smoke after cold start
+        id: private-smoke
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_route: false
+          expected_asset_version: ${{ inputs.expected_sha }}
+          v2_release_id: ${{ needs.prepare-approved-release.outputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.stage_target_port }}
+
+      - name: Recheck privately immediately before traffic switch
+        id: pre-switch-smoke
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_route: false
+          expected_asset_version: ${{ inputs.expected_sha }}
+          v2_release_id: ${{ needs.prepare-approved-release.outputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.stage_target_port }}
+
+      - name: Atomically switch public traffic to the prepared release
+        id: switch
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ needs.prepare-approved-release.outputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/switch-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+
+      - name: Authenticated public smoke and asset identity verification
+        id: public-smoke
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.expected_sha }}
+          v2_release_id: ${{ needs.prepare-approved-release.outputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ inputs.stage_target_port }}
+
+      - name: Audit the switched production runtime
+        id: post-switch-preflight
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          bash .github/scripts/test-preflight-scheduler-reaper.sh
+          bash .github/scripts/test-production-runtime-discovery.sh
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s"
+
+      - name: Automatically restore the previous release after any failed cutover check
+        id: rollback
+        if: ${{ failure() && (steps.start.outcome == 'success' || steps.start.outcome == 'failure') }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ needs.prepare-approved-release.outputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+        run: |
+          rollback_output=$(
+            cat .github/scripts/release-state.sh \
+                .github/scripts/v2-low-memory-common.sh \
+                .github/scripts/rollback-xboard-v2-low-memory.sh |
+              bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+                -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+                "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+          )
+          printf '%s\n' "$rollback_output"
+          rollback_port=$(
+            cat .github/scripts/release-state.sh \
+                .github/scripts/v2-low-memory-common.sh \
+                .github/scripts/resolve-xboard-v2-port.sh |
+              bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+                -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+                "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+          )
+          test "$rollback_port" = "$(printf '%s' "$rollback_port" | grep -E '^[0-9]+$')"
+          echo "ROLLBACK_PORT=$rollback_port" >> "$GITHUB_ENV"
+
+      - name: Smoke the automatically restored release
+        if: ${{ failure() && steps.rollback.outcome == 'success' }}
+        uses: ./.github/actions/distributor-smoke
+        with:
+          validation_mode: rollback
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+          TARGET_PORT: ${{ env.ROLLBACK_PORT }}

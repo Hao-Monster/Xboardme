@@ -15,7 +15,7 @@ fi
 v2_require_tools
 v2_open_release
 case "$TRAFFIC_STATE" in
-  prepared|maintenance|ready|active_v2|finalizing|finalized) ;;
+  prepared|maintenance|ready|active_v2|rolled_back|finalizing|finalized) ;;
   *) v2_fail "invalid_resolve_port_state:$TRAFFIC_STATE" ;;
 esac
 
