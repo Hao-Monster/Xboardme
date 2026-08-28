@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy_production:
-        description: Deploy this exact codex/distributor commit to production
+        description: Deprecated; keep false and use production-release.yml
         required: true
         default: false
         type: boolean
@@ -26,12 +26,12 @@ on:
         default: false
         type: boolean
       stage_production_green:
-        description: Start an isolated Laravel 13 candidate on the requested loopback port
+        description: Deprecated; keep false and use production-release.yml
         required: true
         default: false
         type: boolean
       stage_production_dry_run:
-        description: Validate isolated green staging prerequisites without changing production
+        description: Deprecated; keep false and use production-release.yml
         required: true
         default: false
         type: boolean
@@ -55,10 +55,21 @@ on:
         required: false
         type: string
       production_release_action:
-        description: Release phase (legacy actions or v2_prepare, v2_start, v2_switch, v2_rollback, v2_finalize)
+        description: Emergency operation only; standard releases use production-release.yml
         required: true
         default: none
-        type: string
+        type: choice
+        options:
+          - none
+          - admin_assets
+          - admin_assets_rollback
+          - activate_roles
+          - repair_roles
+          - retire_previous
+          - rollback
+          - cleanup
+          - v2_rollback
+          - v2_finalize
       release_id:
         description: Existing zero-downtime release identifier for switch/roles/rollback/cleanup
         required: false
@@ -77,6 +88,20 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  reject-deprecated-release-controls:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' &&
+          (inputs.deploy_production == true ||
+           inputs.stage_production_green == true ||
+           inputs.stage_production_dry_run == true) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Direct standard releases to the unified workflow
+        run: |
+          echo '::error::Legacy deploy/stage controls are disabled. Run Distributor Production Release instead.'
+          exit 1
+
   production-preflight:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
@@ -137,10 +162,7 @@ jobs:
   verify:
     if: >-
       ${{ github.event_name != 'workflow_dispatch' ||
-          (inputs.cleanup_stage_run_id == '' &&
-           (inputs.production_release_action == 'none' ||
-            inputs.production_release_action == 'admin_assets' ||
-            inputs.production_release_action == 'v2_prepare')) }}
+          inputs.production_release_action == 'admin_assets' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -282,6 +304,7 @@ jobs:
           php -l .github/scripts/validate-approved-migrations.php
           php -l .github/scripts/build-theme-asset-manifest.php
           php -l .github/scripts/verify-theme-assets.php
+          php -l .github/scripts/production-image-manifest.php
           php .github/scripts/build-theme-asset-manifest.php local "$RUNNER_TEMP/theme-release-manifest.json"
           php .github/scripts/verify-theme-assets.php local "$RUNNER_TEMP/theme-release-manifest.json"
           bash -n deploy.sh
@@ -291,6 +314,8 @@ jobs:
           sh -n .docker/run-role.sh
           bash -n .github/scripts/deploy-xboard-compose.sh
           bash -n .github/scripts/production-runtime-discovery.sh
+          bash -n .github/scripts/resolve-production-image.sh
+          bash -n .github/scripts/test-resolve-production-image.sh
           bash -n .github/scripts/preflight-xboard-compose.sh
           bash -n .github/scripts/stage-xboard-green.sh
           bash -n .github/scripts/cleanup-xboard-stage.sh
@@ -352,6 +377,7 @@ jobs:
           bash .github/scripts/test-ssh-with-password.sh
           bash .github/scripts/test-preflight-scheduler-reaper.sh
           bash .github/scripts/test-production-runtime-discovery.sh
+          bash .github/scripts/test-resolve-production-image.sh
 
   pr-image-build:
     if: ${{ github.event_name == 'pull_request' }}
@@ -435,16 +461,18 @@ jobs:
           IMAGE="$IMAGE" bash .github/scripts/test-v2-redis-owner-restore.sh
 
   build:
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/distributor' }}
     needs: verify
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.image.outputs.name }}
-      digest: ${{ steps.build-and-push.outputs.digest }}
+      digest: ${{ steps.image-identity.outputs.digest }}
     permissions:
       contents: read
       packages: write
       id-token: write
+      attestations: write
+      artifact-metadata: write
 
     steps:
       - name: Checkout code
@@ -456,15 +484,9 @@ jobs:
       - name: Verify admin frontend build context
         run: php .github/scripts/verify-admin-assets.php
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: 'arm64,amd64'
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          platforms: linux/amd64,linux/arm64
           driver-opts: |
             image=moby/buildkit:v0.20.0
             network=host
@@ -488,6 +510,29 @@ jobs:
         id: image
         shell: bash
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Reuse the unique signed image for this production commit
+        id: existing-image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          exact_ref="$IMAGE:sha-$GITHUB_SHA"
+          digest=$(docker buildx imagetools inspect "$exact_ref" 2>/dev/null | awk '$1 == "Digest:" { print $2; exit }' || true)
+          if [[ -z "$digest" ]]; then
+            echo 'found=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "$digest" = "$(printf '%s' "$digest" | grep -E '^sha256:[0-9a-f]{64}$')"
+          gh attestation verify "oci://$IMAGE@$digest" \
+            -R "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/docker-publish.yml" \
+            --signer-digest "$GITHUB_SHA" \
+            --source-digest "$GITHUB_SHA" \
+            --source-ref refs/heads/codex/distributor \
+            --deny-self-hosted-runners >/dev/null
+          echo 'found=true' >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       - name: Get version
         id: get_version
@@ -520,18 +565,18 @@ jobs:
 
       - name: Build and push
         id: build-and-push
+        if: ${{ steps.existing-image.outputs.found != 'true' }}
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BUILDKIT_INLINE_CACHE=1
-            BUILDKIT_MULTI_PLATFORM=1
             APP_REVISION=${{ github.sha }}
           provenance: false
           outputs: type=registry,push=true
@@ -539,6 +584,58 @@ jobs:
             network.host
           secrets: |
             github_token=${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign production image provenance
+        if: ${{ steps.existing-image.outputs.found != 'true' }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Publish the immutable full-SHA image lock
+        if: ${{ steps.existing-image.outputs.found != 'true' }}
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          test "$DIGEST" = "$(printf '%s' "$DIGEST" | grep -E '^sha256:[0-9a-f]{64}$')"
+          docker buildx imagetools create \
+            --prefer-index=false \
+            --tag "$IMAGE:sha-$GITHUB_SHA" \
+            "$IMAGE@$DIGEST"
+
+      - name: Lock the production commit to one image digest
+        id: image-identity
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          EXISTING_DIGEST: ${{ steps.existing-image.outputs.digest }}
+          BUILT_DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          digest=${EXISTING_DIGEST:-$BUILT_DIGEST}
+          test "$digest" = "$(printf '%s' "$digest" | grep -E '^sha256:[0-9a-f]{64}$')"
+          remote_digest=$(docker buildx imagetools inspect "$IMAGE:sha-$GITHUB_SHA" | awk '$1 == "Digest:" { print $2; exit }')
+          test "$remote_digest" = "$digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Save immutable production image manifest
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.image-identity.outputs.digest }}
+        run: |
+          php .github/scripts/production-image-manifest.php create \
+            "$RUNNER_TEMP/production-image.json" \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$IMAGE" "$DIGEST" \
+            "$GITHUB_RUN_ID"
+
+      - name: Publish immutable production image manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-image-${{ github.sha }}
+          path: ${{ runner.temp }}/production-image.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 90
 
   deploy-admin-assets-hotfix:
     if: >-
@@ -1944,4 +2041,3 @@ jobs:
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
           TARGET_PORT: 7001
-
