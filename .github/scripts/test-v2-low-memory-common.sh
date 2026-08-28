@@ -135,10 +135,42 @@ v2_load_state
 [[ "$STATE_SCHEMA_VERSION" == "$V2_RELEASE_STATE_SCHEMA" ]]
 [[ "$STATE_RELEASE_ID" == "$state_release_id" ]]
 [[ "$TRAFFIC_STATE" == prepared ]]
+[[ "$LEGACY_TOPOLOGY" == legacy ]]
+[[ -z "$LEGACY_WS_ID" && -z "$LEGACY_EDGE_ID" ]]
+release_state_set "$state_file" legacy_topology v2
+release_state_set "$state_file" legacy_ws_id legacy-ws
+release_state_set "$state_file" legacy_edge_id legacy-edge
+v2_load_state
+[[ "$LEGACY_TOPOLOGY" == v2 ]]
+[[ "$LEGACY_WS_ID" == legacy-ws && "$LEGACY_EDGE_ID" == legacy-edge ]]
+release_state_set "$state_file" legacy_topology legacy
+release_state_set "$state_file" legacy_ws_id ''
+release_state_set "$state_file" legacy_edge_id ''
+v2_load_state
 release_state_set "$state_file" traffic_state maintenance
 release_state_set "$state_file" traffic_state ready
 release_state_set "$state_file" traffic_state active_v2
 [[ "$(release_state_get "$state_file" traffic_state)" == active_v2 ]]
+
+active_v2_root="$temporary_dir/active-v2-root"
+active_v2_release_id=4321-2
+active_v2_release_dir="$active_v2_root/.codex-v2-release/$active_v2_release_id"
+mkdir -p "$active_v2_release_dir"
+docker() {
+  if [[ "$1" == ps && "$2" == -q ]]; then
+    printf '%s\n' active-v2-edge
+  elif [[ "$1" == inspect && "$3" == *working_dir* ]]; then
+    printf '%s\n' "$active_v2_release_dir"
+  elif [[ "$1" == inspect && "$3" == *com.docker.compose.project* ]]; then
+    printf 'xboard-v2-%s\n' "$active_v2_release_id"
+  elif [[ "$1" == inspect ]]; then
+    printf '%s\n' "$4"
+  fi
+}
+V2_ANCHOR_DISCOVERY_ID=stale
+v2_find_workdir
+[[ "$V2_WORKDIR" == "$active_v2_root" ]]
+[[ -z "$V2_ANCHOR_DISCOVERY_ID" ]]
 
 CADDY_CONFIG="$temporary_dir/Caddyfile"
 CADDY_BACKUP="$temporary_dir/Caddyfile.backup"
@@ -180,6 +212,9 @@ export LEGACY_SCHEDULER_ID=legacy-scheduler
 export LEGACY_HORIZON_ID=legacy-horizon
 export LEGACY_WEB_ID=legacy-web
 export LEGACY_ANCHOR_ID=legacy-anchor
+export LEGACY_TOPOLOGY=legacy
+export LEGACY_WS_ID=''
+export LEGACY_EDGE_ID=''
 v2_legacy_reserved_jobs() {
   count=$(<"$reserved_counter")
   printf '%s\n' "$((count + 1))" > "$reserved_counter"
@@ -201,7 +236,75 @@ EOF
 cmp -s "$operation_log" "$temporary_dir/expected-operations.log"
 
 : > "$operation_log"
+LEGACY_TOPOLOGY=v2
+LEGACY_WS_ID=legacy-ws
+LEGACY_EDGE_ID=legacy-edge
+v2_legacy_reserved_jobs() { printf '%s\n' 0; }
+v2_stop_legacy_runtime
+cat > "$temporary_dir/expected-v2-operations.log" <<'EOF'
+stop --time 30 legacy-scheduler
+exec legacy-horizon php /www/artisan horizon:pause
+stop --time 60 legacy-horizon
+stop --time 30 legacy-edge legacy-ws
+stop --time 30 legacy-web
+redis-save
+stop --time 30 legacy-anchor
+EOF
+cmp -s "$operation_log" "$temporary_dir/expected-v2-operations.log"
+mapfile -t recorded_v2_ids < <(v2_legacy_ids)
+[[ "${recorded_v2_ids[*]}" == 'legacy-anchor legacy-web legacy-horizon legacy-scheduler legacy-ws legacy-edge' ]]
+
+: > "$operation_log"
+v2_legacy_redis_ping() { return 0; }
+v2_container_running() { return 0; }
+v2_legacy_horizon_running() { return 0; }
+curl() { return 0; }
+docker() { printf '%s\n' "$*" >> "$operation_log"; }
+v2_start_legacy_runtime
+for expected_start in legacy-anchor legacy-web legacy-ws legacy-edge legacy-horizon legacy-scheduler; do
+  grep -Fxq "start $expected_start" "$operation_log"
+done
+redis_start_line=$(grep -nFx 'start legacy-anchor' "$operation_log" | cut -d: -f1)
+web_start_line=$(grep -nFx 'start legacy-web' "$operation_log" | cut -d: -f1)
+edge_start_line=$(grep -nFx 'start legacy-edge' "$operation_log" | cut -d: -f1)
+scheduler_start_line=$(grep -nFx 'start legacy-scheduler' "$operation_log" | cut -d: -f1)
+((redis_start_line < web_start_line && web_start_line < edge_start_line && edge_start_line < scheduler_start_line))
+
+docker() {
+  if [[ "$1" == inspect && "$3" == *com.docker.compose.project* ]]; then
+    printf '%s\n' old-v2-project
+  elif [[ "$1" == inspect ]]; then
+    printf '%s\n' "$4"
+  elif [[ "$1" == ps ]]; then
+    for argument in "$@"; do
+      case "$argument" in
+        label=com.docker.compose.service=*)
+          service=${argument##*=}
+          printf 'old-%s\n' "$service"
+          [[ "${DUPLICATE_V2_SERVICE:-}" != "$service" ]] || printf 'duplicate-%s\n' "$service"
+          ;;
+      esac
+    done
+  fi
+}
+v2_discover_active_v2_runtime old-edge
+[[ "$V2_DISCOVERED_PROJECT" == old-v2-project ]]
+[[ "$V2_DISCOVERED_REDIS_ID" == old-redis ]]
+[[ "$V2_DISCOVERED_WEB_ID" == old-web ]]
+[[ "$V2_DISCOVERED_WS_ID" == old-ws ]]
+[[ "$V2_DISCOVERED_EDGE_ID" == old-edge ]]
+[[ "$V2_DISCOVERED_HORIZON_ID" == old-horizon ]]
+[[ "$V2_DISCOVERED_SCHEDULER_ID" == old-scheduler ]]
+if DUPLICATE_V2_SERVICE=ws v2_discover_active_v2_runtime old-edge 2>"$temporary_dir/discovery-error.log"; then
+  echo 'V2_COMMON_TEST_FAIL=ambiguous_v2_service_was_accepted' >&2
+  exit 1
+fi
+grep -Fxq 'V2_FAIL=active_v2_service_ambiguous:ws:2' "$temporary_dir/discovery-error.log"
+
+: > "$operation_log"
 v2_legacy_reserved_jobs() { printf '%s\n' 1; }
+docker() { printf '%s\n' "$*" >> "$operation_log"; }
+v2_container_running() { return 1; }
 if v2_stop_legacy_runtime 2>/dev/null; then
   echo 'V2_COMMON_TEST_FAIL=reserved_jobs_were_abandoned' >&2
   exit 1
@@ -210,6 +313,12 @@ fi
 
 : > "$operation_log"
 REDIS_VOLUME_NAME=xboard_redis
+LEGACY_TOPOLOGY=legacy
+LEGACY_WS_ID=''
+LEGACY_EDGE_ID=''
+v2_legacy_redis_ping() {
+  docker exec "$LEGACY_ANCHOR_ID" redis-cli -s /data/redis.sock ping | grep -qx PONG
+}
 expected_legacy_image_id="sha256:$(printf 'c%.0s' {1..64})"
 anchor_running=1
 v2_container_running() { [[ "$1" == "$LEGACY_ANCHOR_ID" && "$anchor_running" == 1 ]]; }
@@ -242,4 +351,4 @@ docker() {
 v2_restore_legacy_redis_owner
 [[ ! -s "$operation_log" ]]
 
-echo 'V2_LOW_MEMORY_COMMON=PASS caddy_rollback=true lock_exclusive=true queue_drain=true redis_owner_restore=true redis_owner_retry=true'
+echo 'V2_LOW_MEMORY_COMMON=PASS caddy_rollback=true lock_exclusive=true queue_drain=true v2_upgrade=true redis_owner_restore=true redis_owner_retry=true'

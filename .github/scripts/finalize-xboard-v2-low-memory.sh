@@ -33,15 +33,17 @@ v2_assert_v2_owners
 [[ "$(v2_caddy_reference_count "$CADDY_CONFIG" "$ACTIVE_PORT")" == 1 ]] || v2_fail active_caddy_route_missing
 
 if [[ "$TRAFFIC_STATE" == active_v2 ]]; then
-  for id in "$LEGACY_ANCHOR_ID" "$LEGACY_WEB_ID" "$LEGACY_HORIZON_ID" "$LEGACY_SCHEDULER_ID"; do
+  while IFS= read -r id; do
     v2_assert_recorded_container "$id" legacy
     ! v2_container_running "$id" || v2_fail legacy_container_still_running
-  done
+  done < <(v2_legacy_ids)
   release_state_set "$V2_STATE_FILE" traffic_state finalizing
   release_state_set "$V2_STATE_FILE" finalizing_at "$(date -u +%FT%TZ)"
   TRAFFIC_STATE=finalizing
 fi
-for id in "$LEGACY_SCHEDULER_ID" "$LEGACY_HORIZON_ID" "$LEGACY_WEB_ID" "$LEGACY_ANCHOR_ID"; do
+mapfile -t legacy_ids < <(v2_legacy_ids)
+for ((index = ${#legacy_ids[@]} - 1; index >= 0; index--)); do
+  id=${legacy_ids[$index]}
   if docker container inspect "$id" >/dev/null 2>&1; then
     ! v2_container_running "$id" || v2_fail legacy_container_still_running
     docker rm "$id" >/dev/null

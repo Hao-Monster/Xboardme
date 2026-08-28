@@ -18,9 +18,9 @@ case "$TRAFFIC_STATE" in
   maintenance|ready|active_v2) ;;
   prepared)
     v2_assert_legacy_identity
-    for id in "$LEGACY_ANCHOR_ID" "$LEGACY_WEB_ID" "$LEGACY_HORIZON_ID" "$LEGACY_SCHEDULER_ID"; do
+    while IFS= read -r id; do
       v2_container_running "$id" || v2_fail prepared_runtime_not_running
-    done
+    done < <(v2_legacy_ids)
     cmp -s -- "$CADDY_CONFIG" "$CADDY_BACKUP" || v2_fail prepared_caddy_changed
     release_state_set "$V2_STATE_FILE" traffic_state rolled_back
     release_state_set "$V2_STATE_FILE" rolled_back_at "$(date -u +%FT%TZ)"
@@ -29,9 +29,9 @@ case "$TRAFFIC_STATE" in
     ;;
   rolled_back)
     v2_assert_legacy_identity
-    for id in "$LEGACY_ANCHOR_ID" "$LEGACY_WEB_ID" "$LEGACY_HORIZON_ID" "$LEGACY_SCHEDULER_ID"; do
+    while IFS= read -r id; do
       v2_container_running "$id" || v2_fail rolled_back_runtime_not_running
-    done
+    done < <(v2_legacy_ids)
     echo "V2_ROLLBACK=PASS id=$RELEASE_ID state=already_rolled_back external_smoke_required"
     exit 0
     ;;

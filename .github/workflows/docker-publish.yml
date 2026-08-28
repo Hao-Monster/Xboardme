@@ -1396,15 +1396,30 @@ jobs:
     timeout-minutes: 20
     environment: distributor-server
     permissions:
+      actions: read
       contents: read
       packages: read
     steps:
-      - name: Verify exact V2 preparation commit
+      - name: Verify exact V2 preparation commit and approved stage
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          APPROVED_STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$EXPECTED_SHA" = "$(printf '%s' "$EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$APPROVED_STAGE_RUN_ID" = "$(printf '%s' "$APPROVED_STAGE_RUN_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          stage_run_id=${APPROVED_STAGE_RUN_ID%-*}
+          stage_attempt=${APPROVED_STAGE_RUN_ID##*-}
+          run_json=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$stage_run_id")
+          jq -e --arg sha "$GITHUB_SHA" --arg attempt "$stage_attempt" '
+            .head_sha == $sha and .conclusion == "success" and (.run_attempt | tostring) == $attempt
+          ' <<< "$run_json" >/dev/null
+          jobs_json=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$stage_run_id/jobs?per_page=100")
+          jq -e '
+            ([.jobs[] | select(.name == "stage-distributor-green" and .conclusion == "success")] | length) == 1 and
+            ([.jobs[] | select(.name == "smoke-staged-distributor" and .conclusion == "success")] | length) == 1
+          ' <<< "$jobs_json" >/dev/null
       - uses: actions/checkout@v7
       - name: Trust deployment host key
         env:
