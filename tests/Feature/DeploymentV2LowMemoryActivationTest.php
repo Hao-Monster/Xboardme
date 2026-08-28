@@ -226,4 +226,42 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
             );
         }
     }
+
+    public function test_v2_follow_up_release_discovers_every_previous_role_and_preserves_rollback(): void
+    {
+        $common = file_get_contents(base_path('.github/scripts/v2-low-memory-common.sh'));
+        $prepare = file_get_contents(base_path('.github/scripts/prepare-xboard-v2-low-memory.sh'));
+        $start = file_get_contents(base_path('.github/scripts/start-xboard-v2-low-memory.sh'));
+        $rollback = file_get_contents(base_path('.github/scripts/rollback-xboard-v2-low-memory.sh'));
+        $finalize = file_get_contents(base_path('.github/scripts/finalize-xboard-v2-low-memory.sh'));
+        $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+
+        $this->assertStringContainsString('v2_discover_active_v2_runtime()', $common);
+        foreach (['redis', 'web', 'ws', 'edge', 'horizon', 'scheduler'] as $service) {
+            $this->assertStringContainsString("{$service}) V2_DISCOVERED_", $common, $service);
+        }
+        $this->assertStringContainsString('active_v2_service_identity_collision', $common);
+        $this->assertStringContainsString('LEGACY_TOPOLOGY=$(release_state_get_optional', $common);
+        $this->assertStringContainsString('v2_legacy_ids()', $common);
+        $this->assertStringContainsString('docker stop --time 30 "$LEGACY_EDGE_ID" "$LEGACY_WS_ID"', $common);
+        $this->assertStringContainsString('docker start "$LEGACY_WS_ID"', $common);
+        $this->assertStringContainsString('docker start "$LEGACY_EDGE_ID"', $common);
+        $this->assertStringContainsString('/run/secrets/xboard_redis_password', $common);
+
+        $this->assertStringContainsString('active_port_owner_service', $prepare);
+        $this->assertStringContainsString('legacy_topology=v2', $prepare);
+        $this->assertStringContainsString('active_v2_service_unhealthy', $prepare);
+        $this->assertStringContainsString('legacy_topology "$legacy_topology"', $prepare);
+        $this->assertStringContainsString('legacy_ws_id "$legacy_ws_id"', $prepare);
+        $this->assertStringContainsString('legacy_edge_id "$legacy_edge_id"', $prepare);
+        foreach ([$start, $rollback, $finalize] as $phase) {
+            $this->assertStringContainsString('v2_legacy_ids', $phase);
+        }
+
+        $this->assertStringContainsString('actions: read', $workflow);
+        $this->assertStringContainsString('APPROVED_STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}', $workflow);
+        $this->assertStringContainsString('.head_sha == $sha and .conclusion == "success"', $workflow);
+        $this->assertStringContainsString('.name == "stage-distributor-green"', $workflow);
+        $this->assertStringContainsString('.name == "smoke-staged-distributor"', $workflow);
+    }
 }

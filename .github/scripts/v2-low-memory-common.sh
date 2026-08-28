@@ -27,30 +27,30 @@ v2_validate_release_id() {
 }
 
 v2_find_workdir() {
-  local -a anchor_ids
-  local candidate project release_workdir
+  local -a anchor_ids v2_edge_ids v2_workdirs
+  local candidate project release_workdir active_release_id
   mapfile -t anchor_ids < <(docker ps -aq --filter label=com.docker.compose.service=xboard)
   if ((${#anchor_ids[@]} == 1)); then
     candidate=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${anchor_ids[0]}")
     V2_ANCHOR_DISCOVERY_ID=$(docker inspect -f '{{.Id}}' "${anchor_ids[0]}")
-  elif ((${#anchor_ids[@]} == 0)) && [[ "${RELEASE_ID:-}" =~ ^[0-9]+-[0-9]+$ ]]; then
-    project="xboard-v2-$RELEASE_ID"
-    mapfile -t v2_ids < <(docker ps -aq --filter "label=com.docker.compose.project=$project")
-    ((${#v2_ids[@]} > 0)) || {
-      v2_fail release_workdir_not_discoverable
+  elif ((${#anchor_ids[@]} == 0)); then
+    mapfile -t v2_edge_ids < <(docker ps -q --filter label=com.docker.compose.service=edge)
+    ((${#v2_edge_ids[@]} == 1)) || {
+      v2_fail "active_v2_edge_ambiguous:${#v2_edge_ids[@]}"
       return 1
     }
+    project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "${v2_edge_ids[0]}")
     mapfile -t v2_workdirs < <(
-      for id in "${v2_ids[@]}"; do
-        docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "$id"
-      done | sort -u
+      docker inspect -f '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}' "${v2_edge_ids[0]}"
     )
     ((${#v2_workdirs[@]} == 1)) || {
       v2_fail release_workdir_ambiguous
       return 1
     }
     release_workdir=${v2_workdirs[0]}
-    [[ "$(basename -- "$release_workdir")" == "$RELEASE_ID" &&
+    active_release_id=$(basename -- "$release_workdir")
+    [[ "$active_release_id" =~ ^[0-9]+-[0-9]+$ &&
+       "$project" == "xboard-v2-$active_release_id" &&
        "$(basename -- "$(dirname -- "$release_workdir")")" == .codex-v2-release ]] || {
       v2_fail invalid_release_workdir
       return 1
@@ -122,6 +122,10 @@ v2_load_state() {
   LEGACY_WEB_ID=$(release_state_get "$V2_STATE_FILE" legacy_web_id)
   LEGACY_HORIZON_ID=$(release_state_get "$V2_STATE_FILE" legacy_horizon_id)
   LEGACY_SCHEDULER_ID=$(release_state_get "$V2_STATE_FILE" legacy_scheduler_id)
+  LEGACY_TOPOLOGY=$(release_state_get_optional "$V2_STATE_FILE" legacy_topology)
+  LEGACY_WS_ID=$(release_state_get_optional "$V2_STATE_FILE" legacy_ws_id)
+  LEGACY_EDGE_ID=$(release_state_get_optional "$V2_STATE_FILE" legacy_edge_id)
+  [[ -n "$LEGACY_TOPOLOGY" ]] || LEGACY_TOPOLOGY=legacy
   REDIS_PASSWORD_FILE=$(release_state_get "$V2_STATE_FILE" redis_password_file)
   REDIS_VOLUME_NAME=$(release_state_get "$V2_STATE_FILE" redis_volume_name)
   APP_DATA_PATH=$(release_state_get "$V2_STATE_FILE" app_data_path)
@@ -135,6 +139,24 @@ v2_load_state() {
   [[ "$ACTIVE_PORT" =~ ^[0-9]+$ && "$MAINTENANCE_PORT" =~ ^[0-9]+$ && "$ACTIVE_PORT" != "$MAINTENANCE_PORT" ]] || v2_fail invalid_ports
   [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || v2_fail invalid_release_sha
   [[ "$RELEASE_IMAGE" =~ ^[^[:space:]@]+@sha256:[0-9a-f]{64}$ ]] || v2_fail invalid_release_image
+  case "$LEGACY_TOPOLOGY" in
+    legacy)
+      [[ -z "$LEGACY_WS_ID" && -z "$LEGACY_EDGE_ID" ]] || {
+        v2_fail invalid_legacy_topology_state
+        return 1
+      }
+      ;;
+    v2)
+      [[ -n "$LEGACY_WS_ID" && -n "$LEGACY_EDGE_ID" ]] || {
+        v2_fail incomplete_v2_legacy_state
+        return 1
+      }
+      ;;
+    *)
+      v2_fail invalid_legacy_topology
+      return 1
+      ;;
+  esac
   [[ -f "$REDIS_PASSWORD_FILE" && ! -L "$REDIS_PASSWORD_FILE" ]] || v2_fail redis_secret_missing
   [[ "$(stat -c '%u:%g:%a' "$REDIS_PASSWORD_FILE")" == 0:1000:440 ]] || v2_fail redis_secret_permissions
   [[ "$(stat -c '%u:%a' "$V2_RELEASE_DIR/runtime.env")" == 0:600 ]] || v2_fail runtime_environment_permissions
@@ -251,11 +273,67 @@ v2_assert_recorded_container() {
   }
 }
 
+v2_discover_active_v2_runtime() {
+  local active_edge_id=$1 project service service_id
+  local -a service_ids discovered_ids unique_ids
+
+  project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$active_edge_id")
+  [[ -n "$project" && "$project" != '<no value>' ]] || {
+    v2_fail active_v2_project_missing
+    return 1
+  }
+  for service in redis web ws edge horizon scheduler; do
+    mapfile -t service_ids < <(
+      docker ps -q \
+        --filter "label=com.docker.compose.project=$project" \
+        --filter "label=com.docker.compose.service=$service"
+    )
+    ((${#service_ids[@]} == 1)) || {
+      v2_fail "active_v2_service_ambiguous:$service:${#service_ids[@]}"
+      return 1
+    }
+    service_id=$(docker inspect -f '{{.Id}}' "${service_ids[0]}")
+    case "$service" in
+      redis) V2_DISCOVERED_REDIS_ID=$service_id ;;
+      web) V2_DISCOVERED_WEB_ID=$service_id ;;
+      ws) V2_DISCOVERED_WS_ID=$service_id ;;
+      edge) V2_DISCOVERED_EDGE_ID=$service_id ;;
+      horizon) V2_DISCOVERED_HORIZON_ID=$service_id ;;
+      scheduler) V2_DISCOVERED_SCHEDULER_ID=$service_id ;;
+    esac
+  done
+  discovered_ids=(
+    "$V2_DISCOVERED_REDIS_ID" "$V2_DISCOVERED_WEB_ID" "$V2_DISCOVERED_WS_ID"
+    "$V2_DISCOVERED_EDGE_ID" "$V2_DISCOVERED_HORIZON_ID" "$V2_DISCOVERED_SCHEDULER_ID"
+  )
+  mapfile -t unique_ids < <(printf '%s\n' "${discovered_ids[@]}" | sort -u)
+  ((${#unique_ids[@]} == ${#discovered_ids[@]})) || {
+    v2_fail active_v2_service_identity_collision
+    return 1
+  }
+  [[ "$V2_DISCOVERED_EDGE_ID" == "$active_edge_id" ]] || {
+    v2_fail active_v2_edge_identity_mismatch
+    return 1
+  }
+  V2_DISCOVERED_PROJECT=$project
+}
+
 v2_assert_legacy_identity() {
   v2_assert_recorded_container "$LEGACY_ANCHOR_ID" anchor || return 1
   v2_assert_recorded_container "$LEGACY_WEB_ID" web || return 1
   v2_assert_recorded_container "$LEGACY_HORIZON_ID" horizon || return 1
   v2_assert_recorded_container "$LEGACY_SCHEDULER_ID" scheduler || return 1
+  if [[ "$LEGACY_TOPOLOGY" == v2 ]]; then
+    v2_assert_recorded_container "$LEGACY_WS_ID" ws || return 1
+    v2_assert_recorded_container "$LEGACY_EDGE_ID" edge || return 1
+  fi
+}
+
+v2_legacy_ids() {
+  printf '%s\n' "$LEGACY_ANCHOR_ID" "$LEGACY_WEB_ID" "$LEGACY_HORIZON_ID" "$LEGACY_SCHEDULER_ID"
+  if [[ "$LEGACY_TOPOLOGY" == v2 ]]; then
+    printf '%s\n' "$LEGACY_WS_ID" "$LEGACY_EDGE_ID"
+  fi
 }
 
 v2_container_running() {
@@ -385,7 +463,23 @@ v2_start_maintenance() {
 }
 
 v2_legacy_redis_save() {
-  docker exec "$LEGACY_ANCHOR_ID" redis-cli -s /data/redis.sock SAVE | grep -qx OK
+  if [[ "$LEGACY_TOPOLOGY" == v2 ]]; then
+    docker exec "$LEGACY_ANCHOR_ID" sh -eu -c \
+      'REDISCLI_AUTH=$(cat /run/secrets/xboard_redis_password); export REDISCLI_AUTH; exec redis-cli --no-auth-warning SAVE' |
+      grep -qx OK
+  else
+    docker exec "$LEGACY_ANCHOR_ID" redis-cli -s /data/redis.sock SAVE | grep -qx OK
+  fi
+}
+
+v2_legacy_redis_ping() {
+  if [[ "$LEGACY_TOPOLOGY" == v2 ]]; then
+    docker exec "$LEGACY_ANCHOR_ID" sh -eu -c \
+      'REDISCLI_AUTH=$(cat /run/secrets/xboard_redis_password); export REDISCLI_AUTH; exec redis-cli --no-auth-warning ping' |
+      grep -qx PONG
+  else
+    docker exec "$LEGACY_ANCHOR_ID" redis-cli -s /data/redis.sock ping | grep -qx PONG
+  fi
 }
 
 v2_redis_save() {
@@ -443,23 +537,25 @@ v2_stop_legacy_runtime() {
     return 1
   }
   docker stop --time 60 "$LEGACY_HORIZON_ID" >/dev/null
+  if [[ "$LEGACY_TOPOLOGY" == v2 ]]; then
+    docker stop --time 30 "$LEGACY_EDGE_ID" "$LEGACY_WS_ID" >/dev/null
+  fi
   docker stop --time 30 "$LEGACY_WEB_ID" >/dev/null
   v2_legacy_redis_save
   docker stop --time 30 "$LEGACY_ANCHOR_ID" >/dev/null
-  for id in "$LEGACY_SCHEDULER_ID" "$LEGACY_HORIZON_ID" "$LEGACY_WEB_ID" "$LEGACY_ANCHOR_ID"; do
+  while IFS= read -r id; do
     ! v2_container_running "$id" || {
       v2_fail legacy_runtime_did_not_stop
       return 1
     }
-  done
+  done < <(v2_legacy_ids)
 }
 
 v2_restore_legacy_redis_owner() {
   local legacy_image_id
 
   v2_assert_legacy_identity || return 1
-  if v2_container_running "$LEGACY_ANCHOR_ID" &&
-     docker exec "$LEGACY_ANCHOR_ID" redis-cli -s /data/redis.sock ping 2>/dev/null | grep -qx PONG; then
+  if v2_container_running "$LEGACY_ANCHOR_ID" && v2_legacy_redis_ping 2>/dev/null; then
     return 0
   fi
   if v2_container_running "$LEGACY_ANCHOR_ID"; then
@@ -513,7 +609,7 @@ v2_start_legacy_runtime() {
     return 1
   }
   for attempt in {1..30}; do
-    if docker exec "$LEGACY_ANCHOR_ID" redis-cli -s /data/redis.sock ping 2>/dev/null | grep -qx PONG; then
+    if v2_legacy_redis_ping 2>/dev/null; then
       redis_ready=1
       break
     fi
@@ -527,13 +623,25 @@ v2_start_legacy_runtime() {
     v2_fail legacy_web_start_failed
     return 1
   }
+  if [[ "$LEGACY_TOPOLOGY" == v2 ]]; then
+    docker start "$LEGACY_WS_ID" >/dev/null || {
+      v2_fail legacy_ws_start_failed
+      return 1
+    }
+    docker start "$LEGACY_EDGE_ID" >/dev/null || {
+      v2_fail legacy_edge_start_failed
+      return 1
+    }
+  fi
   docker start "$LEGACY_HORIZON_ID" >/dev/null || {
     v2_fail legacy_horizon_start_failed
     return 1
   }
   for attempt in {1..30}; do
     if curl --silent --show-error --fail --max-time 3 "http://127.0.0.1:$ACTIVE_PORT/" >/dev/null &&
-       v2_container_running "$LEGACY_HORIZON_ID"; then
+       v2_container_running "$LEGACY_HORIZON_ID" &&
+       { [[ "$LEGACY_TOPOLOGY" != v2 ]] ||
+         { v2_container_running "$LEGACY_WS_ID" && v2_container_running "$LEGACY_EDGE_ID"; }; }; then
       runtime_ready=1
       break
     fi
@@ -599,12 +707,12 @@ v2_assert_v2_owners() {
       return 1
     }
   done
-  for id in "$LEGACY_ANCHOR_ID" "$LEGACY_HORIZON_ID" "$LEGACY_SCHEDULER_ID"; do
+  while IFS= read -r id; do
     ! v2_container_running "$id" || {
       v2_fail legacy_owner_still_running
       return 1
     }
-  done
+  done < <(v2_legacy_ids)
 
   expected_horizon=$(v2_service_id horizon)
   expected_scheduler=$(v2_service_id scheduler)

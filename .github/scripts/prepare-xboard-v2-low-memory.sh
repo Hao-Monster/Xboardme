@@ -73,16 +73,38 @@ mapfile -t active_web_ids < <(
   done
 )
 ((${#active_web_ids[@]} == 1)) || v2_fail "active_web_ambiguous:${#active_web_ids[@]}"
-legacy_web_id=$(docker inspect -f '{{.Id}}' "${active_web_ids[0]}")
-legacy_anchor_id=$V2_ANCHOR_DISCOVERY_ID
-[[ "$legacy_web_id" != "$legacy_anchor_id" ]] || v2_fail split_runtime_foundation_required
+active_port_owner_id=$(docker inspect -f '{{.Id}}' "${active_web_ids[0]}")
+active_port_owner_service=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.service" }}' "$active_port_owner_id")
+legacy_topology=legacy
+legacy_ws_id=''
+legacy_edge_id=''
+legacy_app_ids=()
 
-mapfile -t legacy_horizon_ids < <(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=horizon)
-mapfile -t legacy_scheduler_ids < <(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=scheduler)
-((${#legacy_horizon_ids[@]} == 1)) || v2_fail "legacy_horizon_ambiguous:${#legacy_horizon_ids[@]}"
-((${#legacy_scheduler_ids[@]} == 1)) || v2_fail "legacy_scheduler_ambiguous:${#legacy_scheduler_ids[@]}"
-legacy_horizon_id=$(docker inspect -f '{{.Id}}' "${legacy_horizon_ids[0]}")
-legacy_scheduler_id=$(docker inspect -f '{{.Id}}' "${legacy_scheduler_ids[0]}")
+if [[ "$active_port_owner_service" == edge ]]; then
+  legacy_topology=v2
+  v2_discover_active_v2_runtime "$active_port_owner_id"
+  legacy_anchor_id=$V2_DISCOVERED_REDIS_ID
+  legacy_web_id=$V2_DISCOVERED_WEB_ID
+  legacy_ws_id=$V2_DISCOVERED_WS_ID
+  legacy_edge_id=$V2_DISCOVERED_EDGE_ID
+  legacy_horizon_id=$V2_DISCOVERED_HORIZON_ID
+  legacy_scheduler_id=$V2_DISCOVERED_SCHEDULER_ID
+  legacy_app_ids=("$legacy_web_id" "$legacy_ws_id" "$legacy_horizon_id" "$legacy_scheduler_id")
+  app_mount_container=$legacy_web_id
+else
+  legacy_web_id=$active_port_owner_id
+  legacy_anchor_id=$V2_ANCHOR_DISCOVERY_ID
+  [[ "$legacy_web_id" != "$legacy_anchor_id" ]] || v2_fail split_runtime_foundation_required
+
+  mapfile -t legacy_horizon_ids < <(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=horizon)
+  mapfile -t legacy_scheduler_ids < <(docker ps -q --filter label=codex.xboard.release=true --filter label=codex.xboard.release.role=scheduler)
+  ((${#legacy_horizon_ids[@]} == 1)) || v2_fail "legacy_horizon_ambiguous:${#legacy_horizon_ids[@]}"
+  ((${#legacy_scheduler_ids[@]} == 1)) || v2_fail "legacy_scheduler_ambiguous:${#legacy_scheduler_ids[@]}"
+  legacy_horizon_id=$(docker inspect -f '{{.Id}}' "${legacy_horizon_ids[0]}")
+  legacy_scheduler_id=$(docker inspect -f '{{.Id}}' "${legacy_scheduler_ids[0]}")
+  legacy_app_ids=("$legacy_web_id" "$legacy_horizon_id" "$legacy_scheduler_id")
+  app_mount_container=$legacy_anchor_id
+fi
 
 for pair in \
   "$legacy_anchor_id:anchor" \
@@ -93,8 +115,21 @@ for pair in \
   label=${pair#*:}
   [[ "$(docker inspect -f '{{.State.Running}}' "$container_id")" == true ]] || v2_fail "legacy_container_not_running:$label"
 done
+if [[ "$legacy_topology" == v2 ]]; then
+  for pair in "$legacy_ws_id:ws" "$legacy_edge_id:edge"; do
+    container_id=${pair%%:*}
+    label=${pair#*:}
+    [[ "$(docker inspect -f '{{.State.Running}}' "$container_id")" == true ]] || v2_fail "legacy_container_not_running:$label"
+  done
+  for container_id in \
+    "$legacy_anchor_id" "$legacy_web_id" "$legacy_ws_id" "$legacy_edge_id" \
+    "$legacy_horizon_id" "$legacy_scheduler_id"; do
+    [[ "$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container_id")" == healthy ]] ||
+      v2_fail active_v2_service_unhealthy
+  done
+fi
 legacy_release_sha=''
-for container_id in "$legacy_web_id" "$legacy_horizon_id" "$legacy_scheduler_id"; do
+for container_id in "${legacy_app_ids[@]}"; do
   revision=$(docker inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$container_id")
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || v2_fail invalid_legacy_release_revision
   if [[ -z "$legacy_release_sha" ]]; then
@@ -112,12 +147,12 @@ mount_value() {
   '
 }
 
-env_file=$(mount_value "$legacy_anchor_id" /www/.env Source)
-app_data_path=$(mount_value "$legacy_anchor_id" /www/.docker/.data Source)
-app_logs_path=$(mount_value "$legacy_anchor_id" /www/storage/logs Source)
-app_theme_path=$(mount_value "$legacy_anchor_id" /www/storage/theme Source)
-app_knowledge_path=$(mount_value "$legacy_anchor_id" /www/storage/app/knowledge-attachments Source)
-app_plugins_path=$(mount_value "$legacy_anchor_id" /www/plugins Source)
+env_file=$(mount_value "$app_mount_container" /www/.env Source)
+app_data_path=$(mount_value "$app_mount_container" /www/.docker/.data Source)
+app_logs_path=$(mount_value "$app_mount_container" /www/storage/logs Source)
+app_theme_path=$(mount_value "$app_mount_container" /www/storage/theme Source)
+app_knowledge_path=$(mount_value "$app_mount_container" /www/storage/app/knowledge-attachments Source)
+app_plugins_path=$(mount_value "$app_mount_container" /www/plugins Source)
 redis_mount_type=$(mount_value "$legacy_anchor_id" /data Type)
 redis_volume_name=$(mount_value "$legacy_anchor_id" /data Name)
 [[ "$redis_mount_type" == volume ]] || v2_fail redis_is_not_a_named_volume
@@ -139,9 +174,9 @@ for path in "$V2_WORKDIR" "$caddy_config" "$env_file" "$app_data_path" "$app_log
 done
 [[ "$redis_volume_name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]+$ ]] || v2_fail invalid_redis_volume_name
 
-for container_id in "$legacy_web_id" "$legacy_horizon_id" "$legacy_scheduler_id"; do
+for container_id in "${legacy_app_ids[@]}"; do
   for destination in /www/.env /www/.docker/.data /www/storage/logs /www/storage/theme /www/storage/app/knowledge-attachments /www/plugins; do
-    anchor_source=$(mount_value "$legacy_anchor_id" "$destination" Source)
+    anchor_source=$(mount_value "$app_mount_container" "$destination" Source)
     role_source=$(mount_value "$container_id" "$destination" Source)
     [[ "$anchor_source" == "$role_source" ]] || v2_fail "authoritative_mount_mismatch:$destination"
   done
@@ -151,8 +186,17 @@ total_memory_kib=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
 available_disk_kib=$(df -Pk "$V2_WORKDIR" | awk 'NR == 2 {print $4}')
 ((total_memory_kib >= 3500000)) || v2_fail insufficient_total_memory
 ((available_disk_kib >= 5242880)) || v2_fail insufficient_disk_space
-docker exec "$legacy_anchor_id" redis-cli -s /data/redis.sock ping | grep -qx PONG
-docker exec "$legacy_anchor_id" redis-cli -s /data/redis.sock config get appendonly | tail -1 | grep -qx no
+if [[ "$legacy_topology" == v2 ]]; then
+  docker exec "$legacy_anchor_id" sh -eu -c \
+    'REDISCLI_AUTH=$(cat /run/secrets/xboard_redis_password); export REDISCLI_AUTH; exec redis-cli --no-auth-warning ping' |
+    grep -qx PONG
+  docker exec "$legacy_anchor_id" sh -eu -c \
+    'REDISCLI_AUTH=$(cat /run/secrets/xboard_redis_password); export REDISCLI_AUTH; exec redis-cli --no-auth-warning config get appendonly' |
+    tail -1 | grep -qx no
+else
+  docker exec "$legacy_anchor_id" redis-cli -s /data/redis.sock ping | grep -qx PONG
+  docker exec "$legacy_anchor_id" redis-cli -s /data/redis.sock config get appendonly | tail -1 | grep -qx no
+fi
 
 payload_container=$(docker create "$RELEASE_IMAGE")
 docker cp "$payload_container:/www/compose.v2.sample.yaml" "$release_dir/compose.v2.sample.yaml"
@@ -296,6 +340,9 @@ release_state_create "$state_file" \
   legacy_web_id "$legacy_web_id" \
   legacy_horizon_id "$legacy_horizon_id" \
   legacy_scheduler_id "$legacy_scheduler_id" \
+  legacy_topology "$legacy_topology" \
+  legacy_ws_id "$legacy_ws_id" \
+  legacy_edge_id "$legacy_edge_id" \
   legacy_release_sha "$legacy_release_sha" \
   redis_password_file "$redis_password_file" \
   redis_volume_name "$redis_volume_name" \

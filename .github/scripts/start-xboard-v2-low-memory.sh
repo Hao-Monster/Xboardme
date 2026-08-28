@@ -20,9 +20,9 @@ v2_open_release
 available_memory_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
 [[ "$available_memory_kib" =~ ^[0-9]+$ ]] && ((available_memory_kib >= 524288)) || v2_fail insufficient_available_memory
 v2_assert_legacy_identity
-for id in "$LEGACY_ANCHOR_ID" "$LEGACY_WEB_ID" "$LEGACY_HORIZON_ID" "$LEGACY_SCHEDULER_ID"; do
+while IFS= read -r id; do
   v2_container_running "$id" || v2_fail legacy_runtime_not_fully_running
-done
+done < <(v2_legacy_ids)
 cmp -s -- "$CADDY_CONFIG" "$CADDY_BACKUP" || v2_fail caddy_changed_since_prepare
 [[ "$(v2_caddy_reference_count "$CADDY_CONFIG" "$ACTIVE_PORT")" == 1 ]] || v2_fail active_caddy_route_missing
 
