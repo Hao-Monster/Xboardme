@@ -18,13 +18,19 @@ test('mobile distributor orders become readable cards while the desktop table re
   assert.match(renderer[0], /data-label="\$\{t\('plan'\)\}"/);
   assert.match(renderer[0], /data-label="\$\{t\('period'\)\}"/);
   assert.match(renderer[0], /data-label="\$\{t\('amount'\)\}"/);
+  assert.match(renderer[0], /class="dist-order-bound-devices" data-label="\$\{t\('boundDevices'\)\}"/);
+  assert.match(renderer[0], /class="dist-order-used-traffic" data-label="\$\{t\('usedTraffic'\)\}"/);
   assert.match(renderer[0], /data-label="\$\{t\('remark'\)\}"/);
   assert.match(renderer[0], /<thead><tr><th>\$\{t\('orderNo'\)\}<\/th><th>\$\{t\('orderTime'\)\}<\/th>/);
 
   assert.match(styles, /@media \(max-width:640px\), \(max-width:900px\) and \(hover:none\) and \(pointer:coarse\)/);
+  assert.match(styles, /\.dist-orders-table \{[^}]*min-width:1160px[^}]*\}/);
+  assert.doesNotMatch(styles, /\.dist-orders-table \{[^}]*min-width:1160px!important/);
   assert.match(styles, /\.dist-order-list \.dist-orders-table \{[^}]*min-width:0[^}]*display:block/);
   assert.match(styles, /\.dist-origin-order-row,\.dist-renewal-order-row \{[^}]*grid-template-areas:/);
   assert.match(styles, /\.dist-order-action-cell \{[^}]*grid-area:actions/);
+  assert.match(styles, /\.dist-order-bound-devices \{[^}]*grid-area:bound-devices/);
+  assert.match(styles, /\.dist-order-used-traffic \{[^}]*grid-area:used-traffic/);
   assert.match(styles, /\.dist-order-toolbar \.dist-order-search \{[^}]*grid-template-columns:minmax\(0,1fr\) auto auto/);
 });
 

@@ -86,6 +86,8 @@ class OrderResource extends JsonResource
             'hwid_enabled' => $distributorOrder ? (bool) $distributorOrder->hwid_enabled : null,
             'hwid_limit' => $distributorOrder ? (int) $distributorOrder->hwid_limit : null,
             'bound_devices' => $boundDevices,
+            'bound_device_count' => $distributorOrder ? count($boundDevices) : null,
+            'used_traffic' => $distributorOrder ? (int) $subscriptionEntitlement['used_traffic'] : null,
             'can_view_subscription_qr' => (bool) (
                 $isSubscriptionOrigin
                 && $distributorOrder?->subscriber?->token

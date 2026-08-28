@@ -22,11 +22,11 @@ class DistributorOrderExportService
     private const CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     private const ADMIN_HEADERS = [
-        '订单号', '订单类型', '关联原订单', '用户名称', '分销商', '套餐', '周期', '原价', '结算状态', '备注',
+        '订单号', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注',
     ];
 
     private const DISTRIBUTOR_HEADERS = [
-        '订单号', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '结算状态', '备注',
+        '订单号', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注',
     ];
 
     public function __construct(private readonly DistributorOrderSearchService $searchService)
@@ -60,6 +60,8 @@ class DistributorOrderExportService
                     ? (string) $order->subscription_trade_no
                     : '-',
                 (string) ($order->customer_name ?: '-'),
+                (int) $order->bound_device_count,
+                $this->trafficLabel($order->used_traffic),
                 (string) ($order->distributor_name ?: $order->distributor_email),
                 (string) ($order->plan_name ?: '-'),
                 $this->periodLabel((string) $order->period),
@@ -100,6 +102,8 @@ class DistributorOrderExportService
                 (string) ($order->plan_name ?: '-'),
                 $this->periodLabel((string) $order->period),
                 $this->yuan($order->total_amount),
+                (int) $order->bound_device_count,
+                $this->trafficLabel($order->used_traffic),
                 $this->settlementLabel((int) $order->settlement_status),
                 (string) ($order->remark ?? ''),
             ],
@@ -130,14 +134,20 @@ class DistributorOrderExportService
                 'v2_plan.name as plan_name',
                 'root_order.trade_no as subscription_trade_no',
                 DB::raw('CASE WHEN v2_order.paid_at IS NULL THEN 0 ELSE 1 END as settlement_status'),
+                DB::raw('CASE WHEN COALESCE(subscriber.u, 0) + COALESCE(subscriber.d, 0) < 0 THEN 0 ELSE COALESCE(subscriber.u, 0) + COALESCE(subscriber.d, 0) END as used_traffic'),
             ])
+            ->selectSub(function (Builder $query) {
+                $query->from('v2_distributor_hwid_device as hwid_devices')
+                    ->selectRaw('COUNT(*)')
+                    ->whereColumn('hwid_devices.distributor_order_id', 'v2_distributor_order.id');
+            }, 'bound_device_count')
             ->orderByDesc('v2_order.created_at')
             ->orderByDesc('v2_order.id');
     }
 
     /**
      * @param array<int, string> $headers
-     * @param callable(object): array<int, float|string> $rowMapper
+     * @param callable(object): array<int, float|int|string> $rowMapper
      */
     private function download(Builder $query, array $headers, callable $rowMapper, string $filePrefix): BinaryFileResponse
     {
@@ -156,12 +166,16 @@ class DistributorOrderExportService
             $sheet = $writer->getCurrentSheet();
             $sheet->setName('分销订单');
             $sheet->setSheetView((new SheetView())->setFreezeRow(2));
-            $sheet->setColumnWidth(28, 1);
-            $sheet->setColumnWidth(14, 2);
-            $sheet->setColumnWidth(28, 3);
-            $sheet->setColumnWidth(22, 4, 7);
-            $sheet->setColumnWidth(14, 8, 9);
-            $sheet->setColumnWidth(42, count($headers));
+            foreach ($headers as $index => $header) {
+                $width = match ($header) {
+                    '订单号', '关联原订单' => 28,
+                    '用户名称', '分销商', '套餐', '订阅计划' => 22,
+                    '已用流量' => 16,
+                    '备注' => 42,
+                    default => 14,
+                };
+                $sheet->setColumnWidth($width, $index + 1);
+            }
 
             $headerStyle = (new Style())
                 ->setFontBold()
@@ -214,6 +228,25 @@ class DistributorOrderExportService
     private function settlementLabel(int $status): string
     {
         return $status === DistributorOrder::SETTLEMENT_SETTLED ? '已结算' : '未结算';
+    }
+
+    private function trafficLabel(mixed $bytes): string
+    {
+        $value = max(0, (int) $bytes);
+        $gibibyte = 1024 ** 3;
+        if ($value >= $gibibyte) {
+            $precision = $value % $gibibyte === 0 ? 0 : 2;
+
+            return number_format($value / $gibibyte, $precision, '.', '') . ' GB';
+        }
+        if ($value >= 1024 ** 2) {
+            return number_format($value / (1024 ** 2), 2, '.', '') . ' MB';
+        }
+        if ($value >= 1024) {
+            return number_format($value / 1024, 2, '.', '') . ' KB';
+        }
+
+        return $value . ' B';
     }
 
     private function periodLabel(string $period): string

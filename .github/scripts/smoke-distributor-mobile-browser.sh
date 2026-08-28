@@ -84,6 +84,8 @@ cat > "$fixture" <<HTML
       can_renew: true,
       hwid_enabled: true,
       bound_devices: [],
+      bound_device_count: 2,
+      used_traffic: 5368709120,
       plan: { id: 1, name: '移动端验收套餐', month_price: 1000 },
       subscription_entitlement: {
         plan_name: '移动端验收套餐',
@@ -116,6 +118,8 @@ cat > "$fixture" <<HTML
       const table = document.querySelector('.dist-orders-table');
       const heading = document.querySelector('.dist-orders-table thead');
       const settlement = document.querySelector('.dist-order-settlement');
+      const boundDevices = document.querySelector('.dist-order-bound-devices');
+      const usedTraffic = document.querySelector('.dist-order-used-traffic');
       const actions = Array.from(document.querySelectorAll('.dist-order-actions button'));
       const failures = [];
       if (!window.matchMedia('(max-width:640px), (max-width:900px) and (hover:none) and (pointer:coarse)').matches) failures.push('mobile_media_query');
@@ -124,6 +128,8 @@ cat > "$fixture" <<HTML
       if (!heading || getComputedStyle(heading).position !== 'absolute') failures.push('desktop_heading_visible');
       if (!row || getComputedStyle(row).display !== 'grid') failures.push('card_grid');
       if (!settlement || settlement.getBoundingClientRect().width < 1) failures.push('settlement_status');
+      if (!boundDevices || boundDevices.getBoundingClientRect().width < 1 || !boundDevices.textContent.includes('2')) failures.push('bound_device_count');
+      if (!usedTraffic || usedTraffic.getBoundingClientRect().width < 1 || !usedTraffic.textContent.includes('5 GB')) failures.push('used_traffic');
       if (actions.length !== 3) failures.push('action_count');
       if (!document.querySelector('[data-subscription-qr]')) failures.push('data-subscription-qr');
       if (!document.querySelector('[data-entitlement-toggle]')) failures.push('data-entitlement-toggle');
