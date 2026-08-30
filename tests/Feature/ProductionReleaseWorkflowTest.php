@@ -159,6 +159,9 @@ class ProductionReleaseWorkflowTest extends TestCase
             'active_revision_missing',
             'active_state_revision_mismatch',
             'maintenance_container',
+            'RETENTION_ACTIVE_REDIS_VOLUME=',
+            'RETENTION_ACTIVE_APP_DATA_ID=',
+            'RETENTION_DIRECT_PREVIOUS_MAINTENANCE=',
             'active_release_not_finalized',
             'rollback_support_not_closed',
             'required_port_in_use',
@@ -182,6 +185,7 @@ class ProductionReleaseWorkflowTest extends TestCase
         }
         $this->assertStringNotContainsString("done < <(docker ps -aq --no-trunc)\n  size=", $script);
         $this->assertStringContainsString('image_ref_counts["$image_id"]', $script);
+        $this->assertStringContainsString('org.opencontainers.image.source', $script);
     }
 
     public function test_prepare_and_switch_are_separate_approval_boundaries_without_idle_maintenance(): void

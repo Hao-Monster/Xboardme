@@ -63,7 +63,10 @@ active_state_file=''
 active_traffic_state=legacy
 active_rollback_supported=unknown
 active_maintenance_container=''
+active_redis_volume=unknown
+active_app_data_id=unknown
 direct_previous_project=''
+direct_previous_maintenance=''
 declare -A protected_ids=()
 protected_ids["$(docker inspect -f '{{.Id}}' "$XBOARD_ANCHOR_CONTAINER")"]=anchor
 protected_ids["$active_container"]=active
@@ -110,6 +113,14 @@ if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
      docker container inspect "$active_maintenance_container" >/dev/null 2>&1; then
     protected_ids["$(docker inspect -f '{{.Id}}' "$active_maintenance_container")"]=active
   fi
+  active_redis_volume=$(release_state_get "$active_state_file" redis_volume_name)
+  docker volume inspect "$active_redis_volume" >/dev/null
+  active_app_data_path=$(release_state_get "$active_state_file" app_data_path)
+  [[ "$active_app_data_path" == /* && -d "$active_app_data_path" && ! -L "$active_app_data_path" ]] || {
+    echo 'RETENTION_AUDIT_FAIL=active_app_data_invalid'
+    exit 1
+  }
+  active_app_data_id=$(stat -c '%d:%i' "$active_app_data_path")
 
   for state_key in legacy_anchor_id legacy_web_id legacy_ws_id legacy_edge_id legacy_horizon_id legacy_scheduler_id; do
     id=$(release_state_get_optional "$active_state_file" "$state_key")
@@ -128,6 +139,13 @@ if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
       fi
     fi
   done
+
+  if [[ "$direct_previous_project" =~ ^xboard-v2-([0-9]+-[0-9]+)$ ]]; then
+    direct_previous_maintenance="xboard-v2-maintenance-${BASH_REMATCH[1]}"
+    if docker container inspect "$direct_previous_maintenance" >/dev/null 2>&1; then
+      protected_ids["$(docker inspect -f '{{.Id}}' "$direct_previous_maintenance")"]=direct_rollback
+    fi
+  fi
 fi
 
 inventory=$(mktemp)
@@ -148,7 +166,10 @@ emit "RETENTION_ACTIVE_ROLLBACK_SUPPORTED=$active_rollback_supported"
 emit "RETENTION_ACTIVE_REVISION=$active_revision"
 emit "RETENTION_ACTIVE_CONTAINER=$active_name"
 emit "RETENTION_ACTIVE_UPSTREAM=$XBOARD_ACTIVE_UPSTREAM"
+emit "RETENTION_ACTIVE_REDIS_VOLUME=$active_redis_volume"
+emit "RETENTION_ACTIVE_APP_DATA_ID=$active_app_data_id"
 emit "RETENTION_DIRECT_PREVIOUS_PROJECT=${direct_previous_project:-none}"
+emit "RETENTION_DIRECT_PREVIOUS_MAINTENANCE=${direct_previous_maintenance:-none}"
 emit "RETENTION_COMPOSE_ANCHOR=$(docker inspect -f '{{.Name}}' "$XBOARD_ANCHOR_CONTAINER" | sed 's#^/##')"
 emit "RETENTION_DISK_AVAILABLE_KIB=$(df -Pk "$workdir" | awk 'NR == 2 {print $4}')"
 
@@ -274,9 +295,15 @@ done
 while IFS= read -r image_id; do
   [[ -n "$image_id" ]] || continue
   refs=${image_ref_counts[$image_id]:-0}
-  size=$(docker image inspect -f '{{.Size}}' "$image_id")
-  revision=$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id")
-  emit "RETENTION_IMAGE id=$image_id size_bytes=$size container_refs=$refs revision=${revision:-none}"
+  image_row=$(docker image inspect "$image_id" | jq -r '.[0] | [
+    (.Size | tostring),
+    (.Config.Labels["org.opencontainers.image.revision"] // "none"),
+    (.Config.Labels["org.opencontainers.image.source"] // "none"),
+    (.RepoTags // [] | sort | join(",") | if . == "" then "none" else . end),
+    (.RepoDigests // [] | sort | join(",") | if . == "" then "none" else . end)
+  ] | @tsv')
+  IFS=$'\t' read -r size revision source tags digests <<< "$image_row"
+  emit "RETENTION_IMAGE id=$image_id size_bytes=$size container_refs=$refs revision=$revision source=$source tags=$tags digests=$digests"
 done < <(docker image ls -q --no-trunc | sort -u)
 
 identity_fingerprint=$(
