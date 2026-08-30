@@ -42,9 +42,14 @@ trap rollback_switch_on_error EXIT
 v2_replace_caddy_upstream "$MAINTENANCE_PORT" "$ACTIVE_PORT"
 switch_mutated=1
 release_state_set "$V2_STATE_FILE" traffic_state active_v2
-release_state_set "$V2_STATE_FILE" switched_at "$(date -u +%FT%TZ)"
+release_state_set "$V2_STATE_FILE" rollback_supported true
+switched_at=$(date -u +%FT%TZ)
+switched_epoch=$(date -u -d "$switched_at" +%s)
+finalize_due_at=$(date -u -d "@$((switched_epoch + 86400))" +%FT%TZ)
+release_state_set "$V2_STATE_FILE" switched_at "$switched_at"
+release_state_set "$V2_STATE_FILE" finalize_due_at "$finalize_due_at"
 TRAFFIC_STATE=active_v2
 
 switch_mutated=0
 trap - EXIT
-echo "V2_SWITCH=PASS id=$RELEASE_ID upstream=127.0.0.1:$ACTIVE_PORT external_smoke_required"
+echo "V2_SWITCH=PASS id=$RELEASE_ID upstream=127.0.0.1:$ACTIVE_PORT finalize_due_at=$finalize_due_at external_smoke_required"

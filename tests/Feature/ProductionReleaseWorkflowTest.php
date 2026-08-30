@@ -46,7 +46,6 @@ class ProductionReleaseWorkflowTest extends TestCase
                 'rollback',
                 'cleanup',
                 'v2_rollback',
-                'v2_finalize',
             ],
             $parsed['on']['workflow_dispatch']['inputs']['production_release_action']['options'] ?? null
         );
@@ -77,7 +76,7 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertIsString($workflow);
         $this->assertIsArray($parsed);
         $this->assertSame(
-            ['resolve-signed-image', 'production-preflight'],
+            ['resolve-signed-image', 'production-preflight', 'retention-gate'],
             $parsed['jobs']['stage-signed-image']['needs'] ?? null
         );
         $this->assertSame(
@@ -111,6 +110,75 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertGreaterThanOrEqual(4, substr_count($workflow, $imageReference));
         $this->assertStringContainsString('STAGE_IMAGE: ' . $imageReference, $workflow);
         $this->assertStringContainsString('RELEASE_IMAGE: ' . $imageReference, $workflow);
+    }
+
+    public function test_release_retention_lifecycle_is_guarded_and_does_not_rebuild_images(): void
+    {
+        $path = base_path('.github/workflows/production-release.yml');
+        $workflow = file_get_contents($path);
+        $parsed = Yaml::parseFile($path);
+
+        $this->assertIsString($workflow);
+        $this->assertSame(
+            ['none', 'retention_audit', 'v2_finalize'],
+            $parsed['on']['workflow_dispatch']['inputs']['maintenance_action']['options'] ?? null
+        );
+        foreach (['retention-audit', 'pre-finalize-v2-smoke', 'finalize-v2-release', 'verify-finalized-production'] as $job) {
+            $this->assertArrayHasKey($job, $parsed['jobs']);
+            $this->assertStringContainsString(
+                "github.ref == 'refs/heads/codex/distributor'",
+                $parsed['jobs'][$job]['if'] ?? '',
+                $job
+            );
+            $this->assertSame('distributor-server', $parsed['jobs'][$job]['environment'] ?? null, $job);
+        }
+
+        $this->assertStringContainsString("inputs.maintenance_action == 'none'", $parsed['jobs']['resolve-signed-image']['if'] ?? '');
+        $this->assertSame(['production-preflight'], (array) ($parsed['jobs']['retention-gate']['needs'] ?? []));
+        $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=true', $workflow);
+        $this->assertStringContainsString("RETENTION_REQUIRED_FREE_PORT='\$RETENTION_REQUIRED_FREE_PORT'", $workflow);
+        $this->assertStringContainsString('Verify public production before retiring rollback assets', $workflow);
+        $this->assertStringContainsString('Audit runtime and retained assets after finalize', $workflow);
+        $legacyWorkflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $this->assertIsString($legacyWorkflow);
+        $this->assertStringNotContainsString("inputs.production_release_action == 'v2_finalize'", $legacyWorkflow);
+        $this->assertStringNotContainsString('finalize-v2-low-memory:', $legacyWorkflow);
+        $this->assertSame(['pre-finalize-v2-smoke'], (array) ($parsed['jobs']['finalize-v2-release']['needs'] ?? []));
+        $this->assertSame(['finalize-v2-release'], (array) ($parsed['jobs']['verify-finalized-production']['needs'] ?? []));
+    }
+
+    public function test_retention_audit_is_read_only_and_fails_closed(): void
+    {
+        $path = base_path('.github/scripts/audit-xboard-retention.sh');
+        $script = file_get_contents($path);
+
+        $this->assertFileExists($path);
+        $this->assertIsString($script);
+        foreach ([
+            'EXPECTED_WORKFLOW_SHA is required',
+            'active_revision_missing',
+            'active_state_revision_mismatch',
+            'active_release_not_finalized',
+            'rollback_support_not_closed',
+            'required_port_in_use',
+            'RETENTION_IDENTITY_FINGERPRINT=',
+            'RETENTION_AUDIT_FINGERPRINT=',
+            'RETENTION_AUDIT=PASS mode=read_only',
+        ] as $guard) {
+            $this->assertStringContainsString($guard, $script);
+        }
+        foreach ([
+            'docker rm',
+            'docker container rm',
+            'docker image rm',
+            'docker volume rm',
+            'docker system prune',
+            'release_state_set',
+            'release_state_open',
+            'rm -rf',
+        ] as $mutation) {
+            $this->assertStringNotContainsString($mutation, $script, $mutation);
+        }
     }
 
     public function test_prepare_and_switch_are_separate_approval_boundaries_without_idle_maintenance(): void
