@@ -52,7 +52,7 @@ test('distributor order page renders a read-only entitlement summary without sub
   assert.match(distributorSource, /entitlement\.device_limit/);
   assert.match(distributorSource, /escapeHtml\(entitlement\.plan_name/);
 
-  const orderRendering = distributorSource.match(/async function renderOrders\(\)[\s\S]*?function periodLabel/);
+  const orderRendering = distributorSource.match(/async function renderOrders\(options = \{\}\)[\s\S]*?function periodLabel/);
   assert.ok(orderRendering, 'the distributor order renderer should exist');
   assert.doesNotMatch(orderRendering[0], /subscribe_url/);
   assert.doesNotMatch(orderRendering[0], /\.token/);

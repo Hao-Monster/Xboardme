@@ -19,7 +19,7 @@ test('distributor checkout creates an order directly without a customer-name con
 });
 
 test('distributor order list shows the customer name and preserves historical blanks', () => {
-  const ordersBlock = source.match(/async function renderOrders\(\)[\s\S]*?\n  }/);
+  const ordersBlock = source.match(/async function renderOrders\(options = \{\}\)[\s\S]*?\n  }/);
   assert.ok(ordersBlock, 'order list renderer should exist');
   assert.match(ordersBlock[0], /t\('customerName'\)/);
   assert.match(ordersBlock[0], /escapeHtml\(order\.customer_name \|\| '-'\)/);

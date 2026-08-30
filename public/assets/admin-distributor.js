@@ -19,6 +19,7 @@
     summary: null,
     page: 1,
     pageSize: 20,
+    expandedDeviceOrders: {},
   };
 
   const escapeHtml = (value) => String(value ?? '')
@@ -423,15 +424,35 @@
     return `${includeAll ? '<option value="">全部分销商</option>' : '<option value="">请选择分销商</option>'}${state.distributors.map((user) => `<option value="${user.id}" ${String(user.id) === String(state.selectedDistributor) ? 'selected' : ''}>${escapeHtml(user.distributor_name || user.email)}${user.banned ? '（已封禁）' : ''}</option>`).join('')}`;
   }
 
+  function renderBoundDevices(order) {
+    const devices = Array.isArray(order.bound_devices) ? order.bound_devices : [];
+    if (!devices.length) return '<span class="admin-dist-device-empty">尚未绑定</span>';
+    const expanded = Boolean(state.expandedDeviceOrders[order.id]);
+    const items = devices.map((device, index) => `<code class="${!expanded && index >= 3 ? 'is-device-extra' : ''}">${escapeHtml(device)}</code>`).join('');
+    const toggle = devices.length > 3
+      ? `<button type="button" data-admin-device-toggle="${order.id}" aria-expanded="${expanded}">${expanded ? '收起设备' : `查看全部 ${devices.length} 个`}</button>`
+      : '';
+    return `<div class="admin-dist-device-list ${expanded ? 'is-expanded' : ''}">${items}${toggle}</div>`;
+  }
+
+  function toggleBoundDevices(button) {
+    const orderId = button.dataset.adminDeviceToggle;
+    const expanded = button.getAttribute('aria-expanded') !== 'true';
+    state.expandedDeviceOrders[orderId] = expanded;
+    button.setAttribute('aria-expanded', String(expanded));
+    const list = button.closest('.admin-dist-device-list');
+    list?.classList.toggle('is-expanded', expanded);
+    button.textContent = expanded ? '收起设备' : `查看全部 ${list?.querySelectorAll('code').length || 0} 个`;
+  }
+
   function orderRows(detailAttribute = 'data-order-detail') {
     return state.orders.map((order) => {
       const remark = String(order.remark || '');
-      const boundDeviceCount = Math.max(0, Number(order.bound_device_count) || 0);
       return `<tr>
       <td><strong>${escapeHtml(order.trade_no)}</strong><small>${escapeHtml(order.order_type_label || '-')}</small>${Number(order.type) === 2 && order.subscription_trade_no ? `<small>关联原订单：${escapeHtml(order.subscription_trade_no)}</small>` : ''}</td>
       <td class="admin-dist-order-time">${formatTime(order.created_at)}</td>
       <td>${escapeHtml(order.customer_name || '-')}</td>
-      <td class="admin-dist-bound-devices">${boundDeviceCount} 台</td>
+      <td class="admin-dist-bound-devices">${renderBoundDevices(order)}</td>
       <td class="admin-dist-used-traffic">${formatTraffic(order.used_traffic)}</td>
       <td>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</td><td>${escapeHtml(order.plan?.name || '-')}</td>
       <td>${money(order.total_amount)}</td>
@@ -671,6 +692,8 @@
       if (detail) await showOrderDetail(detail.dataset.orderDetail);
       const remark = event.target.closest('[data-edit-remark]');
       if (remark) openRemarkEditor(remark.dataset.editRemark);
+      const devices = event.target.closest('[data-admin-device-toggle]');
+      if (devices) toggleBoundDevices(devices);
       const page = event.target.closest('[data-page]');
       if (page) { state.page += page.dataset.page === 'next' ? 1 : -1; await loadOrders(); }
     } catch (error) { toast(error.message, 'error'); }
@@ -749,6 +772,8 @@
       if (detail) await showOrderDetail(detail.dataset.nativeOrderDetail);
       const remark = event.target.closest('[data-edit-remark]');
       if (remark) openRemarkEditor(remark.dataset.editRemark);
+      const devices = event.target.closest('[data-admin-device-toggle]');
+      if (devices) toggleBoundDevices(devices);
 
       const page = event.target.closest('[data-native-page]');
       if (page) {

@@ -5,38 +5,19 @@ const test = require('node:test');
 const source = fs.readFileSync('theme/Xboard/assets/distributor.js', 'utf8').replaceAll('\r\n', '\n');
 const styles = fs.readFileSync('theme/Xboard/assets/distributor.css', 'utf8').replaceAll('\r\n', '\n');
 
-function loadGroupingFunction() {
-  const start = source.indexOf('  function groupSubscriptionOrders(orders) {');
-  const end = source.indexOf('\n\n  async function renderOrders()', start);
-  assert.notEqual(start, -1, 'subscription order grouping function should exist');
-  assert.notEqual(end, -1, 'subscription order grouping function should be extractable');
-  const functionSource = source.slice(start, end).replace(/^  /gm, '');
-  return Function(`${functionSource}; return groupSubscriptionOrders;`)();
-}
-
 function loadEntitlementToggle() {
   const start = source.indexOf('  function toggleEntitlement(entitlementToggle, entitlementRow) {');
-  const end = source.indexOf('\n\n  async function renderOrders()', start);
+  const end = source.indexOf('\n\n  function orderSummaryTitle', start);
   assert.notEqual(start, -1, 'entitlement toggle function should exist');
   assert.notEqual(end, -1, 'entitlement toggle function should be extractable');
   const functionSource = source.slice(start, end).replace(/^  /gm, '');
   return Function('t', `${functionSource}; return toggleEntitlement;`)((key) => key);
 }
 
-test('original order is rendered before all renewals while groups retain latest-activity order', () => {
-  const groupSubscriptionOrders = loadGroupingFunction();
-  const orders = [
-    { trade_no: 'A-R2', subscription_trade_no: 'A-ROOT', is_subscription_origin: false },
-    { trade_no: 'B-ROOT', subscription_trade_no: 'B-ROOT', is_subscription_origin: true },
-    { trade_no: 'A-R1', subscription_trade_no: 'A-ROOT', is_subscription_origin: false },
-    { trade_no: 'A-ROOT', subscription_trade_no: 'A-ROOT', is_subscription_origin: true },
-    { trade_no: 'B-R1', subscription_trade_no: 'B-ROOT', is_subscription_origin: false },
-  ];
-
-  assert.deepEqual(
-    groupSubscriptionOrders(orders).map((order) => order.trade_no),
-    ['A-ROOT', 'A-R2', 'A-R1', 'B-ROOT', 'B-R1'],
-  );
+test('server-paginated orders retain newest-first API order without client regrouping', () => {
+  assert.match(source, /const rows = state\.orders\.map\(\(order\) =>/);
+  assert.doesNotMatch(source, /groupSubscriptionOrders/);
+  assert.match(source, /state\.orders = append \? \[\.\.\.state\.orders, \.\.\.fetchedOrders\] : fetchedOrders/);
 });
 
 test('entitlement is collapsed by default and has an accessible view-hide toggle', () => {

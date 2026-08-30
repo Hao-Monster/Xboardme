@@ -29,7 +29,10 @@ class DistributorOrderExportService
         '订单号', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注',
     ];
 
-    public function __construct(private readonly DistributorOrderSearchService $searchService)
+    public function __construct(
+        private readonly DistributorOrderSearchService $searchService,
+        private readonly DistributorOrderFilterService $filterService
+    )
     {
     }
 
@@ -60,7 +63,7 @@ class DistributorOrderExportService
                     ? (string) $order->subscription_trade_no
                     : '-',
                 (string) ($order->customer_name ?: '-'),
-                (int) $order->bound_device_count,
+                (string) $order->bound_device_labels,
                 $this->trafficLabel($order->used_traffic),
                 (string) ($order->distributor_name ?: $order->distributor_email),
                 (string) ($order->plan_name ?: '-'),
@@ -76,7 +79,8 @@ class DistributorOrderExportService
     public function downloadForDistributor(
         int $distributorUserId,
         ?int $settlementStatus,
-        ?string $search = null
+        ?string $search = null,
+        array $filters = []
     ): BinaryFileResponse
     {
         $query = $this->baseQuery()
@@ -88,6 +92,9 @@ class DistributorOrderExportService
                     : $query->whereNull('v2_order.paid_at');
             });
         $this->searchService->applyToExportQuery($query, $search);
+        if ($filters !== []) {
+            $this->filterService->apply($query, $filters, 'v2_order');
+        }
 
         return $this->download(
             $query,
@@ -102,7 +109,7 @@ class DistributorOrderExportService
                 (string) ($order->plan_name ?: '-'),
                 $this->periodLabel((string) $order->period),
                 $this->yuan($order->total_amount),
-                (int) $order->bound_device_count,
+                (string) $order->bound_device_labels,
                 $this->trafficLabel($order->used_traffic),
                 $this->settlementLabel((int) $order->settlement_status),
                 (string) ($order->remark ?? ''),
@@ -127,6 +134,7 @@ class DistributorOrderExportService
                 'v2_order.period',
                 'v2_order.total_amount',
                 'v2_order.created_at',
+                'v2_distributor_order.id as distributor_order_id',
                 'v2_distributor_order.customer_name',
                 'v2_distributor_order.remark',
                 'distributor.email as distributor_email',
@@ -136,11 +144,6 @@ class DistributorOrderExportService
                 DB::raw('CASE WHEN v2_order.paid_at IS NULL THEN 0 ELSE 1 END as settlement_status'),
                 DB::raw('CASE WHEN COALESCE(subscriber.u, 0) + COALESCE(subscriber.d, 0) < 0 THEN 0 ELSE COALESCE(subscriber.u, 0) + COALESCE(subscriber.d, 0) END as used_traffic'),
             ])
-            ->selectSub(function (Builder $query) {
-                $query->from('v2_distributor_hwid_device as hwid_devices')
-                    ->selectRaw('COUNT(*)')
-                    ->whereColumn('hwid_devices.distributor_order_id', 'v2_distributor_order.id');
-            }, 'bound_device_count')
             ->orderByDesc('v2_order.created_at')
             ->orderByDesc('v2_order.id');
     }
@@ -182,6 +185,7 @@ class DistributorOrderExportService
                 ->setFontColor(Color::WHITE)
                 ->setBackgroundColor(Color::DARK_BLUE);
             $amountStyle = (new Style())->setFormat('0.00');
+            $wrappedTextStyle = (new Style())->setShouldWrapText();
 
             $writer->addRow(Row::fromValues($headers, $headerStyle));
             $amountIndex = array_search('原价', $headers, true);
@@ -189,20 +193,54 @@ class DistributorOrderExportService
                 $amountIndex = array_search('订单金额', $headers, true);
             }
             $dataRows = 0;
-            foreach ($query->cursor() as $order) {
-                $values = $rowMapper($order);
-                $remarkIndex = count($values) - 1;
-                $row = Row::fromValuesWithStyles(
-                    $values,
-                    null,
-                    [$amountIndex => $amountStyle]
-                );
-                // Force the administrator-authored remark to remain literal text even
-                // when it starts with "=", which OpenSpout otherwise treats as a formula.
-                $row->setCellAtIndex(new StringCell((string) $values[$remarkIndex], null), $remarkIndex);
-                $writer->addRow($row);
-                ++$dataRows;
-            }
+            $deviceIndex = array_search('已绑定设备', $headers, true);
+            $query->chunk(500, function ($orders) use (
+                $rowMapper,
+                $amountIndex,
+                $amountStyle,
+                $deviceIndex,
+                $wrappedTextStyle,
+                $writer,
+                &$dataRows
+            ) {
+                $deviceLabels = DB::table('v2_distributor_hwid_device')
+                    ->whereIn('distributor_order_id', $orders->pluck('distributor_order_id')->unique()->values())
+                    ->orderByDesc('last_seen_at')
+                    ->orderByDesc('id')
+                    ->get(['distributor_order_id', 'hwid', 'device_model'])
+                    ->groupBy('distributor_order_id')
+                    ->map(static fn($devices): string => $devices
+                        ->map(static function (object $device): string {
+                            $hwid = trim((string) $device->hwid);
+                            $model = trim((string) $device->device_model);
+
+                            return $model !== '' ? "{$model} {$hwid}" : $hwid;
+                        })
+                        ->filter()
+                        ->implode("\n"));
+
+                foreach ($orders as $order) {
+                    $order->bound_device_labels = (string) $deviceLabels->get($order->distributor_order_id, '');
+                    $values = $rowMapper($order);
+                    $row = Row::fromValuesWithStyles(
+                        $values,
+                        null,
+                        [$amountIndex => $amountStyle]
+                    );
+                    // Keep every textual export field literal so customer names, HWIDs,
+                    // remarks, and administrator-defined labels cannot become formulas.
+                    foreach ($values as $index => $value) {
+                        if (is_string($value)) {
+                            $row->setCellAtIndex(
+                                new StringCell($value, $index === $deviceIndex ? $wrappedTextStyle : null),
+                                $index
+                            );
+                        }
+                    }
+                    $writer->addRow($row);
+                    ++$dataRows;
+                }
+            });
 
             $sheet->setAutoFilter(new AutoFilter(0, 1, count($headers) - 1, $dataRows + 1));
             $writer->close();

@@ -196,9 +196,9 @@ class DistributorOrderTest extends TestCase
             $this->assertSame($renewalTradeNo, $rows[1][0]);
             $this->assertSame('续费', $rows[1][1]);
             $this->assertSame($rootOrder->trade_no, $rows[1][2]);
-            $this->assertSame(2, $rows[1][7]);
+            $this->assertSame("renew-device-002\nrenew-device-001", $rows[1][7]);
             $this->assertSame('300 B', $rows[1][8]);
-            $this->assertSame(2, $rows[2][7]);
+            $this->assertSame("renew-device-002\nrenew-device-001", $rows[2][7]);
             $this->assertSame('300 B', $rows[2][8]);
 
             Sanctum::actingAs($this->makeUser('renew-admin@example.com', false, ['is_admin' => true]));
@@ -211,6 +211,8 @@ class DistributorOrderTest extends TestCase
                 ->assertJsonCount(2, 'data')
                 ->assertJsonPath('data.0.trade_no', $renewalTradeNo)
                 ->assertJsonPath('data.0.bound_device_count', 2)
+                ->assertJsonPath('data.0.bound_devices.0', 'renew-device-002')
+                ->assertJsonPath('data.0.bound_devices.1', 'renew-device-001')
                 ->assertJsonPath('data.0.used_traffic', 300)
                 ->assertJsonPath('data.1.trade_no', $rootOrder->trade_no)
                 ->assertJsonPath('data.1.bound_device_count', 2)
@@ -219,9 +221,9 @@ class DistributorOrderTest extends TestCase
             $adminRows = $this->readXlsx($this->get('/' . $this->adminRouteUri('export') . '?' . http_build_query([
                 'search' => $rootOrder->trade_no,
             ]))->assertOk());
-            $this->assertSame(2, $adminRows[1][4]);
+            $this->assertSame("renew-device-002\nrenew-device-001", $adminRows[1][4]);
             $this->assertSame('300 B', $adminRows[1][5]);
-            $this->assertSame(2, $adminRows[2][4]);
+            $this->assertSame("renew-device-002\nrenew-device-001", $adminRows[2][4]);
             $this->assertSame('300 B', $adminRows[2][5]);
 
             Sanctum::actingAs($distributor);
@@ -1093,7 +1095,7 @@ class DistributorOrderTest extends TestCase
         $this->assertSame('新购', $rows[1][1]);
         $this->assertSame('-', $rows[1][2]);
         $this->assertSame('新客户', $rows[1][3]);
-        $this->assertSame(0, $rows[1][4]);
+        $this->assertSame('', $rows[1][4]);
         $this->assertSame('0 B', $rows[1][5]);
         $this->assertSame('第二分销商', $rows[1][6]);
         $this->assertSame('Distributor Test Plan', $rows[1][7]);
@@ -1170,7 +1172,7 @@ class DistributorOrderTest extends TestCase
         $this->assertSame('季付', $rows[1][5]);
         $this->assertTrue(is_int($rows[1][6]) || is_float($rows[1][6]));
         $this->assertEquals(30.0, $rows[1][6]);
-        $this->assertSame(0, $rows[1][7]);
+        $this->assertSame('', $rows[1][7]);
         $this->assertSame('0 B', $rows[1][8]);
         $this->assertSame('已结算', $rows[1][9]);
         $this->assertSame('分销商可见备注', $rows[1][10]);
@@ -1525,6 +1527,221 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('status', 'fail');
 
         $this->assertTrue($admin->refresh()->is_admin);
+    }
+
+    public function test_distributor_order_fetch_uses_tenant_safe_server_pagination_and_combined_filters(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 8, 30, 12, 0, 0, config('app.timezone')));
+        try {
+            $distributor = $this->makeUser('filtered-dealer@example.com', true);
+            $plan = $this->makePlan();
+            $root = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '目标客户');
+            $deliveryId = (int) $root->distributor_order_id;
+
+            $root->forceFill([
+                'created_at' => Carbon::create(2026, 8, 29, 10, 0, 0, config('app.timezone'))->timestamp,
+                'updated_at' => Carbon::create(2026, 8, 29, 10, 0, 0, config('app.timezone'))->timestamp,
+                'total_amount' => 1234,
+            ])->saveOrFail();
+
+            for ($index = 0; $index < 21; ++$index) {
+                Order::create([
+                    'user_id' => $distributor->id,
+                    'plan_id' => $plan->id,
+                    'period' => Plan::PERIOD_QUARTERLY,
+                    'trade_no' => 'FILTER-RENEW-' . str_pad((string) $index, 2, '0', STR_PAD_LEFT),
+                    'total_amount' => 4500,
+                    'type' => Order::TYPE_RENEWAL,
+                    'status' => Order::STATUS_COMPLETED,
+                    'distributor_order_id' => $deliveryId,
+                    'created_at' => Carbon::create(2026, 8, 28, 9, 0, 0, config('app.timezone'))->timestamp,
+                    'updated_at' => Carbon::create(2026, 8, 28, 9, 0, 0, config('app.timezone'))->timestamp,
+                ]);
+            }
+
+            $otherDistributor = $this->makeUser('filtered-other@example.com', true);
+            $otherOrder = $this->createDistributorOrder($otherDistributor, $plan, Plan::PERIOD_MONTHLY, '其他租户');
+            // A corrupted/crafted user_id alone must never bypass the authoritative
+            // distributor_order ownership boundary.
+            $otherOrder->forceFill(['user_id' => $distributor->id])->saveOrFail();
+
+            Sanctum::actingAs($distributor);
+
+            $this->getJson('/api/v1/user/order/fetch?' . http_build_query([
+                'start_date' => '2026-08-29',
+                'end_date' => '2026-08-29',
+                'periods' => ['monthly'],
+                'min_amount' => '12.34',
+                'max_amount' => '12.34',
+                'page' => 1,
+                'per_page' => 20,
+            ]))->assertOk()
+                ->assertJsonPath('total', 1)
+                ->assertJsonPath('current_page', 1)
+                ->assertJsonPath('per_page', 20)
+                ->assertJsonPath('data.0.trade_no', $root->trade_no);
+
+            $this->getJson('/api/v1/user/order/fetch?' . http_build_query([
+                'start_date' => '2026-08-28',
+                'end_date' => '2026-08-28',
+                'periods' => ['quarterly'],
+                'page' => 1,
+                'per_page' => 20,
+            ]))->assertOk()
+                ->assertJsonPath('total', 21)
+                ->assertJsonPath('last_page', 2)
+                ->assertJsonCount(20, 'data');
+
+            $this->getJson('/api/v1/user/order/fetch?' . http_build_query([
+                'start_date' => '2026-08-28',
+                'end_date' => '2026-08-28',
+                'periods' => ['quarterly'],
+                'page' => 2,
+                'per_page' => 20,
+            ]))->assertOk()
+                ->assertJsonPath('total', 21)
+                ->assertJsonPath('current_page', 2)
+                ->assertJsonCount(1, 'data');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_distributor_order_statistics_sum_every_order_amount_by_shanghai_day_and_zero_fill(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 8, 30, 12, 0, 0, config('app.timezone')));
+        try {
+            $distributor = $this->makeUser('stats-dealer@example.com', true);
+            $plan = $this->makePlan();
+            $root = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '统计客户');
+            $root->forceFill([
+                'status' => Order::STATUS_CANCELLED,
+                'paid_at' => null,
+                'total_amount' => 1200,
+                'created_at' => Carbon::create(2026, 8, 30, 0, 15, 0, config('app.timezone'))->timestamp,
+                'updated_at' => Carbon::create(2026, 8, 30, 0, 15, 0, config('app.timezone'))->timestamp,
+            ])->saveOrFail();
+
+            Order::create([
+                'user_id' => $distributor->id,
+                'plan_id' => $plan->id,
+                'period' => Plan::PERIOD_QUARTERLY,
+                'trade_no' => 'STATS-RENEWAL-001',
+                'total_amount' => 7000,
+                'type' => Order::TYPE_RENEWAL,
+                'status' => Order::STATUS_PENDING,
+                'paid_at' => time(),
+                'distributor_order_id' => $root->distributor_order_id,
+                'created_at' => Carbon::create(2026, 8, 28, 23, 45, 0, config('app.timezone'))->timestamp,
+                'updated_at' => Carbon::create(2026, 8, 28, 23, 45, 0, config('app.timezone'))->timestamp,
+            ]);
+
+            $otherDistributor = $this->makeUser('stats-other@example.com', true);
+            $otherOrder = $this->createDistributorOrder($otherDistributor, $plan, Plan::PERIOD_MONTHLY, '其他统计租户');
+            $otherOrder->forceFill(['user_id' => $distributor->id, 'total_amount' => 999999])->saveOrFail();
+
+            Sanctum::actingAs($distributor);
+
+            $this->getJson('/api/v1/user/order/statistics?' . http_build_query([
+                'start_date' => '2026-08-28',
+                'end_date' => '2026-08-30',
+            ]))->assertOk()
+                ->assertJsonPath('data.range.start_date', '2026-08-28')
+                ->assertJsonPath('data.range.end_date', '2026-08-30')
+                ->assertJsonPath('data.range.days', 3)
+                ->assertJsonPath('data.summary.order_count', 2)
+                ->assertJsonPath('data.summary.total_amount', 8200)
+                ->assertJsonPath('data.daily.0.date', '2026-08-28')
+                ->assertJsonPath('data.daily.0.order_count', 1)
+                ->assertJsonPath('data.daily.0.total_amount', 7000)
+                ->assertJsonPath('data.daily.1.date', '2026-08-29')
+                ->assertJsonPath('data.daily.1.order_count', 0)
+                ->assertJsonPath('data.daily.1.total_amount', 0)
+                ->assertJsonPath('data.daily.2.date', '2026-08-30')
+                ->assertJsonPath('data.daily.2.order_count', 1)
+                ->assertJsonPath('data.daily.2.total_amount', 1200);
+
+            $this->getJson('/api/v1/user/order/statistics?' . http_build_query([
+                'start_date' => '2025-08-29',
+                'end_date' => '2026-08-30',
+            ]))->assertUnprocessable();
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_distributor_export_applies_list_filters_and_writes_full_literal_hwid_labels(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 8, 30, 12, 0, 0, config('app.timezone')));
+        try {
+            $distributor = $this->makeUser('filtered-export@example.com', true);
+            $plan = $this->makePlan();
+            $order = $this->createDistributorOrder(
+                $distributor,
+                $plan,
+                Plan::PERIOD_MONTHLY,
+                '=HYPERLINK("https://invalid.example","导出客户")'
+            );
+            $order->forceFill([
+                'total_amount' => 1234,
+                'created_at' => Carbon::create(2026, 8, 30, 8, 0, 0, config('app.timezone'))->timestamp,
+                'updated_at' => Carbon::create(2026, 8, 30, 8, 0, 0, config('app.timezone'))->timestamp,
+            ])->saveOrFail();
+            foreach ([
+                ['hwid' => '=unsafe-device', 'last_seen_at' => 300],
+                ['hwid' => 'ntqwnji2mzky', 'device_model' => 'vivo V2227A', 'last_seen_at' => 200],
+                ['hwid' => 'secondary-hwid', 'device_model' => 'Pixel 10', 'last_seen_at' => 100],
+            ] as $device) {
+                DistributorHwidDevice::create($device + [
+                    'distributor_order_id' => $order->distributor_order_id,
+                    'first_seen_at' => 50,
+                ]);
+            }
+            Sanctum::actingAs($distributor);
+
+            $response = $this->get('/api/v1/user/order/export?' . http_build_query([
+                'start_date' => '2026-08-30',
+                'end_date' => '2026-08-30',
+                'periods' => ['monthly'],
+                'min_amount' => '12.34',
+                'max_amount' => '12.34',
+            ]))->assertOk();
+            $rows = $this->readXlsx($response);
+            $deviceColumn = array_search('已绑定设备', $rows[0], true);
+
+            $this->assertNotFalse($deviceColumn);
+            $this->assertCount(2, $rows);
+            $this->assertSame('=HYPERLINK("https://invalid.example","导出客户")', $rows[1][3]);
+            $this->assertSame(
+                "=unsafe-device\nvivo V2227A ntqwnji2mzky\nPixel 10 secondary-hwid",
+                $rows[1][$deviceColumn]
+            );
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_normal_user_keeps_the_legacy_order_fetch_contract_and_cannot_read_distributor_statistics(): void
+    {
+        $user = $this->makeUser('normal-fetch-contract@example.com');
+        $plan = $this->makePlan();
+        $order = Order::create([
+            'user_id' => $user->id,
+            'plan_id' => $plan->id,
+            'period' => Plan::PERIOD_MONTHLY,
+            'trade_no' => 'NORMAL-FETCH-CONTRACT-001',
+            'total_amount' => 3000,
+            'type' => Order::TYPE_NEW_PURCHASE,
+            'status' => Order::STATUS_PENDING,
+        ]);
+        Sanctum::actingAs($user);
+
+        $this->getJson('/api/v1/user/order/fetch')
+            ->assertOk()
+            ->assertJsonPath('status', 'success')
+            ->assertJsonPath('data.0.trade_no', $order->trade_no)
+            ->assertJsonMissingPath('total');
+        $this->getJson('/api/v1/user/order/statistics')->assertForbidden();
     }
 
     private function adminRouteUri(string $method): string

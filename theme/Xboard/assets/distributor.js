@@ -52,6 +52,13 @@
       success: '操作成功', language: '语言', dark: '深色模式', light: '浅色模式', account: '账号',
       settlementFilter: '结算状态', allSettlements: '全部', exportExcel: '导出 Excel', exportSuccess: 'Excel 导出成功',
       orderSearchPlaceholder: '输入订单号或用户名称查询', search: '查询', clear: '清空',
+      orderOverview: '订单经营概览', orderOverviewHint: '统计与订单筛选相互独立，收入为所选时间内订单金额的累计值。',
+      todayIncome: '今日收入', todayOrders: '今日订单', yesterdayIncome: '昨日收入', yesterdayOrders: '昨日订单',
+      income: '收入', orderCount: '订单', customRange: '自定义', apply: '应用', advancedFilters: '高级筛选', hideFilters: '收起筛选',
+      startDate: '开始日期', endDate: '结束日期', minimumAmount: '最低金额', maximumAmount: '最高金额', allPeriods: '全部周期',
+      trend: '增长趋势', thisWeek: '本周', thisMonth: '本月', lastNinetyDays: '近三个月', dailyOrders: '每日订单量', dailyIncome: '每日收入',
+      previousPage: '上一页', nextPage: '下一页', loadMore: '加载更多', pageSize: '每页', totalOrders: '共 {count} 个订单',
+      viewAllDevices: '查看全部 {count} 个', collapseDevices: '收起设备', filterReset: '重置筛选',
       knowledgeSubtitle: '查看产品使用方法与常见问题。', knowledgeSearchPlaceholder: '搜索使用文档',
       lastUpdated: '最后更新', noArticles: '暂无使用文档', copyShare: '复制分享', copySuccess: '复制成功', copyFailed: '复制失败，请重试',
     },
@@ -92,6 +99,13 @@
       language: 'Language', dark: 'Dark mode', light: 'Light mode', account: 'Account',
       settlementFilter: 'Settlement', allSettlements: 'All', exportExcel: 'Export Excel', exportSuccess: 'Excel exported',
       orderSearchPlaceholder: 'Search by order or customer name', search: 'Search', clear: 'Clear',
+      orderOverview: 'Order performance', orderOverviewHint: 'Analytics are independent from list filters. Income is the sum of order amounts in the selected dates.',
+      todayIncome: "Today's income", todayOrders: "Today's orders", yesterdayIncome: "Yesterday's income", yesterdayOrders: "Yesterday's orders",
+      income: 'Income', orderCount: 'orders', customRange: 'Custom', apply: 'Apply', advancedFilters: 'More filters', hideFilters: 'Hide filters',
+      startDate: 'Start date', endDate: 'End date', minimumAmount: 'Minimum amount', maximumAmount: 'Maximum amount', allPeriods: 'All periods',
+      trend: 'Growth trend', thisWeek: 'This week', thisMonth: 'This month', lastNinetyDays: 'Last 90 days', dailyOrders: 'Daily orders', dailyIncome: 'Daily income',
+      previousPage: 'Previous', nextPage: 'Next', loadMore: 'Load more', pageSize: 'Per page', totalOrders: '{count} orders',
+      viewAllDevices: 'View all {count}', collapseDevices: 'Collapse devices', filterReset: 'Reset filters',
       knowledgeSubtitle: 'Browse product guides and frequently asked questions.', knowledgeSearchPlaceholder: 'Search documentation',
       lastUpdated: 'Last updated', noArticles: 'No documentation available', copyShare: 'Copy share link', copySuccess: 'Copied', copyFailed: 'Copy failed. Try again.',
     },
@@ -108,6 +122,18 @@
     poller: null,
     orderSettlementStatus: '',
     orderSearch: '',
+    orderFiltersOpen: false,
+    orderFilters: { startDate: '', endDate: '', periods: [], minAmount: '', maxAmount: '' },
+    orderPage: 1,
+    orderPerPage: 20,
+    orderTotal: 0,
+    orderLastPage: 1,
+    expandedDeviceOrders: {},
+    orderSummaryRange: null,
+    orderTrendPreset: 'week',
+    orderTrendRange: null,
+    orderSummary: null,
+    orderTrend: null,
     knowledgeSearch: '',
     plans: [],
     planFilter: 'all',
@@ -358,11 +384,47 @@
     URL.revokeObjectURL(objectUrl);
   }
 
+  function shanghaiDate() {
+    const parts = new Intl.DateTimeFormat('en', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date());
+    const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return `${value.year}-${value.month}-${value.day}`;
+  }
+
+  function shiftDate(date, days) {
+    const value = new Date(`${date}T00:00:00Z`);
+    value.setUTCDate(value.getUTCDate() + days);
+    return value.toISOString().slice(0, 10);
+  }
+
+  function dateRangeDays(startDate, endDate) {
+    return Math.round((Date.parse(`${endDate}T00:00:00Z`) - Date.parse(`${startDate}T00:00:00Z`)) / 86400000) + 1;
+  }
+
+  function defaultTrendRange(preset = 'week') {
+    const today = shanghaiDate();
+    if (preset === 'month') return { startDate: `${today.slice(0, 7)}-01`, endDate: today };
+    if (preset === 'ninety') return { startDate: shiftDate(today, -89), endDate: today };
+    const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+    return { startDate: shiftDate(today, -((weekday + 6) % 7)), endDate: today };
+  }
+
+  function appendOrderFilters(params) {
+    const filters = state.orderFilters;
+    if (filters.startDate) params.set('start_date', filters.startDate);
+    if (filters.endDate) params.set('end_date', filters.endDate);
+    filters.periods.forEach((period) => params.append('periods[]', period));
+    if (filters.minAmount) params.set('min_amount', filters.minAmount);
+    if (filters.maxAmount) params.set('max_amount', filters.maxAmount);
+  }
+
   async function exportOrders(button) {
     if (button) button.disabled = true;
     const params = new URLSearchParams();
     if (state.orderSettlementStatus !== '') params.set('settlement_status', state.orderSettlementStatus);
     if (state.orderSearch) params.set('search', state.orderSearch);
+    appendOrderFilters(params);
     try {
       await downloadFile(`/user/order/export${params.size ? `?${params}` : ''}`);
       toast(t('exportSuccess'));
@@ -565,23 +627,6 @@
     await purchasePlan(plan, delivery.period, document.querySelector('[data-modal-action="buy-again"]'));
   }
 
-  function groupSubscriptionOrders(orders) {
-    const groups = new Map();
-    orders.forEach((order) => {
-      const subscriptionTradeNo = String(order.subscription_trade_no || order.trade_no || order.id);
-      if (!groups.has(subscriptionTradeNo)) {
-        groups.set(subscriptionTradeNo, { origin: null, renewals: [] });
-      }
-      const group = groups.get(subscriptionTradeNo);
-      if (order.is_subscription_origin) group.origin = order;
-      else group.renewals.push(order);
-    });
-
-    return Array.from(groups.values()).flatMap((group) => (
-      group.origin ? [group.origin, ...group.renewals] : group.renewals
-    ));
-  }
-
   function toggleEntitlement(entitlementToggle, entitlementRow) {
     const willExpand = entitlementToggle.getAttribute('aria-expanded') !== 'true';
     entitlementToggle.setAttribute('aria-expanded', String(willExpand));
@@ -590,18 +635,157 @@
     entitlementToggle.closest?.('tr')?.classList.toggle('is-entitlement-open', willExpand);
   }
 
-  async function renderOrders() {
-    const params = new URLSearchParams();
+  function orderSummaryTitle(kind, range) {
+    const today = shanghaiDate();
+    const yesterday = shiftDate(today, -1);
+    const suffix = kind === 'income' ? t('income') : t('orderCount');
+    if (range.startDate === range.endDate && range.startDate === today) return t(kind === 'income' ? 'todayIncome' : 'todayOrders');
+    if (range.startDate === range.endDate && range.startDate === yesterday) return t(kind === 'income' ? 'yesterdayIncome' : 'yesterdayOrders');
+    if (range.startDate === range.endDate) {
+      const [, month, day] = range.startDate.split('-');
+      return state.locale === 'zh-CN' ? `${Number(month)}月${Number(day)}日${suffix}` : `${month}/${day} ${suffix}`;
+    }
+    const days = dateRangeDays(range.startDate, range.endDate);
+    return state.locale === 'zh-CN' ? `${days}天${suffix}` : `${days}-day ${suffix}`;
+  }
+
+  async function fetchOrderStatistics(range) {
+    const params = new URLSearchParams({ start_date: range.startDate, end_date: range.endDate });
+    return dataOf(await api(`/user/order/statistics?${params}`));
+  }
+
+  async function ensureOrderAnalytics(forceSummary = false, forceTrend = false) {
+    const today = shanghaiDate();
+    state.orderSummaryRange ||= { startDate: today, endDate: today };
+    state.orderTrendRange ||= defaultTrendRange(state.orderTrendPreset);
+    const requests = [];
+    if (!state.orderSummary || forceSummary) {
+      requests.push(fetchOrderStatistics(state.orderSummaryRange).then((data) => { state.orderSummary = data; }));
+    }
+    if (!state.orderTrend || forceTrend) {
+      requests.push(fetchOrderStatistics(state.orderTrendRange).then((data) => { state.orderTrend = data; }));
+    }
+    await Promise.all(requests);
+  }
+
+  function renderTrendChart(daily, key, label, formatter) {
+    const width = 720;
+    const height = 180;
+    const left = 42;
+    const right = 16;
+    const top = 16;
+    const bottom = 36;
+    const values = daily.map((item) => Number(item[key]) || 0);
+    const maximum = Math.max(1, ...values);
+    const x = (index) => daily.length <= 1 ? (left + width - right) / 2 : left + (index * (width - left - right) / (daily.length - 1));
+    const y = (value) => top + ((maximum - value) * (height - top - bottom) / maximum);
+    const points = values.map((value, index) => `${index ? 'L' : 'M'}${x(index).toFixed(1)},${y(value).toFixed(1)}`).join(' ');
+    const labelEvery = Math.max(1, Math.ceil(daily.length / 6));
+    const dateLabels = daily.map((item, index) => (
+      index % labelEvery === 0 || index === daily.length - 1
+        ? `<text x="${x(index).toFixed(1)}" y="166" text-anchor="middle">${escapeHtml(item.date.slice(5))}</text>`
+        : ''
+    )).join('');
+    const circles = daily.map((item, index) => `<circle cx="${x(index).toFixed(1)}" cy="${y(values[index]).toFixed(1)}" r="4" tabindex="0" data-chart-index="${index}" aria-label="${escapeHtml(`${item.date} ${label} ${formatter(values[index])}`)}"></circle>`).join('');
+    const activeIndex = Math.max(0, daily.length - 1);
+    const active = daily[activeIndex] || { date: '-', [key]: 0 };
+
+    return `<section class="dist-chart" data-chart-key="${key}">
+      <div class="dist-chart-heading"><h3>${label}</h3><output class="dist-chart-value" aria-live="polite">${escapeHtml(active.date)} · ${escapeHtml(formatter(active[key] || 0))}</output></div>
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(label)}" preserveAspectRatio="none">
+        <line class="dist-chart-axis" x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}"></line>
+        <path class="dist-chart-line" d="${points || `M${left},${height - bottom}`}" vector-effect="non-scaling-stroke"></path>
+        <g class="dist-chart-dates">${dateLabels}</g><g class="dist-chart-points">${circles}</g>
+      </svg>
+    </section>`;
+  }
+
+  function renderOrderAnalytics() {
+    const summary = state.orderSummary || { summary: { order_count: 0, total_amount: 0 } };
+    const daily = state.orderTrend?.daily || [];
+    const summaryRange = state.orderSummaryRange;
+    const trendRange = state.orderTrendRange;
+    const presetButton = (preset, label) => `<button type="button" data-trend-preset="${preset}" class="${state.orderTrendPreset === preset ? 'active' : ''}" aria-pressed="${state.orderTrendPreset === preset}">${label}</button>`;
+
+    return `<section class="dist-order-insights" aria-labelledby="dist-order-overview-title">
+      <div class="dist-insights-heading"><div><h2 id="dist-order-overview-title">${t('orderOverview')}</h2><p>${t('orderOverviewHint')}</p></div>
+        <div class="dist-summary-range"><label>${t('startDate')}<input id="dist-summary-start" type="date" value="${summaryRange.startDate}"></label><span>—</span><label>${t('endDate')}<input id="dist-summary-end" type="date" value="${summaryRange.endDate}"></label><button type="button" data-action="apply-summary-range">${t('apply')}</button></div>
+      </div>
+      <div class="dist-order-summary-cards">
+        <article><span>${orderSummaryTitle('orders', summaryRange)}</span><strong>${Number(summary.summary.order_count || 0).toLocaleString()}</strong><small>${summaryRange.startDate} — ${summaryRange.endDate}</small></article>
+        <article><span>${orderSummaryTitle('income', summaryRange)}</span><strong>${money(summary.summary.total_amount || 0)}</strong><small>${summaryRange.startDate} — ${summaryRange.endDate}</small></article>
+      </div>
+      <div class="dist-trend-panel">
+        <div class="dist-trend-heading"><div><h2>${t('trend')}</h2><p>${trendRange.startDate} — ${trendRange.endDate}</p></div><div class="dist-trend-presets">${presetButton('week', t('thisWeek'))}${presetButton('month', t('thisMonth'))}${presetButton('ninety', t('lastNinetyDays'))}${presetButton('custom', t('customRange'))}</div></div>
+        <div class="dist-trend-custom ${state.orderTrendPreset === 'custom' ? 'is-open' : ''}"><label>${t('startDate')}<input id="dist-trend-start" type="date" value="${trendRange.startDate}"></label><label>${t('endDate')}<input id="dist-trend-end" type="date" value="${trendRange.endDate}"></label><button type="button" data-action="apply-trend-range">${t('apply')}</button></div>
+        <div class="dist-chart-stack">${renderTrendChart(daily, 'order_count', t('dailyOrders'), (value) => String(value))}${renderTrendChart(daily, 'total_amount', t('dailyIncome'), (value) => money(value))}</div>
+      </div>
+    </section>`;
+  }
+
+  async function refreshOrderAnalytics(forceSummary = false, forceTrend = false) {
+    await ensureOrderAnalytics(forceSummary, forceTrend);
+    const current = document.querySelector('.dist-order-insights');
+    if (current) current.outerHTML = renderOrderAnalytics();
+  }
+
+  function renderBoundDevices(order) {
+    const devices = Array.isArray(order.bound_devices) ? order.bound_devices : [];
+    if (!order.hwid_enabled) return `<span class="dist-device-state">${t('hwidDisabled')}</span>`;
+    if (!devices.length) return `<span class="dist-device-state">${t('unboundDevice')}</span>`;
+    const limit = isMobileOrderViewport() ? 2 : 3;
+    const expanded = Boolean(state.expandedDeviceOrders[order.id]);
+    const items = devices.map((hwid, index) => `<code class="${!expanded && index >= limit ? 'is-device-extra' : ''}">${escapeHtml(hwid)}</code>`).join('');
+    const toggle = devices.length > limit
+      ? `<button type="button" class="dist-device-toggle" data-device-toggle="${escapeHtml(order.id)}" aria-expanded="${expanded}">${expanded ? t('collapseDevices') : t('viewAllDevices').replace('{count}', devices.length)}</button>`
+      : '';
+    return `<div class="dist-bound-device-list ${expanded ? 'is-expanded' : ''}">${items}${toggle}</div>`;
+  }
+
+  function collectOrderFilters() {
+    const periods = Array.from(document.querySelectorAll('input[name="dist-order-period"]:checked')).map((input) => input.value);
+    return {
+      startDate: document.getElementById('dist-order-start')?.value || '',
+      endDate: document.getElementById('dist-order-end')?.value || '',
+      periods,
+      minAmount: document.getElementById('dist-order-min-amount')?.value.trim() || '',
+      maxAmount: document.getElementById('dist-order-max-amount')?.value.trim() || '',
+    };
+  }
+
+  function renderOrderFilters() {
+    const filters = state.orderFilters;
+    const periods = PERIODS.map(([key, zh, en]) => `<label><input type="checkbox" name="dist-order-period" value="${key}" ${filters.periods.includes(key) ? 'checked' : ''}><span>${state.locale === 'zh-CN' ? zh : en}</span></label>`).join('');
+    return `<section id="dist-order-filters" class="dist-order-filters" ${state.orderFiltersOpen ? '' : 'hidden'} aria-label="${t('advancedFilters')}">
+      <div class="dist-filter-grid"><label>${t('startDate')}<input id="dist-order-start" type="date" value="${filters.startDate}"></label><label>${t('endDate')}<input id="dist-order-end" type="date" value="${filters.endDate}"></label><label>${t('minimumAmount')}<input id="dist-order-min-amount" inputmode="decimal" value="${escapeHtml(filters.minAmount)}" placeholder="0.00"></label><label>${t('maximumAmount')}<input id="dist-order-max-amount" inputmode="decimal" value="${escapeHtml(filters.maxAmount)}" placeholder="0.00"></label></div>
+      <fieldset><legend>${t('period')}</legend><div class="dist-period-filter-options">${periods}</div></fieldset>
+      <div class="dist-filter-actions"><button type="button" class="secondary" data-action="reset-order-filters">${t('filterReset')}</button><button type="button" data-action="apply-order-filters">${t('apply')}</button></div>
+    </section>`;
+  }
+
+  async function renderOrders(options = {}) {
+    const append = Boolean(options.append);
+    const requestedPage = append ? state.orderPage + 1 : state.orderPage;
+    const params = new URLSearchParams({ page: String(requestedPage), per_page: String(state.orderPerPage) });
     if (state.orderSettlementStatus !== '') params.set('settlement_status', state.orderSettlementStatus);
     if (state.orderSearch) params.set('search', state.orderSearch);
-    const orders = dataOf(await api(`/user/order/fetch${params.size ? `?${params}` : ''}`)) || [];
-    state.orders = orders;
-    const rows = groupSubscriptionOrders(orders).map((order) => {
+    appendOrderFilters(params);
+    const oldScrollY = window.scrollY;
+    const [payload] = await Promise.all([
+      api(`/user/order/fetch?${params}`),
+      ensureOrderAnalytics(Boolean(options.refreshSummary), Boolean(options.refreshTrend)),
+    ]);
+    const fetchedOrders = Array.isArray(payload?.data) ? payload.data : [];
+    state.orders = append ? [...state.orders, ...fetchedOrders] : fetchedOrders;
+    state.orderPage = Number(payload?.current_page || requestedPage);
+    state.orderPerPage = Number(payload?.per_page || state.orderPerPage);
+    state.orderTotal = Number(payload?.total || state.orders.length);
+    state.orderLastPage = Number(payload?.last_page || 1);
+    const rows = state.orders.map((order) => {
       const isRenewal = Number(order.type) === 2;
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
       const boundDevices = Array.isArray(order.bound_devices) ? order.bound_devices : [];
-      const boundDeviceCount = Math.max(0, Number(order.bound_device_count ?? boundDevices.length) || 0);
       const usedTraffic = order.used_traffic ?? entitlement?.used_traffic ?? 0;
       const boundDeviceContent = !order.hwid_enabled
         ? `<span class="dist-device-state">${t('hwidDisabled')}</span>`
@@ -642,17 +826,24 @@
         <td class="dist-order-customer" data-label="${t('customerName')}">${escapeHtml(order.customer_name || '-')}</td>
         <td class="dist-order-plan" data-label="${t('plan')}">${escapeHtml(order.plan?.name || '-')}</td><td class="dist-order-period" data-label="${t('period')}">${escapeHtml(periodLabel(order.period))}</td>
         <td class="dist-order-amount" data-label="${t('amount')}">${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
-        <td class="dist-order-bound-devices" data-label="${t('boundDevices')}">${boundDeviceCount} ${state.locale === 'zh-CN' ? '台' : 'devices'}</td>
+        <td class="dist-order-bound-devices" data-label="${t('boundDevices')}">${renderBoundDevices(order)}</td>
         <td class="dist-order-used-traffic" data-label="${t('usedTraffic')}">${formatTraffic(usedTraffic)}</td>
         <td class="dist-order-settlement"><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
         <td class="dist-order-remark-cell" data-label="${t('remark')}"><div class="dist-order-remark">${order.remark ? escapeHtml(order.remark) : '—'}</div></td>
         <td class="${actionCellClass}"><div class="dist-order-actions utility-count-${utilityActionCount}">${order.is_subscription_origin ? qrAction : ''}${entitlementAction}${renewAction}</div></td>
       </tr>${entitlementRow}`;
     }).join('');
+    const desktopPagination = `<div class="dist-desktop-pagination"><span>${t('totalOrders').replace('{count}', state.orderTotal)}</span><label>${t('pageSize')}<select id="dist-order-page-size">${[20, 50, 100].map((size) => `<option value="${size}" ${size === state.orderPerPage ? 'selected' : ''}>${size}</option>`).join('')}</select></label><button type="button" data-order-page="${state.orderPage - 1}" ${state.orderPage <= 1 ? 'disabled' : ''}>${t('previousPage')}</button><strong>${state.orderPage} / ${state.orderLastPage}</strong><button type="button" data-order-page="${state.orderPage + 1}" ${state.orderPage >= state.orderLastPage ? 'disabled' : ''}>${t('nextPage')}</button></div>`;
+    const mobilePagination = state.orderPage < state.orderLastPage
+      ? `<button type="button" class="dist-load-more" data-action="load-more-orders">${t('loadMore')}（${state.orders.length}/${state.orderTotal}）</button>`
+      : `<p class="dist-mobile-order-total">${t('totalOrders').replace('{count}', state.orderTotal)}</p>`;
     setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
-      <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button data-action="export-orders">${t('exportExcel')}</button></div>
+      ${renderOrderAnalytics()}
+      <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button type="button" class="secondary dist-filter-toggle" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button data-action="export-orders">${t('exportExcel')}</button></div>
+      ${renderOrderFilters()}
       <div class="dist-table-wrap dist-order-list"><table class="dist-orders-table"><thead><tr><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
-      <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="11" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>`);
+      <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="11" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>${desktopPagination}${mobilePagination}`);
+    if (append) window.scrollTo({ top: oldScrollY, behavior: 'instant' });
   }
 
   function periodLabel(period) {
@@ -893,6 +1084,33 @@
     state.poller = null;
   }
 
+  function setActiveTrendPoint(index) {
+    const daily = state.orderTrend?.daily || [];
+    const item = daily[index];
+    if (!item) return;
+    document.querySelectorAll('.dist-chart').forEach((chart) => {
+      const key = chart.dataset.chartKey;
+      const value = key === 'total_amount' ? money(item[key] || 0) : String(item[key] || 0);
+      const output = chart.querySelector('.dist-chart-value');
+      if (output) output.textContent = `${item.date} · ${value}`;
+      chart.querySelectorAll('[data-chart-index]').forEach((point) => {
+        point.classList.toggle('is-active', Number(point.dataset.chartIndex) === index);
+      });
+    });
+  }
+
+  function checkedDateRange(startId, endId) {
+    const startDate = document.getElementById(startId)?.value || '';
+    const endDate = document.getElementById(endId)?.value || '';
+    if (!startDate || !endDate || startDate > endDate) {
+      throw new Error(state.locale === 'zh-CN' ? '请选择有效的开始和结束日期' : 'Select a valid start and end date');
+    }
+    if (dateRangeDays(startDate, endDate) > 366) {
+      throw new Error(state.locale === 'zh-CN' ? '时间范围不能超过366天' : 'The date range cannot exceed 366 days');
+    }
+    return { startDate, endDate };
+  }
+
   async function handleAction(target) {
     const nav = target.closest('[data-nav]');
     if (nav) { navigate(nav.dataset.nav); return; }
@@ -906,6 +1124,40 @@
     if (period) {
       state.selectedPeriods[period.dataset.planId] = period.dataset.planPeriod;
       renderPlanCatalog();
+      return;
+    }
+    const deviceToggle = target.closest('[data-device-toggle]');
+    if (deviceToggle) {
+      const orderId = deviceToggle.dataset.deviceToggle;
+      const expanded = deviceToggle.getAttribute('aria-expanded') !== 'true';
+      state.expandedDeviceOrders[orderId] = expanded;
+      deviceToggle.setAttribute('aria-expanded', String(expanded));
+      deviceToggle.textContent = expanded
+        ? t('collapseDevices')
+        : t('viewAllDevices').replace('{count}', deviceToggle.closest('.dist-bound-device-list')?.querySelectorAll('code').length || 0);
+      deviceToggle.closest('.dist-bound-device-list')?.classList.toggle('is-expanded', expanded);
+      return;
+    }
+    const pageButton = target.closest('[data-order-page]');
+    if (pageButton && !pageButton.disabled) {
+      state.orderPage = Number(pageButton.dataset.orderPage);
+      try { await renderOrders(); window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { toast(e.message, 'error'); }
+      return;
+    }
+    const trendPreset = target.closest('[data-trend-preset]');
+    if (trendPreset) {
+      state.orderTrendPreset = trendPreset.dataset.trendPreset;
+      if (state.orderTrendPreset === 'custom') {
+        document.querySelector('.dist-trend-custom')?.classList.add('is-open');
+        document.querySelectorAll('[data-trend-preset]').forEach((button) => {
+          const active = button === trendPreset;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-pressed', String(active));
+        });
+      } else {
+        state.orderTrendRange = defaultTrendRange(state.orderTrendPreset);
+        try { await refreshOrderAnalytics(false, true); } catch (e) { toast(e.message, 'error'); }
+      }
       return;
     }
     const buy = target.closest('[data-buy]');
@@ -996,10 +1248,40 @@
       try { await exportOrders(target.closest('[data-action]')); } catch (e) { toast(e.message, 'error'); }
     } else if (action === 'search-orders') {
       state.orderSearch = document.getElementById('dist-order-search')?.value.trim() || '';
+      state.orderPage = 1;
       try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
     } else if (action === 'clear-order-search') {
       state.orderSearch = '';
+      state.orderPage = 1;
       try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'toggle-order-filters') {
+      state.orderFiltersOpen = !state.orderFiltersOpen;
+      const panel = document.getElementById('dist-order-filters');
+      if (panel) panel.hidden = !state.orderFiltersOpen;
+      const button = target.closest('[data-action]');
+      button?.setAttribute('aria-expanded', String(state.orderFiltersOpen));
+      if (button) button.textContent = t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters');
+    } else if (action === 'apply-order-filters') {
+      state.orderFilters = collectOrderFilters();
+      state.orderPage = 1;
+      try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'reset-order-filters') {
+      state.orderFilters = { startDate: '', endDate: '', periods: [], minAmount: '', maxAmount: '' };
+      state.orderPage = 1;
+      try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'apply-summary-range') {
+      try {
+        state.orderSummaryRange = checkedDateRange('dist-summary-start', 'dist-summary-end');
+        await refreshOrderAnalytics(true, false);
+      } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'apply-trend-range') {
+      try {
+        state.orderTrendPreset = 'custom';
+        state.orderTrendRange = checkedDateRange('dist-trend-start', 'dist-trend-end');
+        await refreshOrderAnalytics(false, true);
+      } catch (e) { toast(e.message, 'error'); }
+    } else if (action === 'load-more-orders') {
+      try { await renderOrders({ append: true }); } catch (e) { toast(e.message, 'error'); }
     } else if (action === 'search-knowledge') {
       state.knowledgeSearch = document.getElementById('dist-knowledge-search')?.value.trim() || '';
       try { await renderKnowledge(); } catch (e) { toast(e.message, 'error'); }
@@ -1034,7 +1316,7 @@
           },
         }));
         state.modal.submitting = false;
-        await renderOrders();
+        await renderOrders({ refreshSummary: true, refreshTrend: true });
         renderModal();
       } catch (error) {
         state.modal.submitting = false;
@@ -1110,7 +1392,12 @@
     if (!state.active) return;
     if (event.target.id === 'dist-order-settlement') {
       state.orderSettlementStatus = event.target.value;
-      renderPage();
+      state.orderPage = 1;
+      renderOrders().catch((error) => toast(error.message, 'error'));
+    } else if (event.target.id === 'dist-order-page-size') {
+      state.orderPerPage = Number(event.target.value) || 20;
+      state.orderPage = 1;
+      renderOrders().catch((error) => toast(error.message, 'error'));
     } else if (event.target.id === 'dist-renewal-period' && state.modal?.type === 'renewal') {
       state.modal.period = event.target.value;
       renderModal();
@@ -1127,12 +1414,25 @@
     if (event.target.id === 'dist-order-search') {
       event.preventDefault();
       state.orderSearch = event.target.value.trim();
+      state.orderPage = 1;
       renderOrders().catch((error) => toast(error.message, 'error'));
     } else if (event.target.id === 'dist-knowledge-search') {
       event.preventDefault();
       state.knowledgeSearch = event.target.value.trim();
       renderKnowledge().catch((error) => toast(error.message, 'error'));
     }
+  });
+  document.addEventListener('focusin', (event) => {
+    const point = event.target.closest?.('[data-chart-index]');
+    if (point) setActiveTrendPoint(Number(point.dataset.chartIndex));
+  });
+  document.addEventListener('pointermove', (event) => {
+    const chart = event.target.closest?.('.dist-chart svg');
+    const daily = state.orderTrend?.daily || [];
+    if (!chart || !daily.length) return;
+    const bounds = chart.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
+    setActiveTrendPoint(Math.round(ratio * (daily.length - 1)));
   });
   window.addEventListener('hashchange', () => { if (state.active) renderPage(); });
   const detector = setInterval(() => {

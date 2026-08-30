@@ -6,7 +6,7 @@ const source = fs.readFileSync('theme/Xboard/assets/distributor.js', 'utf8');
 const styles = fs.readFileSync('theme/Xboard/assets/distributor.css', 'utf8');
 
 test('mobile distributor orders become readable cards while the desktop table remains intact', () => {
-  const renderer = source.match(/async function renderOrders\(\)[\s\S]*?function periodLabel/);
+  const renderer = source.match(/async function renderOrders\(options = \{\}\)[\s\S]*?function periodLabel/);
   assert.ok(renderer, 'the distributor order renderer should exist');
 
   assert.match(renderer[0], /class="dist-table-wrap dist-order-list"/);
@@ -24,14 +24,32 @@ test('mobile distributor orders become readable cards while the desktop table re
   assert.match(renderer[0], /<thead><tr><th>\$\{t\('orderNo'\)\}<\/th><th>\$\{t\('orderTime'\)\}<\/th>/);
 
   assert.match(styles, /@media \(max-width:640px\), \(max-width:900px\) and \(hover:none\) and \(pointer:coarse\)/);
-  assert.match(styles, /\.dist-orders-table \{[^}]*min-width:1160px[^}]*\}/);
-  assert.doesNotMatch(styles, /\.dist-orders-table \{[^}]*min-width:1160px!important/);
+  assert.match(styles, /\.dist-orders-table \{[^}]*min-width:1540px[^}]*\}/);
+  assert.doesNotMatch(styles, /\.dist-orders-table \{[^}]*min-width:1540px!important/);
   assert.match(styles, /\.dist-order-list \.dist-orders-table \{[^}]*min-width:0[^}]*display:block/);
   assert.match(styles, /\.dist-origin-order-row,\.dist-renewal-order-row \{[^}]*grid-template-areas:/);
   assert.match(styles, /\.dist-order-action-cell \{[^}]*grid-area:actions/);
   assert.match(styles, /\.dist-order-bound-devices \{[^}]*grid-area:bound-devices/);
   assert.match(styles, /\.dist-order-used-traffic \{[^}]*grid-area:used-traffic/);
   assert.match(styles, /\.dist-order-toolbar \.dist-order-search \{[^}]*grid-template-columns:minmax\(0,1fr\) auto auto/);
+});
+
+test('order analytics, advanced filters, and responsive pagination are wired independently', () => {
+  assert.match(source, /\/user\/order\/statistics\?/);
+  assert.match(source, /orderSummaryRange/);
+  assert.match(source, /orderTrendRange/);
+  assert.match(source, /data-trend-preset="\$\{preset\}"/);
+  assert.match(source, /renderTrendChart\(daily, 'order_count'/);
+  assert.match(source, /renderTrendChart\(daily, 'total_amount'/);
+  assert.match(source, /appendOrderFilters\(params\)/);
+  assert.match(source, /periods\[\]/);
+  assert.match(source, /data-action="apply-order-filters"/);
+  assert.match(source, /data-action="load-more-orders"/);
+  assert.match(source, /data-order-page=/);
+  assert.match(styles, /\.dist-chart-stack/);
+  assert.match(styles, /\.dist-desktop-pagination/);
+  assert.match(styles, /\.dist-load-more/);
+  assert.match(styles, /position:sticky/);
 });
 
 test('mobile order actions stay visible, touch-sized, and preserve permission-driven availability', () => {

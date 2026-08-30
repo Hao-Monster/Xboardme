@@ -191,6 +191,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
           trade_no: 'DIST-ORDER-1',
           customer_name: '终端客户甲',
           bound_device_count: 2,
+          bound_devices: ['vivo V2227A ntqwnji2mzky', 'Pixel 10 secondary-hwid'],
           used_traffic: 5 * 1073741824,
           created_at: 1785580800,
           distributor_email: 'dealer@example.com',
@@ -256,7 +257,8 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(host.innerHTML, /用户名称/);
   assert.match(host.innerHTML, /终端客户甲/);
   assert.match(host.innerHTML, /已绑定设备/);
-  assert.match(host.innerHTML, /2 台/);
+  assert.match(host.innerHTML, /vivo V2227A ntqwnji2mzky/);
+  assert.match(host.innerHTML, /Pixel 10 secondary-hwid/);
   assert.match(host.innerHTML, /已用流量/);
   assert.match(host.innerHTML, /5 GB/);
   assert.match(host.innerHTML, /备注/);
