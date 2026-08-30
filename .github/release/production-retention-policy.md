@@ -66,8 +66,11 @@ Historical debt predating this policy is handled separately from `finalize`:
 6. Delete only locally unreferenced application images that are at least seven
    days old, carry a 40-character revision, have a recorded GHCR digest, and
    declare one of the two reviewed Xboard source repositories. Never use image
-   prune or force removal. Third-party images are outside this cleanup scope.
-   Preserve release directories, secrets, state and backup evidence.
+   prune or force removal. Image references must belong to the matching GHCR
+   repository; historical FengHaoyun images may additionally carry the local
+   `xboard-rollback` tag or digest alias. Third-party images are outside this
+   cleanup scope. Preserve release directories, secrets, state and backup
+   evidence.
 7. Re-run production preflight, Caddy validation, authenticated distributor and
    admin smoke tests, scheduler/role checks, data/Redis mount identity checks,
    and `retention_audit`. Compare the before/after protected-resource identity.

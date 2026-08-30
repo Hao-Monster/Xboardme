@@ -205,7 +205,7 @@ while IFS= read -r candidate_image_id; do
         ;;
       https://github.com/FengHaoyun-MONSTER/Xboardme)
         case "$image_reference" in
-          ghcr.io/fenghaoyun-monster/xboardme@sha256:*|ghcr.io/fenghaoyun-monster/xboardme:*|xboard-rollback:*) ;;
+          ghcr.io/fenghaoyun-monster/xboardme@sha256:*|ghcr.io/fenghaoyun-monster/xboardme:*|xboard-rollback@sha256:*|xboard-rollback:*) ;;
           *) image_references_allowed=false ;;
         esac
         ;;
