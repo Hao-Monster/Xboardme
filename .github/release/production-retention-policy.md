@@ -35,7 +35,11 @@ tags and container age alone are forbidden deletion selectors.
    retires only the recorded direct rollback containers, preserves volumes and
    the Compose anchor, and repeats preflight, inventory and authenticated smoke
    tests afterward.
-6. A future release is blocked unless the active release is finalized and the
+6. `retention_cleanup` is a separate post-finalize action. It requires the
+   exact reviewed resource fingerprint, holds the deployment lock, is
+   retryable through release state, and repeats authenticated smoke and
+   read-only inventory checks after cleanup.
+7. A future release is blocked unless the active release is finalized and the
    selected stage port is unused. This prevents rollback chains from growing.
 
 ## One-time historical debt cleanup
@@ -51,11 +55,20 @@ Historical debt predating this policy is handled separately from `finalize`:
 3. For every candidate, cross-check container ID, project/release labels,
    running state, bound loopback port, Caddy references, image revision, mounts,
    release state and rollback relationship. Any mismatch blocks deletion.
-4. Delete only an explicit ID allowlist whose resource-identity fingerprint
-   still matches the reviewed audit. Volatile disk-use metrics are evidence but
-   are not deletion identities. Container cleanup must not remove volumes.
-   Preserve release state and backup evidence.
-5. Re-run production preflight, Caddy validation, authenticated distributor and
+4. The reviewed resource fingerprint is the exact allowlist envelope: it binds
+   active and rollback identity, every container ID/label/state/port/mount, and
+   every local image ID/revision/source/digest. Volatile disk-use metrics and
+   directory sizes are evidence but are excluded from that deletion identity.
+5. Delete only containers still classified as retired Xboard candidates. A
+   running candidate must be an old loopback-only maintenance proxy on
+   ports 7003-7010 with zero Caddy references. Re-inspect every ID immediately
+   before removal and never pass a volume-removal flag.
+6. Delete only locally unreferenced application images that are at least seven
+   days old, carry a 40-character revision, have a recorded GHCR digest, and
+   declare one of the two reviewed Xboard source repositories. Never use image
+   prune or force removal. Third-party images are outside this cleanup scope.
+   Preserve release directories, secrets, state and backup evidence.
+7. Re-run production preflight, Caddy validation, authenticated distributor and
    admin smoke tests, scheduler/role checks, data/Redis mount identity checks,
    and `retention_audit`. Compare the before/after protected-resource identity.
 

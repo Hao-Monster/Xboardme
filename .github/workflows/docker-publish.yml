@@ -346,7 +346,9 @@ jobs:
           bash -n .github/scripts/rollback-xboard-v2-low-memory.sh
           bash -n .github/scripts/finalize-xboard-v2-low-memory.sh
           bash -n .github/scripts/audit-xboard-retention.sh
+          bash -n .github/scripts/cleanup-xboard-retention.sh
           bash -n .github/scripts/test-finalize-xboard-v2-low-memory.sh
+          bash -n .github/scripts/test-cleanup-xboard-retention.sh
           bash -n .github/scripts/test-v2-low-memory-common.sh
           bash -n .github/scripts/test-v2-redis-owner-restore.sh
           sh -n .docker/redis/run-v2-redis.sh
@@ -356,6 +358,7 @@ jobs:
           bash .github/scripts/test-v2-redis.sh
           bash .github/scripts/test-v2-low-memory-common.sh
           bash .github/scripts/test-finalize-xboard-v2-low-memory.sh
+          bash .github/scripts/test-cleanup-xboard-retention.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
           bash .github/scripts/test-release-state.sh

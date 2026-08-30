@@ -18,14 +18,24 @@ on:
           - none
           - retention_audit
           - v2_finalize
+          - retention_cleanup
       release_id:
-        description: Active V2 release identifier required only for finalize (digits-digits)
+        description: Active V2 release identifier required for finalize and cleanup (digits-digits)
         required: false
         type: string
       release_expected_sha:
-        description: Active application SHA required only for finalize
+        description: Active application SHA required for finalize and cleanup
         required: false
         type: string
+      cleanup_expected_resource_fingerprint:
+        description: Exact post-finalize resource fingerprint required only for cleanup
+        required: false
+        type: string
+      cleanup_image_min_age_seconds:
+        description: Minimum age for unreferenced Xboard images; cannot be less than seven days
+        required: true
+        default: 604800
+        type: number
       stage_target_port:
         description: Inactive loopback port used first by the isolated stage and then by maintenance
         required: true
@@ -139,6 +149,15 @@ jobs:
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
 
+      - name: Verify live admin assets before retiring rollback assets
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
   finalize-v2-release:
     if: >-
       ${{ github.ref == 'refs/heads/codex/distributor' &&
@@ -249,6 +268,203 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Verify live admin assets after finalize
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
+  pre-retention-cleanup-smoke:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'retention_cleanup' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact cleanup request
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RESOURCE_FINGERPRINT: ${{ inputs.cleanup_expected_resource_fingerprint }}
+          IMAGE_MIN_AGE_SECONDS: ${{ inputs.cleanup_image_min_age_seconds }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          test "$RESOURCE_FINGERPRINT" = "$(printf '%s' "$RESOURCE_FINGERPRINT" | grep -E '^[0-9a-f]{64}$')"
+          test "$IMAGE_MIN_AGE_SECONDS" = "$(printf '%s' "$IMAGE_MIN_AGE_SECONDS" | grep -E '^[0-9]+$')"
+          test "$IMAGE_MIN_AGE_SECONDS" -ge 604800
+          git merge-base --is-ancestor "$RELEASE_EXPECTED_SHA" "$GITHUB_SHA"
+
+      - name: Verify public production before exact retention cleanup
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Verify live admin assets before exact retention cleanup
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
+  cleanup-retired-production-assets:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'retention_cleanup' }}
+    needs: pre-retention-cleanup-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Remove only fingerprinted retired containers and aged Xboard images
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_ACTIVE_RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+          EXPECTED_RETENTION_RESOURCE_FINGERPRINT: ${{ inputs.cleanup_expected_resource_fingerprint }}
+          RETENTION_IMAGE_MIN_AGE_SECONDS: ${{ inputs.cleanup_image_min_age_seconds }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh \
+              .github/scripts/cleanup-xboard-retention.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' EXPECTED_ACTIVE_RELEASE_ID='$EXPECTED_ACTIVE_RELEASE_ID' EXPECTED_ACTIVE_RELEASE_SHA='$EXPECTED_ACTIVE_RELEASE_SHA' EXPECTED_RETENTION_RESOURCE_FINGERPRINT='$EXPECTED_RETENTION_RESOURCE_FINGERPRINT' RETENTION_IMAGE_MIN_AGE_SECONDS='$RETENTION_IMAGE_MIN_AGE_SECONDS' RETENTION_REQUIRE_FINALIZED=true RETENTION_ACQUIRE_LOCK=true bash -s" |
+            tee "$RUNNER_TEMP/retention-cleanup.txt"
+
+      - name: Preserve exact cleanup evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-retention-cleanup-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/retention-cleanup.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  verify-retention-cleanup:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'retention_cleanup' }}
+    needs: cleanup-retired-production-assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Audit finalized runtime and retained assets after cleanup
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+          ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s"
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true bash -s" |
+            tee "$RUNNER_TEMP/post-cleanup-retention-audit.txt"
+
+      - name: Preserve the post-cleanup retention inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-retention-post-cleanup-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/post-cleanup-retention-audit.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Verify public production after exact retention cleanup
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Verify live admin assets after exact retention cleanup
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   resolve-signed-image:
     if: >-

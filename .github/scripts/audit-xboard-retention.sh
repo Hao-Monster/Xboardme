@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 : "${EXPECTED_WORKFLOW_SHA:?EXPECTED_WORKFLOW_SHA is required}"
 : "${RETENTION_REQUIRE_FINALIZED:=false}"
+: "${RETENTION_ACQUIRE_LOCK:=false}"
 : "${RETENTION_REQUIRED_FREE_PORT:=}"
 [[ "$EXPECTED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ]] || {
   echo 'RETENTION_AUDIT_FAIL=invalid_workflow_sha'
@@ -12,6 +13,10 @@ case "$RETENTION_REQUIRE_FINALIZED" in
   true|false) ;;
   *) echo 'RETENTION_AUDIT_FAIL=invalid_require_finalized'; exit 1 ;;
 esac
+case "$RETENTION_ACQUIRE_LOCK" in
+  true|false) ;;
+  *) echo 'RETENTION_AUDIT_FAIL=invalid_acquire_lock'; exit 1 ;;
+esac
 if [[ -n "$RETENTION_REQUIRED_FREE_PORT" ]] &&
    { [[ ! "$RETENTION_REQUIRED_FREE_PORT" =~ ^[0-9]+$ ]] ||
      ((RETENTION_REQUIRED_FREE_PORT < 1 || RETENTION_REQUIRED_FREE_PORT > 65535)); }; then
@@ -19,7 +24,7 @@ if [[ -n "$RETENTION_REQUIRED_FREE_PORT" ]] &&
   exit 1
 fi
 
-for tool in awk basename caddy chmod df docker du find grep jq mktemp realpath sed sha256sum sort ss stat tee tr wc; do
+for tool in awk basename caddy chmod df docker du find flock grep jq mktemp realpath sed sha256sum sort ss stat tee tr wc; do
   command -v "$tool" >/dev/null || {
     echo "RETENTION_AUDIT_FAIL=missing_tool:$tool"
     exit 1
@@ -47,6 +52,19 @@ xboard_resolve_active_runtime "$XBOARD_ACTIVE_PORT" || {
 }
 
 workdir=$(realpath -e -- "$XBOARD_ANCHOR_WORKDIR")
+if [[ "$RETENTION_ACQUIRE_LOCK" == true ]]; then
+  lock_root="$workdir/.codex-v2-release"
+  [[ -d "$lock_root" && ! -L "$lock_root" ]] || {
+    echo 'RETENTION_AUDIT_FAIL=lock_root_invalid'
+    exit 1
+  }
+  exec 9>"$lock_root/deploy.lock"
+  chmod 600 "$lock_root/deploy.lock"
+  flock -n 9 || {
+    echo 'RETENTION_AUDIT_FAIL=deployment_locked'
+    exit 1
+  }
+fi
 active_container=$(docker inspect -f '{{.Id}}' "$XBOARD_ACTIVE_WEB")
 active_name=$(docker inspect -f '{{.Name}}' "$active_container" | sed 's#^/##')
 active_project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$active_container")
@@ -297,13 +315,14 @@ while IFS= read -r image_id; do
   refs=${image_ref_counts[$image_id]:-0}
   image_row=$(docker image inspect "$image_id" | jq -r '.[0] | [
     (.Size | tostring),
+    (.Created // "none"),
     (.Config.Labels["org.opencontainers.image.revision"] // "none"),
     (.Config.Labels["org.opencontainers.image.source"] // "none"),
     (.RepoTags // [] | sort | join(",") | if . == "" then "none" else . end),
     (.RepoDigests // [] | sort | join(",") | if . == "" then "none" else . end)
   ] | @tsv')
-  IFS=$'\t' read -r size revision source tags digests <<< "$image_row"
-  emit "RETENTION_IMAGE id=$image_id size_bytes=$size container_refs=$refs revision=$revision source=$source tags=$tags digests=$digests"
+  IFS=$'\t' read -r size created_at revision source tags digests <<< "$image_row"
+  emit "RETENTION_IMAGE id=$image_id size_bytes=$size created_at=$created_at container_refs=$refs revision=$revision source=$source tags=$tags digests=$digests"
 done < <(docker image ls -q --no-trunc | sort -u)
 
 identity_fingerprint=$(
@@ -312,7 +331,14 @@ identity_fingerprint=$(
     sha256sum |
     awk '{print $1}'
 )
+resource_fingerprint=$(
+  grep -E '^(RETENTION_ACTIVE_|RETENTION_DIRECT_PREVIOUS_|RETENTION_COMPOSE_ANCHOR=|RETENTION_CONTAINER |RETENTION_IMAGE )' "$inventory" |
+    sort |
+    sha256sum |
+    awk '{print $1}'
+)
 fingerprint=$(sort "$inventory" | sha256sum | awk '{print $1}')
 echo "RETENTION_IDENTITY_FINGERPRINT=$identity_fingerprint"
+echo "RETENTION_RESOURCE_FINGERPRINT=$resource_fingerprint"
 echo "RETENTION_AUDIT_FINGERPRINT=$fingerprint"
 echo 'RETENTION_AUDIT=PASS mode=read_only'
