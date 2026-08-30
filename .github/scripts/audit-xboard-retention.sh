@@ -62,6 +62,7 @@ active_release_id=''
 active_state_file=''
 active_traffic_state=legacy
 active_rollback_supported=unknown
+active_maintenance_container=''
 direct_previous_project=''
 declare -A protected_ids=()
 protected_ids["$(docker inspect -f '{{.Id}}' "$XBOARD_ANCHOR_CONTAINER")"]=anchor
@@ -104,6 +105,11 @@ if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
   active_traffic_state=$(release_state_get "$active_state_file" traffic_state)
   active_rollback_supported=$(release_state_get_optional "$active_state_file" rollback_supported)
   [[ -n "$active_rollback_supported" ]] || active_rollback_supported=unknown
+  active_maintenance_container=$(release_state_get_optional "$active_state_file" maintenance_container)
+  if [[ -n "$active_maintenance_container" ]] &&
+     docker container inspect "$active_maintenance_container" >/dev/null 2>&1; then
+    protected_ids["$(docker inspect -f '{{.Id}}' "$active_maintenance_container")"]=active
+  fi
 
   for state_key in legacy_anchor_id legacy_web_id legacy_ws_id legacy_edge_id legacy_horizon_id legacy_scheduler_id; do
     id=$(release_state_get_optional "$active_state_file" "$state_key")
@@ -145,7 +151,6 @@ emit "RETENTION_ACTIVE_UPSTREAM=$XBOARD_ACTIVE_UPSTREAM"
 emit "RETENTION_DIRECT_PREVIOUS_PROJECT=${direct_previous_project:-none}"
 emit "RETENTION_COMPOSE_ANCHOR=$(docker inspect -f '{{.Name}}' "$XBOARD_ANCHOR_CONTAINER" | sed 's#^/##')"
 emit "RETENTION_DISK_AVAILABLE_KIB=$(df -Pk "$workdir" | awk 'NR == 2 {print $4}')"
-emit "RETENTION_DOCKER_ROOT_KIB=$(du -sk "$(docker info -f '{{.DockerRootDir}}')" 2>/dev/null | awk '{print $1}' || echo unknown)"
 
 container_count=0
 protected_count=0
@@ -153,6 +158,7 @@ candidate_count=0
 unrelated_count=0
 maintenance_count=0
 stage_count=0
+declare -A image_ref_counts=()
 while IFS= read -r listed_id; do
   [[ -n "$listed_id" ]] || continue
   id=$(docker inspect -f '{{.Id}}' "$listed_id")
@@ -204,6 +210,7 @@ while IFS= read -r listed_id; do
   esac
   [[ "$maintenance_release" == none ]] || ((maintenance_count += 1))
   [[ "$stage_run" == none ]] || ((stage_count += 1))
+  image_ref_counts["$image_id"]=$(( ${image_ref_counts[$image_id]:-0} + 1 ))
   emit "RETENTION_CONTAINER name=$name id=$id status=$status classification=$protection project=$project service=$service maintenance_release=$maintenance_release legacy_release_run=$legacy_release_run legacy_release_role=$legacy_release_role stage_run=$stage_run revision=$revision image_id=$image_id ports=${ports:-none} mounts=${mounts:-none}"
 done < <(docker ps -aq --no-trunc | sort)
 
@@ -266,11 +273,7 @@ done
 
 while IFS= read -r image_id; do
   [[ -n "$image_id" ]] || continue
-  refs=0
-  while IFS= read -r container_id; do
-    [[ -n "$container_id" ]] || continue
-    [[ "$(docker inspect -f '{{.Image}}' "$container_id")" != "$image_id" ]] || ((refs += 1))
-  done < <(docker ps -aq --no-trunc)
+  refs=${image_ref_counts[$image_id]:-0}
   size=$(docker image inspect -f '{{.Size}}' "$image_id")
   revision=$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id")
   emit "RETENTION_IMAGE id=$image_id size_bytes=$size container_refs=$refs revision=${revision:-none}"
