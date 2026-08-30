@@ -120,10 +120,18 @@ class ProductionReleaseWorkflowTest extends TestCase
 
         $this->assertIsString($workflow);
         $this->assertSame(
-            ['none', 'retention_audit', 'v2_finalize'],
+            ['none', 'retention_audit', 'v2_finalize', 'retention_cleanup'],
             $parsed['on']['workflow_dispatch']['inputs']['maintenance_action']['options'] ?? null
         );
-        foreach (['retention-audit', 'pre-finalize-v2-smoke', 'finalize-v2-release', 'verify-finalized-production'] as $job) {
+        foreach ([
+            'retention-audit',
+            'pre-finalize-v2-smoke',
+            'finalize-v2-release',
+            'verify-finalized-production',
+            'pre-retention-cleanup-smoke',
+            'cleanup-retired-production-assets',
+            'verify-retention-cleanup',
+        ] as $job) {
             $this->assertArrayHasKey($job, $parsed['jobs']);
             $this->assertStringContainsString(
                 "github.ref == 'refs/heads/codex/distributor'",
@@ -145,6 +153,21 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertStringNotContainsString('finalize-v2-low-memory:', $legacyWorkflow);
         $this->assertSame(['pre-finalize-v2-smoke'], (array) ($parsed['jobs']['finalize-v2-release']['needs'] ?? []));
         $this->assertSame(['finalize-v2-release'], (array) ($parsed['jobs']['verify-finalized-production']['needs'] ?? []));
+        $this->assertSame(
+            ['pre-retention-cleanup-smoke'],
+            (array) ($parsed['jobs']['cleanup-retired-production-assets']['needs'] ?? [])
+        );
+        $this->assertSame(
+            ['cleanup-retired-production-assets'],
+            (array) ($parsed['jobs']['verify-retention-cleanup']['needs'] ?? [])
+        );
+        $this->assertStringContainsString('RETENTION_ACQUIRE_LOCK=true', $workflow);
+        $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=true', $workflow);
+        $this->assertStringContainsString('cleanup_expected_resource_fingerprint', $workflow);
+        $this->assertStringContainsString('Verify public production before exact retention cleanup', $workflow);
+        $this->assertStringContainsString('Verify public production after exact retention cleanup', $workflow);
+        $this->assertStringContainsString('Verify live admin assets before exact retention cleanup', $workflow);
+        $this->assertStringContainsString('Verify live admin assets after exact retention cleanup', $workflow);
     }
 
     public function test_retention_audit_is_read_only_and_fails_closed(): void
@@ -166,6 +189,7 @@ class ProductionReleaseWorkflowTest extends TestCase
             'rollback_support_not_closed',
             'required_port_in_use',
             'RETENTION_IDENTITY_FINGERPRINT=',
+            'RETENTION_RESOURCE_FINGERPRINT=',
             'RETENTION_AUDIT_FINGERPRINT=',
             'RETENTION_AUDIT=PASS mode=read_only',
         ] as $guard) {
@@ -186,6 +210,50 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertStringNotContainsString("done < <(docker ps -aq --no-trunc)\n  size=", $script);
         $this->assertStringContainsString('image_ref_counts["$image_id"]', $script);
         $this->assertStringContainsString('org.opencontainers.image.source', $script);
+    }
+
+    public function test_retention_cleanup_is_fingerprinted_retryable_and_preserves_data(): void
+    {
+        $path = base_path('.github/scripts/cleanup-xboard-retention.sh');
+        $script = file_get_contents($path);
+
+        $this->assertFileExists($path);
+        $this->assertIsString($script);
+        foreach ([
+            'EXPECTED_RETENTION_RESOURCE_FINGERPRINT is required',
+            'RETENTION_REQUIRE_FINALIZED',
+            'RETENTION_ACQUIRE_LOCK',
+            'resource_fingerprint_mismatch',
+            'active_release_not_finalized',
+            'rollback_support_not_closed',
+            'direct_rollback_still_present',
+            'candidate_identity_changed',
+            'maintenance_referenced_by_caddy',
+            'image_min_age_below_seven_days',
+            'retention_cleanup_source_fingerprint',
+            'retention_cleanup_status',
+            'active_app_data_changed',
+            'active_redis_volume_missing',
+            'compose_anchor_missing',
+            'volumes=preserved directories=preserved',
+        ] as $guard) {
+            $this->assertStringContainsString($guard, $script);
+        }
+        foreach ([
+            'docker system prune',
+            'docker image prune',
+            'docker volume rm',
+            'docker volume prune',
+            'docker container rm -v',
+            'docker image rm -f',
+            'rm -rf',
+        ] as $forbiddenMutation) {
+            $this->assertStringNotContainsString($forbiddenMutation, $script, $forbiddenMutation);
+        }
+        $this->assertStringContainsString('docker container rm "$id"', $script);
+        $this->assertStringContainsString('docker image rm "$candidate_image_id"', $script);
+        $this->assertStringContainsString('https://github.com/Hao-Monster/Xboardme', $script);
+        $this->assertStringContainsString('https://github.com/FengHaoyun-MONSTER/Xboardme', $script);
     }
 
     public function test_prepare_and_switch_are_separate_approval_boundaries_without_idle_maintenance(): void
