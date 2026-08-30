@@ -144,6 +144,9 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
 
         $this->assertStringContainsString('[[ "$TRAFFIC_STATE" == ready ]]', $switch);
         $this->assertStringContainsString('traffic_state active_v2', $switch);
+        $this->assertStringContainsString('rollback_supported true', $switch);
+        $this->assertStringContainsString('finalize_due_at', $switch);
+        $this->assertStringContainsString('+ 86400', $switch);
         $this->assertStringContainsString('external_smoke_required', $switch);
 
         $rollbackStart = strpos($common, 'v2_rollback_runtime()');
@@ -167,6 +170,10 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
 
         $this->assertStringContainsString('V2_FINALIZE_MIN_AGE_SECONDS:=86400', $finalize);
         $this->assertStringContainsString('traffic_state active_v2', $finalize);
+        $this->assertStringContainsString('previous_release_retiring_id', $finalize);
+        $this->assertStringContainsString('previous_maintenance_identity_mismatch', $finalize);
+        $this->assertStringContainsString('maintenance_identity_mismatch', $finalize);
+        $this->assertStringContainsString('compose_anchor=preserved', $finalize);
         $this->assertStringNotContainsString('docker volume rm', $finalize);
 
         $this->assertStringContainsString('respond /health 200', $maintenance);
@@ -180,7 +187,7 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $parsedWorkflow = Yaml::parseFile(base_path('.github/workflows/docker-publish.yml'));
         $smoke = file_get_contents(base_path('.github/scripts/smoke-distributor-remote.sh'));
 
-        foreach (['v2_prepare', 'v2_start', 'v2_switch', 'v2_rollback', 'v2_finalize'] as $action) {
+        foreach (['v2_prepare', 'v2_start', 'v2_switch', 'v2_rollback'] as $action) {
             $this->assertStringContainsString("inputs.production_release_action == '{$action}'", $workflow, $action);
         }
         foreach ([
@@ -188,7 +195,6 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
             'start-xboard-v2-low-memory.sh',
             'switch-xboard-v2-low-memory.sh',
             'rollback-xboard-v2-low-memory.sh',
-            'finalize-xboard-v2-low-memory.sh',
         ] as $script) {
             $this->assertStringContainsString($script, $workflow, $script);
         }
@@ -200,8 +206,8 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $this->assertStringContainsString('resolve-xboard-v2-port.sh', $smoke);
         $this->assertStringContainsString('git merge-base --is-ancestor', $smoke);
         $this->assertStringContainsString('git show "$V2_EXPECTED_ASSET_VERSION:theme/Xboard/assets/$asset"', $smoke);
-        $this->assertSame(4, substr_count($workflow, 'v2_release_id: ${{ inputs.release_id }}'));
-        $this->assertGreaterThanOrEqual(4, substr_count($workflow, 'fetch-depth: 0'));
+        $this->assertSame(3, substr_count($workflow, 'v2_release_id: ${{ inputs.release_id }}'));
+        $this->assertGreaterThanOrEqual(3, substr_count($workflow, 'fetch-depth: 0'));
 
         foreach ([
             'prepare-v2-low-memory',
@@ -215,8 +221,6 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
             'smoke-auto-rolled-back-v2',
             'rollback-v2-low-memory',
             'smoke-manual-v2-rollback',
-            'pre-finalize-v2-smoke',
-            'finalize-v2-low-memory',
         ] as $job) {
             $condition = $parsedWorkflow['jobs'][$job]['if'] ?? '';
             $this->assertStringContainsString(

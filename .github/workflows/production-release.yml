@@ -1,13 +1,30 @@
 name: Distributor Production Release
 
-run-name: Release ${{ inputs.expected_sha }}
+run-name: ${{ inputs.maintenance_action == 'none' && 'Release' || inputs.maintenance_action }} ${{ inputs.expected_sha }}
 
 on:
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: Exact full SHA currently at codex/distributor
+        description: Exact full workflow SHA currently at codex/distributor
         required: true
+        type: string
+      maintenance_action:
+        description: Run the standard release or one guarded production-retention operation
+        required: true
+        default: none
+        type: choice
+        options:
+          - none
+          - retention_audit
+          - v2_finalize
+      release_id:
+        description: Active V2 release identifier required only for finalize (digits-digits)
+        required: false
+        type: string
+      release_expected_sha:
+        description: Active application SHA required only for finalize
+        required: false
         type: string
       stage_target_port:
         description: Inactive loopback port used first by the isolated stage and then by maintenance
@@ -23,8 +40,220 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  retention-audit:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'retention_audit' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact production workflow identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$EXPECTED_SHA" = "$(printf '%s' "$EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Inventory production retention assets without mutation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s" |
+            tee "$RUNNER_TEMP/retention-audit.txt"
+
+      - name: Preserve the reviewed retention inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-retention-audit-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/retention-audit.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  pre-finalize-v2-smoke:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'v2_finalize' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact finalize request
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          git merge-base --is-ancestor "$RELEASE_EXPECTED_SHA" "$GITHUB_SHA"
+
+      - name: Verify public production before retiring rollback assets
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+  finalize-v2-release:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'v2_finalize' }}
+    needs: pre-finalize-v2-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Finalize only the exact active V2 release
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/finalize-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+
+  verify-finalized-production:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'v2_finalize' }}
+    needs: finalize-v2-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Audit runtime and retained assets after finalize
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+          ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s"
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s" |
+            tee "$RUNNER_TEMP/post-finalize-retention-audit.txt"
+
+      - name: Preserve the post-finalize retention inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-retention-post-finalize-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/post-finalize-retention-audit.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Verify public production after finalize
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
   resolve-signed-image:
-    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -88,10 +317,50 @@ jobs:
     uses: ./.github/workflows/distributor-preflight.yml
     secrets: inherit
 
+  retention-gate:
+    needs: production-preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Require the previous rollback lifecycle to be finalized
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+          RETENTION_REQUIRED_FREE_PORT: ${{ inputs.stage_target_port }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true RETENTION_REQUIRED_FREE_PORT='$RETENTION_REQUIRED_FREE_PORT' bash -s"
+
   stage-signed-image:
     needs:
       - resolve-signed-image
       - production-preflight
+      - retention-gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: distributor-staging

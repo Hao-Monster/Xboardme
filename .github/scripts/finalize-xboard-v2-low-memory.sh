@@ -31,6 +31,34 @@ for service in redis web ws edge horizon scheduler; do
 done
 v2_assert_v2_owners
 [[ "$(v2_caddy_reference_count "$CADDY_CONFIG" "$ACTIVE_PORT")" == 1 ]] || v2_fail active_caddy_route_missing
+[[ "$(v2_caddy_reference_count "$CADDY_CONFIG" "$MAINTENANCE_PORT")" == 0 ]] || v2_fail maintenance_caddy_route_still_active
+
+previous_release_id=$(release_state_get_optional "$V2_STATE_FILE" previous_release_retiring_id)
+previous_maintenance=''
+if [[ "$LEGACY_TOPOLOGY" == v2 ]]; then
+  if [[ -z "$previous_release_id" ]]; then
+    previous_project=$(docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$LEGACY_ANCHOR_ID")
+    [[ "$previous_project" =~ ^xboard-v2-([0-9]+-[0-9]+)$ ]] || v2_fail previous_v2_project_invalid
+    previous_release_id=${BASH_REMATCH[1]}
+    release_state_set "$V2_STATE_FILE" previous_release_retiring_id "$previous_release_id"
+  fi
+  [[ "$previous_release_id" =~ ^[0-9]+-[0-9]+$ ]] || v2_fail previous_release_id_invalid
+  [[ "$previous_release_id" != "$RELEASE_ID" ]] || v2_fail previous_release_matches_current
+  previous_maintenance="xboard-v2-maintenance-$previous_release_id"
+  if docker container inspect "$previous_maintenance" >/dev/null 2>&1; then
+    [[ "$(docker inspect -f '{{ index .Config.Labels "codex.xboard.v2.release" }}' "$previous_maintenance")" == "$previous_release_id" ]] ||
+      v2_fail previous_maintenance_identity_mismatch
+    previous_maintenance_port=$(docker inspect -f '{{(index (index .HostConfig.PortBindings "7001/tcp") 0).HostPort}}' "$previous_maintenance")
+    [[ "$previous_maintenance_port" =~ ^[0-9]+$ ]] || v2_fail previous_maintenance_port_invalid
+    [[ "$(v2_caddy_reference_count "$CADDY_CONFIG" "$previous_maintenance_port")" == 0 ]] ||
+      v2_fail previous_maintenance_caddy_route_active
+  fi
+fi
+
+if docker container inspect "$MAINTENANCE_CONTAINER" >/dev/null 2>&1; then
+  [[ "$(docker inspect -f '{{ index .Config.Labels "codex.xboard.v2.release" }}' "$MAINTENANCE_CONTAINER")" == "$RELEASE_ID" ]] ||
+    v2_fail maintenance_identity_mismatch
+fi
 
 if [[ "$TRAFFIC_STATE" == active_v2 ]]; then
   while IFS= read -r id; do
@@ -44,15 +72,26 @@ fi
 mapfile -t legacy_ids < <(v2_legacy_ids)
 for ((index = ${#legacy_ids[@]} - 1; index >= 0; index--)); do
   id=${legacy_ids[$index]}
+  if [[ "$LEGACY_TOPOLOGY" == legacy && "$id" == "$LEGACY_ANCHOR_ID" ]]; then
+    continue
+  fi
   if docker container inspect "$id" >/dev/null 2>&1; then
     ! v2_container_running "$id" || v2_fail legacy_container_still_running
     docker rm "$id" >/dev/null
   fi
 done
-docker rm -f "$MAINTENANCE_CONTAINER" >/dev/null 2>&1 || true
+if docker container inspect "$MAINTENANCE_CONTAINER" >/dev/null 2>&1; then
+  docker rm -f "$MAINTENANCE_CONTAINER" >/dev/null
+fi
+if [[ -n "$previous_maintenance" ]] && docker container inspect "$previous_maintenance" >/dev/null 2>&1; then
+  docker rm -f "$previous_maintenance" >/dev/null
+fi
 
 release_state_set "$V2_STATE_FILE" traffic_state finalized
 release_state_set "$V2_STATE_FILE" finalized_at "$(date -u +%FT%TZ)"
 release_state_set "$V2_STATE_FILE" rollback_supported false
+release_state_set "$V2_STATE_FILE" previous_release_retired_id "${previous_release_id:-legacy}"
+release_state_set "$V2_STATE_FILE" previous_maintenance_retired "${previous_maintenance:-none}"
+release_state_set "$V2_STATE_FILE" compose_anchor_preserved "$([[ "$LEGACY_TOPOLOGY" == legacy ]] && echo "$LEGACY_ANCHOR_ID" || echo external)"
 
-echo "V2_FINALIZE=PASS id=$RELEASE_ID age_seconds=$age_seconds traffic_state active_v2 legacy_containers=retired volumes=preserved"
+echo "V2_FINALIZE=PASS id=$RELEASE_ID age_seconds=$age_seconds traffic_state active_v2 legacy_containers=retired previous_maintenance=${previous_maintenance:-none} compose_anchor=preserved volumes=preserved"
