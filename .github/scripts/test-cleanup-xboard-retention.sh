@@ -8,7 +8,13 @@ run_cleanup_case() (
   local scenario=$1
   declare -A state=()
   declare -A present=([old-id]=true [active-id]=true [anchor-id]=true)
-  declare -A present_image=([sha256:eligible]=true [sha256:young]=true [sha256:third-party]=true)
+  declare -A present_image=(
+    [sha256:eligible]=true
+    [sha256:legacy-alias]=true
+    [sha256:young]=true
+    [sha256:third-party]=true
+    [sha256:unsafe-alias]=true
+  )
 
   EXPECTED_RETENTION_RESOURCE_FINGERPRINT=$(printf 'a%.0s' {1..64})
   EXPECTED_ACTIVE_RELEASE_ID=333-1
@@ -72,11 +78,17 @@ JSON
       sha256:eligible)
         printf '[{"Id":"sha256:eligible","Size":1234,"Created":"2020-01-01T00:00:00Z","Config":{"Labels":{"org.opencontainers.image.revision":"%s","org.opencontainers.image.source":"https://github.com/Hao-Monster/Xboardme"}},"RepoTags":["ghcr.io/hao-monster/xboardme@sha256:eligible"],"RepoDigests":["ghcr.io/hao-monster/xboardme@sha256:eligible"]}]\n' "$(printf 'e%.0s' {1..40})"
         ;;
+      sha256:legacy-alias)
+        printf '[{"Id":"sha256:legacy-alias","Size":4567,"Created":"2020-01-01T00:00:00Z","Config":{"Labels":{"org.opencontainers.image.revision":"%s","org.opencontainers.image.source":"https://github.com/FengHaoyun-MONSTER/Xboardme"}},"RepoTags":["ghcr.io/fenghaoyun-monster/xboardme@sha256:legacy-alias","xboard-rollback:old-release"],"RepoDigests":["ghcr.io/fenghaoyun-monster/xboardme@sha256:legacy-alias","xboard-rollback@sha256:legacy-alias"]}]\n' "$(printf 'a%.0s' {1..40})"
+        ;;
       sha256:young)
         printf '[{"Id":"sha256:young","Size":2345,"Created":"%s","Config":{"Labels":{"org.opencontainers.image.revision":"%s","org.opencontainers.image.source":"https://github.com/Hao-Monster/Xboardme"}},"RepoTags":["ghcr.io/hao-monster/xboardme@sha256:young"],"RepoDigests":["ghcr.io/hao-monster/xboardme@sha256:young"]}]\n' "$(date -u -d '1 day ago' +%FT%TZ)" "$(printf 'f%.0s' {1..40})"
         ;;
       sha256:third-party)
         printf '[{"Id":"sha256:third-party","Size":3456,"Created":"2020-01-01T00:00:00Z","Config":{"Labels":{"org.opencontainers.image.revision":"%s","org.opencontainers.image.source":"https://github.com/linuxserver/docker-bookstack"}},"RepoTags":["bookstack:test"],"RepoDigests":["bookstack@sha256:third-party"]}]\n' "$(printf '1%.0s' {1..40})"
+        ;;
+      sha256:unsafe-alias)
+        printf '[{"Id":"sha256:unsafe-alias","Size":5678,"Created":"2020-01-01T00:00:00Z","Config":{"Labels":{"org.opencontainers.image.revision":"%s","org.opencontainers.image.source":"https://github.com/Hao-Monster/Xboardme"}},"RepoTags":["unexpected-local:keep"],"RepoDigests":["ghcr.io/hao-monster/xboardme@sha256:unsafe-alias"]}]\n' "$(printf '2%.0s' {1..40})"
         ;;
       *) return 1 ;;
     esac
@@ -128,7 +140,7 @@ JSON
         case "$operation" in
           ls)
             local image_id
-            for image_id in sha256:eligible sha256:young sha256:third-party; do
+            for image_id in sha256:eligible sha256:legacy-alias sha256:young sha256:third-party sha256:unsafe-alias; do
               [[ ${present_image[$image_id]:-false} != true ]] || printf '%s\n' "$image_id"
             done
             ;;
@@ -145,6 +157,10 @@ JSON
             case ${1:-} in
               ghcr.io/hao-monster/xboardme@sha256:eligible|sha256:eligible)
                 present_image[sha256:eligible]=false
+                printf 'image-rm %s\n' "$1" >> "$CLEANUP_TEST_LOG"
+                ;;
+              ghcr.io/fenghaoyun-monster/xboardme@sha256:legacy-alias|xboard-rollback:old-release|xboard-rollback@sha256:legacy-alias|sha256:legacy-alias)
+                present_image[sha256:legacy-alias]=false
                 printf 'image-rm %s\n' "$1" >> "$CLEANUP_TEST_LOG"
                 ;;
               *) return 1 ;;
@@ -169,11 +185,13 @@ JSON
 
   [[ ${state[retention_cleanup_status]} == complete ]]
   [[ ${state[retention_cleanup_removed_containers]} == 1 ]]
-  [[ ${state[retention_cleanup_removed_images]} == 1 ]]
+  [[ ${state[retention_cleanup_removed_images]} == 2 ]]
   [[ ${present[old-id]} == false ]]
   [[ ${present_image[sha256:eligible]} == false ]]
+  [[ ${present_image[sha256:legacy-alias]} == false ]]
   [[ ${present_image[sha256:young]} == true ]]
   [[ ${present_image[sha256:third-party]} == true ]]
+  [[ ${present_image[sha256:unsafe-alias]} == true ]]
 )
 
 CLEANUP_TEST_ROOT=$(mktemp -d)
@@ -204,12 +222,18 @@ grep -q 'RETENTION_CLEANUP_FAIL=resource_fingerprint_mismatch' "$mismatch_output
 run_cleanup_case happy >"$CLEANUP_TEST_ROOT/happy.out"
 grep -qx 'container-rm old-id' "$CLEANUP_TEST_LOG"
 grep -qx 'image-rm ghcr.io/hao-monster/xboardme@sha256:eligible' "$CLEANUP_TEST_LOG"
+grep -qx 'image-rm ghcr.io/fenghaoyun-monster/xboardme@sha256:legacy-alias' "$CLEANUP_TEST_LOG"
+grep -qx 'image-rm xboard-rollback@sha256:legacy-alias' "$CLEANUP_TEST_LOG"
+grep -qx 'image-rm xboard-rollback:old-release' "$CLEANUP_TEST_LOG"
 grep -q 'RETENTION_CLEANUP=PASS id=333-1 removed_containers=1' "$CLEANUP_TEST_ROOT/happy.out"
 
 : > "$CLEANUP_TEST_LOG"
 run_cleanup_case retry >"$CLEANUP_TEST_ROOT/retry.out"
 grep -qx 'container-rm old-id' "$CLEANUP_TEST_LOG"
 grep -qx 'image-rm ghcr.io/hao-monster/xboardme@sha256:eligible' "$CLEANUP_TEST_LOG"
+grep -qx 'image-rm ghcr.io/fenghaoyun-monster/xboardme@sha256:legacy-alias' "$CLEANUP_TEST_LOG"
+grep -qx 'image-rm xboard-rollback@sha256:legacy-alias' "$CLEANUP_TEST_LOG"
+grep -qx 'image-rm xboard-rollback:old-release' "$CLEANUP_TEST_LOG"
 grep -q 'RETENTION_CLEANUP=PASS id=333-1 removed_containers=1' "$CLEANUP_TEST_ROOT/retry.out"
 
 : > "$CLEANUP_TEST_LOG"
