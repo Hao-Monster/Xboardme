@@ -19,19 +19,33 @@ use App\Services\PlanService;
 use App\Services\UserService;
 use App\Services\DistributorOrderService;
 use App\Services\DistributorOrderExportService;
+use App\Services\DistributorOrderFilterService;
 use App\Services\DistributorOrderSearchService;
+use App\Services\DistributorOrderStatisticsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class OrderController extends Controller
 {
-    public function fetch(Request $request, DistributorOrderSearchService $searchService)
+    public function fetch(
+        Request $request,
+        DistributorOrderSearchService $searchService,
+        DistributorOrderFilterService $filterService
+    )
     {
-        $request->validate([
+        $rules = [
             'status' => 'nullable|integer|in:0,1,2,3',
             'settlement_status' => 'nullable|integer|in:0,1',
             'search' => 'nullable|string|max:512',
-        ]);
+        ];
+        if ($request->user()->is_distributor) {
+            $rules = array_merge($rules, $filterService->rules());
+        }
+        $validated = $request->validate($rules);
+        $filters = $request->user()->is_distributor
+            ? $filterService->normalize($validated)
+            : null;
+
         $orders = Order::with([
             'plan',
             'distributorSubscription:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
@@ -44,7 +58,10 @@ class OrderController extends Controller
                 $searchService->applyToOrderQuery($query, $request->input('search'));
             })
             ->when($request->user()->is_distributor, function ($query) use ($request) {
-                $query->whereNotNull('distributor_order_id');
+                $query->whereNotNull('distributor_order_id')
+                    ->whereHas('distributorSubscription', function ($query) use ($request) {
+                        $query->where('distributor_user_id', (int) $request->user()->id);
+                    });
                 if ($request->input('settlement_status') !== null) {
                     $request->integer('settlement_status') === DistributorOrder::SETTLEMENT_SETTLED
                         ? $query->whereNotNull('paid_at')
@@ -53,28 +70,85 @@ class OrderController extends Controller
             })
             ->when($request->input('status') !== null, function ($query) use ($request) {
                 $query->where('status', $request->input('status'));
-            })
-            ->orderBy('created_at', 'desc')
-            ->orderBy('id', 'desc')
+            });
+
+        if ($filters !== null) {
+            $filterService->apply($orders, $filters);
+            $page = $orders
+                ->orderByDesc('created_at')
+                ->orderByDesc('id')
+                ->paginate(
+                    perPage: (int) ($validated['per_page'] ?? 20),
+                    page: (int) ($validated['page'] ?? 1)
+                );
+            $data = $page->getCollection()->map(
+                static fn(Order $order): array => (new OrderResource($order))->toArray($request)
+            )->values()->all();
+
+            return response()->json([
+                'total' => $page->total(),
+                'current_page' => $page->currentPage(),
+                'per_page' => $page->perPage(),
+                'last_page' => $page->lastPage(),
+                'data' => $data,
+            ]);
+        }
+
+        $orders = $orders
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
             ->get();
 
         return $this->success(OrderResource::collection($orders));
     }
 
-    public function export(Request $request, DistributorOrderExportService $exportService)
+    public function export(
+        Request $request,
+        DistributorOrderExportService $exportService,
+        DistributorOrderFilterService $filterService
+    )
     {
         abort_unless((bool) $request->user()->is_distributor, 403);
 
-        $validated = $request->validate([
+        $validated = $request->validate(array_merge([
             'settlement_status' => 'nullable|integer|in:0,1',
             'search' => 'nullable|string|max:512',
-        ]);
+        ], $filterService->rules(false)));
+        $filters = $filterService->normalize($validated);
 
         return $exportService->downloadForDistributor(
             (int) $request->user()->id,
             isset($validated['settlement_status']) ? (int) $validated['settlement_status'] : null,
-            $validated['search'] ?? null
+            $validated['search'] ?? null,
+            $filters
         );
+    }
+
+    public function statistics(
+        Request $request,
+        DistributorOrderFilterService $filterService,
+        DistributorOrderStatisticsService $statisticsService
+    )
+    {
+        abort_unless((bool) $request->user()->is_distributor, 403);
+
+        $today = now(config('app.timezone'))->format('Y-m-d');
+        $validated = $request->validate([
+            'start_date' => ['nullable', 'required_with:end_date', 'date_format:Y-m-d'],
+            'end_date' => ['nullable', 'required_with:start_date', 'date_format:Y-m-d', 'after_or_equal:start_date'],
+        ]);
+        $startDate = (string) ($validated['start_date'] ?? $today);
+        $endDate = (string) ($validated['end_date'] ?? $today);
+        $filterService->normalize([
+            'start_date' => $startDate,
+            'end_date' => $endDate,
+        ]);
+
+        return $this->success($statisticsService->forDistributor(
+            (int) $request->user()->id,
+            $startDate,
+            $endDate
+        ));
     }
 
     public function detail(Request $request)

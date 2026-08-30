@@ -25,7 +25,7 @@ test('distributor orders share one settlement filter between list and xlsx expor
 });
 
 test('distributor order search supports enter, trims input and searches on the server', () => {
-  const renderBlock = source.match(/async function renderOrders\(\)[\s\S]*?\n  }/);
+  const renderBlock = source.match(/async function renderOrders\(options = \{\}\)[\s\S]*?\n  }/);
   assert.ok(renderBlock, 'order list renderer should exist');
   assert.match(renderBlock[0], /params\.set\('search', state\.orderSearch\)/);
   assert.match(source, /event\.key !== 'Enter'/);
@@ -34,7 +34,7 @@ test('distributor order search supports enter, trims input and searches on the s
 });
 
 test('distributor order list renders the administrator remark as read-only text', () => {
-  const renderBlock = source.match(/async function renderOrders\(\)[\s\S]*?\n  }/);
+  const renderBlock = source.match(/async function renderOrders\(options = \{\}\)[\s\S]*?\n  }/);
   assert.ok(renderBlock, 'order list renderer should exist');
   assert.match(renderBlock[0], /t\('remark'\)/);
   assert.match(renderBlock[0], /order\.remark/);

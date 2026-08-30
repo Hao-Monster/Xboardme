@@ -27,7 +27,7 @@ test('buy again directly creates an order for the current plan and period', () =
 });
 
 test('delivery status is absent from distributor and admin order lists while technical detail states remain', () => {
-  const distributorOrders = distributor.match(/async function renderOrders\(\)[\s\S]*?\n  }/);
+  const distributorOrders = distributor.match(/async function renderOrders\(options = \{\}\)[\s\S]*?\n  }/);
   assert.ok(distributorOrders, 'distributor order renderer should exist');
   assert.doesNotMatch(distributorOrders[0], /t\('delivery'\)|delivery-\$\{|data-delivery/);
   assert.match(distributorOrders[0], /t\('settlement'\)/);

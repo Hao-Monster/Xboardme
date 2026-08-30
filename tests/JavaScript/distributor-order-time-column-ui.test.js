@@ -8,7 +8,7 @@ const admin = fs.readFileSync('public/assets/admin-distributor.js', 'utf8');
 const adminStyles = fs.readFileSync('public/assets/admin-distributor.css', 'utf8');
 
 test('distributor order table places order time beside the order number', () => {
-  const renderer = distributor.match(/async function renderOrders\(\)[\s\S]*?function periodLabel/);
+  const renderer = distributor.match(/async function renderOrders\(options = \{\}\)[\s\S]*?function periodLabel/);
   assert.ok(renderer, 'distributor order renderer should exist');
   assert.match(renderer[0], /<th>\$\{t\('orderNo'\)\}<\/th><th>\$\{t\('orderTime'\)\}<\/th><th>\$\{t\('customerName'\)\}<\/th>/);
   assert.match(renderer[0], /<td class="dist-order-identity"><strong>\$\{escapeHtml\(order\.trade_no\)\}<\/strong><small>\$\{orderType\}<\/small>\$\{originalOrder\}<\/td>\s*<td class="dist-order-time" data-label="\$\{t\('orderTime'\)\}">\$\{formatTime\(order\.created_at\)\}<\/td>/);

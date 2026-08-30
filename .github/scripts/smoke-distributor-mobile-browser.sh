@@ -83,8 +83,8 @@ cat > "$fixture" <<HTML
       can_view_subscription_qr: true,
       can_renew: true,
       hwid_enabled: true,
-      bound_devices: [],
-      bound_device_count: 2,
+      bound_devices: ['vivo V2227A ntqwnji2mzky', 'Pixel 10 secondary-hwid', 'iPhone 18 third-hwid', 'Galaxy S26 fourth-hwid'],
+      bound_device_count: 4,
       used_traffic: 5368709120,
       plan: { id: 1, name: '移动端验收套餐', month_price: 1000 },
       subscription_entitlement: {
@@ -99,10 +99,19 @@ cat > "$fixture" <<HTML
     };
     window.fetch = async function (input) {
       const url = String(input);
+      if (url.includes('/user/order/fetch')) {
+        return new Response(JSON.stringify({ total: 1, current_page: 1, per_page: 20, last_page: 1, data: [releaseOrder] }), {
+          status: 200, headers: { 'Content-Type': 'application/json' }
+        });
+      }
       const data = url.includes('/user/info')
         ? { email: 'release-smoke@example.invalid', distributor_name: 'Release Smoke', is_distributor: true }
-        : url.includes('/user/order/fetch') ? [releaseOrder] : [];
-      return new Response(JSON.stringify({ status: 'success', data }), {
+        : url.includes('/user/order/statistics') ? {
+          range: { start_date: '2026-08-30', end_date: '2026-08-30', days: 1 },
+          summary: { order_count: 1, total_amount: 1200 },
+          daily: [{ date: '2026-08-30', order_count: 1, total_amount: 1200 }]
+        } : [];
+      return new Response(JSON.stringify({ status: 'success', data: data }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
@@ -122,20 +131,32 @@ cat > "$fixture" <<HTML
       const usedTraffic = document.querySelector('.dist-order-used-traffic');
       const actions = Array.from(document.querySelectorAll('.dist-order-actions button'));
       const failures = [];
-      if (!window.matchMedia('(max-width:640px), (max-width:900px) and (hover:none) and (pointer:coarse)').matches) failures.push('mobile_media_query');
+      const mobile = window.innerWidth <= 640;
+      if (mobile && !window.matchMedia('(max-width:640px), (max-width:900px) and (hover:none) and (pointer:coarse)').matches) failures.push('mobile_media_query');
       if (!row) failures.push('mobile_order_row');
       if (!table) failures.push('orders_table');
-      if (!heading || getComputedStyle(heading).position !== 'absolute') failures.push('desktop_heading_visible');
-      if (!row || getComputedStyle(row).display !== 'grid') failures.push('card_grid');
+      if (mobile && (!heading || getComputedStyle(heading).position !== 'absolute')) failures.push('desktop_heading_visible');
+      if (mobile && (!row || getComputedStyle(row).display !== 'grid')) failures.push('card_grid');
+      if (!mobile && (!heading || getComputedStyle(heading).position === 'absolute')) failures.push('desktop_heading_hidden');
+      if (!mobile && row && getComputedStyle(row).display === 'grid') failures.push('desktop_row_layout');
       if (!settlement || settlement.getBoundingClientRect().width < 1) failures.push('settlement_status');
-      if (!boundDevices || boundDevices.getBoundingClientRect().width < 1 || !boundDevices.textContent.includes('2')) failures.push('bound_device_count');
+      if (!boundDevices || boundDevices.getBoundingClientRect().width < 1 || !boundDevices.textContent.includes('vivo V2227A ntqwnji2mzky')) failures.push('bound_device_hwid');
+      if (!document.querySelector('[data-device-toggle]')) failures.push('bound_device_expand');
       if (!usedTraffic || usedTraffic.getBoundingClientRect().width < 1 || !usedTraffic.textContent.includes('5 GB')) failures.push('used_traffic');
       if (actions.length !== 3) failures.push('action_count');
       if (!document.querySelector('[data-subscription-qr]')) failures.push('data-subscription-qr');
       if (!document.querySelector('[data-entitlement-toggle]')) failures.push('data-entitlement-toggle');
       if (!document.querySelector('[data-renew]')) failures.push('data-renew');
-      if (actions.some((button) => button.getBoundingClientRect().height < 44)) failures.push('touch_target');
-      if (row && row.scrollWidth > row.clientWidth + 1) failures.push('card_overflow');
+      if (mobile && actions.some((button) => button.getBoundingClientRect().height < 44)) failures.push('touch_target');
+      if (mobile && row && row.scrollWidth > row.clientWidth + 1) failures.push('card_overflow');
+      if (!document.querySelector('.dist-order-summary-cards')) failures.push('summary_cards');
+      if (document.querySelectorAll('.dist-chart').length !== 2) failures.push('trend_charts');
+      if (!mobile) {
+        const wrapper = document.querySelector('.dist-order-list');
+        const actionCell = row?.querySelector('.dist-order-action-cell');
+        if (!actionCell || getComputedStyle(actionCell).position !== 'sticky') failures.push('sticky_actions');
+        if (wrapper && actionCell && actionCell.getBoundingClientRect().right > wrapper.getBoundingClientRect().right + 1) failures.push('actions_clipped');
+      }
       if (document.documentElement.scrollWidth > window.innerWidth + 1) failures.push('page_overflow');
       result.textContent = failures.length
         ? 'MOBILE_ASSET_SMOKE=FAIL ' + failures.join(',')
@@ -165,22 +186,25 @@ if [[ "$fixture_ready" != true ]]; then
   exit 1
 fi
 
-browser_output=$(
-  "$browser" \
-    --headless=new \
-    --disable-gpu \
-    --no-sandbox \
-    --no-proxy-server \
-    --user-data-dir="$work_dir/chrome-profile" \
-    --window-size=412,924 \
-    --virtual-time-budget=8000 \
-    --dump-dom 'http://127.0.0.1:17002/mobile-order-smoke.html' 2>&1
-)
+for viewport in 360,800 390,844 412,924 430,932 1366,900 1440,900 1920,1080; do
+  profile_name=${viewport/,/-}
+  browser_output=$(
+    "$browser" \
+      --headless=new \
+      --disable-gpu \
+      --no-sandbox \
+      --no-proxy-server \
+      --user-data-dir="$work_dir/chrome-profile-$profile_name" \
+      --window-size="$viewport" \
+      --virtual-time-budget=8000 \
+      --dump-dom 'http://127.0.0.1:17002/mobile-order-smoke.html' 2>&1
+  )
 
-if ! grep -Fq 'MOBILE_ASSET_SMOKE=PASS' <<< "$browser_output"; then
-  printf '%s\n' "$browser_output" >&2
-  echo 'MOBILE_ASSET_SMOKE=FAIL browser_assertion' >&2
-  exit 1
-fi
+  if ! grep -Fq 'MOBILE_ASSET_SMOKE=PASS' <<< "$browser_output"; then
+    printf '%s\n' "$browser_output" >&2
+    echo "MOBILE_ASSET_SMOKE=FAIL browser_assertion viewport=$viewport" >&2
+    exit 1
+  fi
+done
 
 echo 'MOBILE_ASSET_SMOKE=PASS'

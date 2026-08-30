@@ -10,6 +10,7 @@ use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
 use App\Models\DistributorOrder;
+use App\Models\DistributorHwidDevice;
 use App\Services\OrderService;
 use App\Services\DistributorOrderEntitlementService;
 use App\Services\DistributorOrderService;
@@ -163,7 +164,9 @@ class OrderController extends Controller
                     'id', 'order_id', 'distributor_user_id', 'subscriber_user_id', 'customer_name', 'remark',
                     'delivery_status', 'settlement_status', 'config_issued_at', 'connected_at', 'connected_node_id',
                     'connected_node_name', 'settled_at',
-                ])->withCount('hwidDevices');
+                ])->with([
+                    'hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
+                ]);
             },
             'distributorSubscription.order:id,trade_no',
             'distributorSubscription.distributor:id,email,distributor_name',
@@ -229,8 +232,16 @@ class OrderController extends Controller
                 ?: $distributorOrder?->distributor?->email;
             $orderArray['customer_name'] = $distributorOrder?->customer_name;
             $orderArray['bound_device_count'] = $distributorOrder
-                ? (int) $distributorOrder->hwid_devices_count
+                ? $distributorOrder->hwidDevices->count()
                 : null;
+            $orderArray['bound_devices'] = $distributorOrder
+                ? $distributorOrder->hwidDevices
+                    ->sortByDesc('last_seen_at')
+                    ->map(static fn(DistributorHwidDevice $device): string => $device->displayLabel())
+                    ->filter()
+                    ->values()
+                    ->all()
+                : [];
             $orderArray['used_traffic'] = $distributorOrder?->subscriber
                 ? max(0, (int) $distributorOrder->subscriber->u + (int) $distributorOrder->subscriber->d)
                 : null;
