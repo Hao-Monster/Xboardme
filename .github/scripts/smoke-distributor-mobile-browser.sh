@@ -186,7 +186,7 @@ if [[ "$fixture_ready" != true ]]; then
   exit 1
 fi
 
-for viewport in 360,800 390,844 430,932 1366,900 1440,900 1920,1080; do
+for viewport in 360,800 390,844 412,924 430,932 1366,900 1440,900 1920,1080; do
   profile_name=${viewport/,/-}
   browser_output=$(
     "$browser" \
