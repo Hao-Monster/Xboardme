@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if ((EUID != 0)); then
+  command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 || {
+    echo 'V2_COMMON_TEST_FAIL=root_execution_unavailable' >&2
+    exit 1
+  }
+  exec sudo -n bash "$0"
+fi
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 temporary_dir=$(mktemp -d)
 cleanup() { rm -rf -- "$temporary_dir"; }
