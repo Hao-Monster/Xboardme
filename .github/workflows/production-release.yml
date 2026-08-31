@@ -19,6 +19,8 @@ on:
           - retention_audit
           - v2_finalize
           - retention_cleanup
+          - network_audit
+          - network_cleanup
       release_id:
         description: Active V2 release identifier required for finalize and cleanup (digits-digits)
         required: false
@@ -29,6 +31,10 @@ on:
         type: string
       cleanup_expected_resource_fingerprint:
         description: Exact post-finalize resource fingerprint required only for cleanup
+        required: false
+        type: string
+      network_cleanup_expected_fingerprint:
+        description: Exact read-only orphan-network fingerprint required only for network cleanup
         required: false
         type: string
       cleanup_image_min_age_seconds:
@@ -107,6 +113,252 @@ jobs:
           path: ${{ runner.temp }}/retention-audit.txt
           if-no-files-found: error
           retention-days: 90
+
+  network-debt-audit:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'network_audit' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact production workflow identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$EXPECTED_SHA" = "$(printf '%s' "$EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Inventory orphan Xboard networks without mutation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh \
+              .github/scripts/audit-xboard-network-debt.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true RETENTION_ACQUIRE_LOCK=true bash -s" |
+            tee "$RUNNER_TEMP/network-debt-audit.txt"
+
+      - name: Preserve the reviewed network inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-network-debt-audit-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/network-debt-audit.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  pre-network-debt-cleanup-smoke:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'network_cleanup' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact network cleanup request
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          NETWORK_FINGERPRINT: ${{ inputs.network_cleanup_expected_fingerprint }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          test "$NETWORK_FINGERPRINT" = "$(printf '%s' "$NETWORK_FINGERPRINT" | grep -E '^[0-9a-f]{64}$')"
+          git merge-base --is-ancestor "$RELEASE_EXPECTED_SHA" "$GITHUB_SHA"
+
+      - name: Verify public production before exact network cleanup
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Verify live admin assets before exact network cleanup
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
+  cleanup-orphan-production-networks:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'network_cleanup' }}
+    needs: pre-network-debt-cleanup-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Remove only fingerprinted empty retired Xboard networks
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_ACTIVE_RELEASE_ID: ${{ inputs.release_id }}
+          EXPECTED_ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+          EXPECTED_NETWORK_DEBT_FINGERPRINT: ${{ inputs.network_cleanup_expected_fingerprint }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh \
+              .github/scripts/audit-xboard-network-debt.sh \
+              .github/scripts/cleanup-xboard-network-debt.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' EXPECTED_ACTIVE_RELEASE_ID='$EXPECTED_ACTIVE_RELEASE_ID' EXPECTED_ACTIVE_RELEASE_SHA='$EXPECTED_ACTIVE_RELEASE_SHA' EXPECTED_NETWORK_DEBT_FINGERPRINT='$EXPECTED_NETWORK_DEBT_FINGERPRINT' RETENTION_REQUIRE_FINALIZED=true RETENTION_ACQUIRE_LOCK=true bash -s" |
+            tee "$RUNNER_TEMP/network-debt-cleanup.txt"
+
+      - name: Preserve exact network cleanup evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-network-debt-cleanup-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/network-debt-cleanup.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  verify-network-debt-cleanup:
+    if: >-
+      ${{ github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'network_cleanup' }}
+    needs: cleanup-orphan-production-networks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Verify zero orphan Xboard networks and unchanged production
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+          ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s"
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh \
+              .github/scripts/audit-xboard-network-debt.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true RETENTION_ACQUIRE_LOCK=true bash -s" |
+            tee "$RUNNER_TEMP/post-network-debt-cleanup.txt"
+          grep -Fxq 'NETWORK_DEBT_CANDIDATE_COUNT=0' "$RUNNER_TEMP/post-network-debt-cleanup.txt"
+
+      - name: Preserve the post-cleanup network inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-network-debt-post-cleanup-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/post-network-debt-cleanup.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Verify public production after exact network cleanup
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.release_expected_sha }}
+          v2_release_id: ${{ inputs.release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Verify live admin assets after exact network cleanup
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   pre-finalize-v2-smoke:
     if: >-
