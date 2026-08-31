@@ -15,7 +15,7 @@ v2_fail() {
 v2_require_tools() {
   local tool
   ((EUID == 0)) || v2_fail root_required || return 1
-  for tool in caddy curl docker flock jq openssl realpath ss; do
+  for tool in caddy curl docker flock jq openssl realpath sha256sum ss; do
     command -v "$tool" >/dev/null 2>&1 || v2_fail "tool_missing:$tool" || return 1
   done
   docker compose version >/dev/null 2>&1 || v2_fail compose_plugin_missing || return 1
@@ -82,6 +82,78 @@ v2_acquire_lock() {
   }
 }
 
+v2_backup_sqlite_database() {
+  local source_container=$1
+  local backup_path=$2
+  local backup_directory db_path db_directory snapshot_path journal_mode integrity backup_sha256
+
+  backup_directory=$(dirname -- "$backup_path")
+  [[ "$backup_directory" == "$V2_RELEASE_DIR/backups" &&
+     -d "$backup_directory" && ! -L "$backup_directory" &&
+     ! -e "$backup_path" && ! -L "$backup_path" ]] || {
+    v2_fail invalid_database_backup_target
+    return 1
+  }
+
+  db_path=$(docker exec "$source_container" php -r '
+require "/www/vendor/autoload.php";
+$app = require "/www/bootstrap/app.php";
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+echo config("database.connections.sqlite.database");
+')
+  [[ "$db_path" =~ ^/www/\.docker/\.data/[A-Za-z0-9._/-]+$ ]] || {
+    v2_fail invalid_sqlite_database_path
+    return 1
+  }
+  db_directory=${db_path%/*}
+  snapshot_path="$db_directory/.codex-v2-release-$RELEASE_ID.sqlite"
+  [[ "$snapshot_path" =~ ^/www/\.docker/\.data/[A-Za-z0-9._/-]+$ ]] || {
+    v2_fail invalid_sqlite_snapshot_path
+    return 1
+  }
+  if docker exec "$source_container" test -e "$snapshot_path"; then
+    v2_fail sqlite_snapshot_path_exists
+    return 1
+  fi
+
+  journal_mode=$(docker exec "$source_container" sqlite3 "$db_path" 'PRAGMA journal_mode;')
+  [[ "$journal_mode" == wal ]] || {
+    v2_fail sqlite_wal_required
+    return 1
+  }
+  if ! docker exec "$source_container" sqlite3 "$db_path" ".backup '$snapshot_path'"; then
+    docker exec "$source_container" rm -f -- "$snapshot_path" >/dev/null 2>&1 || true
+    v2_fail sqlite_backup_failed
+    return 1
+  fi
+  integrity=$(docker exec "$source_container" sqlite3 "$snapshot_path" 'PRAGMA integrity_check;' 2>/dev/null || true)
+  if [[ "$integrity" != ok ]]; then
+    docker exec "$source_container" rm -f -- "$snapshot_path" >/dev/null 2>&1 || true
+    v2_fail sqlite_backup_integrity_failed
+    return 1
+  fi
+  if ! docker cp "$source_container:$snapshot_path" "$backup_path" >/dev/null; then
+    docker exec "$source_container" rm -f -- "$snapshot_path" >/dev/null 2>&1 || true
+    rm -f -- "$backup_path"
+    v2_fail sqlite_backup_copy_failed
+    return 1
+  fi
+  if ! docker exec "$source_container" rm -f -- "$snapshot_path"; then
+    rm -f -- "$backup_path"
+    v2_fail sqlite_snapshot_cleanup_failed
+    return 1
+  fi
+
+  chmod 600 "$backup_path"
+  backup_sha256=$(sha256sum "$backup_path" | awk '{print $1}')
+  [[ "$backup_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+    rm -f -- "$backup_path"
+    v2_fail invalid_database_backup_checksum
+    return 1
+  }
+  printf '%s\n' "$backup_sha256"
+}
+
 v2_open_release() {
   v2_validate_release_id
   v2_find_workdir
@@ -118,6 +190,8 @@ v2_load_state() {
   MAINTENANCE_PORT=$(release_state_get "$V2_STATE_FILE" maintenance_port)
   CADDY_CONFIG=$(release_state_get "$V2_STATE_FILE" caddy_config)
   CADDY_BACKUP=$(release_state_get "$V2_STATE_FILE" caddy_backup)
+  DATABASE_BACKUP=$(release_state_get "$V2_STATE_FILE" database_backup)
+  DATABASE_BACKUP_SHA256=$(release_state_get "$V2_STATE_FILE" database_backup_sha256)
   LEGACY_ANCHOR_ID=$(release_state_get "$V2_STATE_FILE" legacy_anchor_id)
   LEGACY_WEB_ID=$(release_state_get "$V2_STATE_FILE" legacy_web_id)
   LEGACY_HORIZON_ID=$(release_state_get "$V2_STATE_FILE" legacy_horizon_id)
@@ -161,6 +235,21 @@ v2_load_state() {
   [[ "$(stat -c '%u:%g:%a' "$REDIS_PASSWORD_FILE")" == 0:1000:440 ]] || v2_fail redis_secret_permissions
   [[ "$(stat -c '%u:%a' "$V2_RELEASE_DIR/runtime.env")" == 0:600 ]] || v2_fail runtime_environment_permissions
   [[ "$(stat -c '%u:%a' "$CADDY_BACKUP")" == 0:600 ]] || v2_fail caddy_backup_permissions
+  [[ "$DATABASE_BACKUP" == "$V2_RELEASE_DIR/backups/database.sqlite" &&
+     -f "$DATABASE_BACKUP" && ! -L "$DATABASE_BACKUP" ]] || {
+    v2_fail database_backup_missing
+    return 1
+  }
+  [[ "$(stat -c '%u:%a' "$DATABASE_BACKUP")" == 0:600 ]] || {
+    v2_fail database_backup_permissions
+    return 1
+  }
+  [[ "$DATABASE_BACKUP_SHA256" =~ ^[0-9a-f]{64}$ &&
+     "$(sha256sum "$DATABASE_BACKUP" | awk '{print $1}')" == "$DATABASE_BACKUP_SHA256" ]] ||
+    {
+      v2_fail database_backup_checksum_mismatch
+      return 1
+    }
   if [[ -n "${EXPECTED_RELEASE_SHA:-}" && "$EXPECTED_RELEASE_SHA" != "$RELEASE_SHA" ]]; then
     v2_fail release_sha_mismatch
     return 1
