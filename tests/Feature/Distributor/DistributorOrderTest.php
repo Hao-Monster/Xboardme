@@ -194,12 +194,16 @@ class DistributorOrderTest extends TestCase
             ]))->assertOk());
             $this->assertCount(3, $rows);
             $this->assertSame($renewalTradeNo, $rows[1][0]);
-            $this->assertSame('续费', $rows[1][1]);
-            $this->assertSame($rootOrder->trade_no, $rows[1][2]);
-            $this->assertSame("renew-device-002\nrenew-device-001", $rows[1][7]);
-            $this->assertSame('300 B', $rows[1][8]);
-            $this->assertSame("renew-device-002\nrenew-device-001", $rows[2][7]);
-            $this->assertSame('300 B', $rows[2][8]);
+            $this->assertSame(
+                Carbon::createFromTimestamp($renewal->created_at, config('app.timezone'))->format('Y-m-d H:i:s'),
+                $rows[1][1]
+            );
+            $this->assertSame('续费', $rows[1][2]);
+            $this->assertSame($rootOrder->trade_no, $rows[1][3]);
+            $this->assertSame("renew-device-002\nrenew-device-001", $rows[1][8]);
+            $this->assertSame('300 B', $rows[1][9]);
+            $this->assertSame("renew-device-002\nrenew-device-001", $rows[2][8]);
+            $this->assertSame('300 B', $rows[2][9]);
 
             Sanctum::actingAs($this->makeUser('renew-admin@example.com', false, ['is_admin' => true]));
             $this->postJson('/' . $this->adminRouteUri('fetch'), [
@@ -221,10 +225,10 @@ class DistributorOrderTest extends TestCase
             $adminRows = $this->readXlsx($this->get('/' . $this->adminRouteUri('export') . '?' . http_build_query([
                 'search' => $rootOrder->trade_no,
             ]))->assertOk());
-            $this->assertSame("renew-device-002\nrenew-device-001", $adminRows[1][4]);
-            $this->assertSame('300 B', $adminRows[1][5]);
-            $this->assertSame("renew-device-002\nrenew-device-001", $adminRows[2][4]);
-            $this->assertSame('300 B', $adminRows[2][5]);
+            $this->assertSame("renew-device-002\nrenew-device-001", $adminRows[1][5]);
+            $this->assertSame('300 B', $adminRows[1][6]);
+            $this->assertSame("renew-device-002\nrenew-device-001", $adminRows[2][5]);
+            $this->assertSame('300 B', $adminRows[2][6]);
 
             Sanctum::actingAs($distributor);
             $this->postJson('/api/v1/user/order/renew', [
@@ -954,7 +958,7 @@ class DistributorOrderTest extends TestCase
         ]))->assertOk());
         $this->assertCount(2, $rows);
         $this->assertSame($numberOrder->trade_no, $rows[1][0]);
-        $this->assertSame('客户李四', $rows[1][3]);
+        $this->assertSame('客户李四', $rows[1][4]);
     }
 
     public function test_admin_can_search_distributor_orders_by_number_customer_name_or_subscription_link(): void
@@ -1001,7 +1005,7 @@ class DistributorOrderTest extends TestCase
         ]))->assertOk());
         $this->assertCount(2, $rows);
         $this->assertSame($firstOrder->trade_no, $rows[1][0]);
-        $this->assertSame('链接查询客户', $rows[1][3]);
+        $this->assertSame('链接查询客户', $rows[1][4]);
     }
 
     public function test_admin_can_save_trim_and_clear_a_distributor_order_remark_while_distributor_can_only_read_it(): void
@@ -1090,22 +1094,26 @@ class DistributorOrderTest extends TestCase
         $response->assertOk();
 
         $rows = $this->readXlsx($response);
-        $this->assertSame(['订单号', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注'], $rows[0]);
+        $this->assertSame(['订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注'], $rows[0]);
         $this->assertSame($newer->trade_no, $rows[1][0]);
-        $this->assertSame('新购', $rows[1][1]);
-        $this->assertSame('-', $rows[1][2]);
-        $this->assertSame('新客户', $rows[1][3]);
-        $this->assertSame('', $rows[1][4]);
-        $this->assertSame('0 B', $rows[1][5]);
-        $this->assertSame('第二分销商', $rows[1][6]);
-        $this->assertSame('Distributor Test Plan', $rows[1][7]);
-        $this->assertSame('季付', $rows[1][8]);
-        $this->assertTrue(is_int($rows[1][9]) || is_float($rows[1][9]));
-        $this->assertEquals(30.0, $rows[1][9]);
-        $this->assertSame('未结算', $rows[1][10]);
-        $this->assertSame('=HYPERLINK("https://invalid.example","新订单备注")', $rows[1][11]);
+        $this->assertSame(
+            Carbon::createFromTimestamp($newer->created_at, config('app.timezone'))->format('Y-m-d H:i:s'),
+            $rows[1][1]
+        );
+        $this->assertSame('新购', $rows[1][2]);
+        $this->assertSame('-', $rows[1][3]);
+        $this->assertSame('新客户', $rows[1][4]);
+        $this->assertSame('', $rows[1][5]);
+        $this->assertSame('0 B', $rows[1][6]);
+        $this->assertSame('第二分销商', $rows[1][7]);
+        $this->assertSame('Distributor Test Plan', $rows[1][8]);
+        $this->assertSame('季付', $rows[1][9]);
+        $this->assertTrue(is_int($rows[1][10]) || is_float($rows[1][10]));
+        $this->assertEquals(30.0, $rows[1][10]);
+        $this->assertSame('未结算', $rows[1][11]);
+        $this->assertSame('=HYPERLINK("https://invalid.example","新订单备注")', $rows[1][12]);
         $this->assertSame($older->trade_no, $rows[2][0]);
-        $this->assertSame('旧订单备注', $rows[2][11]);
+        $this->assertSame('旧订单备注', $rows[2][12]);
         $this->assertCount(3, $rows);
         $this->assertStringNotContainsString('NORMAL-ORDER-MUST-NOT-EXPORT', json_encode($rows));
     }
@@ -1162,20 +1170,24 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.trade_no', $settled->trade_no);
 
         $rows = $this->readXlsx($this->get('/api/v1/user/order/export?settlement_status=1')->assertOk());
-        $this->assertSame(['订单号', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注'], $rows[0]);
+        $this->assertSame(['订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注'], $rows[0]);
         $this->assertCount(2, $rows);
         $this->assertSame($settled->trade_no, $rows[1][0]);
-        $this->assertSame('新购', $rows[1][1]);
-        $this->assertSame('-', $rows[1][2]);
-        $this->assertSame('导出客户', $rows[1][3]);
-        $this->assertSame('Distributor Test Plan', $rows[1][4]);
-        $this->assertSame('季付', $rows[1][5]);
-        $this->assertTrue(is_int($rows[1][6]) || is_float($rows[1][6]));
-        $this->assertEquals(30.0, $rows[1][6]);
-        $this->assertSame('', $rows[1][7]);
-        $this->assertSame('0 B', $rows[1][8]);
-        $this->assertSame('已结算', $rows[1][9]);
-        $this->assertSame('分销商可见备注', $rows[1][10]);
+        $this->assertSame(
+            Carbon::createFromTimestamp($settled->created_at, config('app.timezone'))->format('Y-m-d H:i:s'),
+            $rows[1][1]
+        );
+        $this->assertSame('新购', $rows[1][2]);
+        $this->assertSame('-', $rows[1][3]);
+        $this->assertSame('导出客户', $rows[1][4]);
+        $this->assertSame('Distributor Test Plan', $rows[1][5]);
+        $this->assertSame('季付', $rows[1][6]);
+        $this->assertTrue(is_int($rows[1][7]) || is_float($rows[1][7]));
+        $this->assertEquals(30.0, $rows[1][7]);
+        $this->assertSame('', $rows[1][8]);
+        $this->assertSame('0 B', $rows[1][9]);
+        $this->assertSame('已结算', $rows[1][10]);
+        $this->assertSame('分销商可见备注', $rows[1][11]);
         $this->assertStringNotContainsString($unsettled->trade_no, json_encode($rows));
         $this->assertStringNotContainsString($otherOrder->trade_no, json_encode($rows));
 
@@ -1711,7 +1723,7 @@ class DistributorOrderTest extends TestCase
 
             $this->assertNotFalse($deviceColumn);
             $this->assertCount(2, $rows);
-            $this->assertSame('=HYPERLINK("https://invalid.example","导出客户")', $rows[1][3]);
+            $this->assertSame('=HYPERLINK("https://invalid.example","导出客户")', $rows[1][4]);
             $this->assertSame(
                 "=unsafe-device\nvivo V2227A ntqwnji2mzky\nPixel 10 secondary-hwid",
                 $rows[1][$deviceColumn]

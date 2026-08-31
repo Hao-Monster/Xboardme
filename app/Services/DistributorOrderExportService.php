@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\ApiException;
 use App\Models\DistributorOrder;
 use App\Models\Plan;
+use Carbon\Carbon;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
 use OpenSpout\Common\Entity\Cell\StringCell;
@@ -22,11 +23,11 @@ class DistributorOrderExportService
     private const CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     private const ADMIN_HEADERS = [
-        '订单号', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注',
+        '订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注',
     ];
 
     private const DISTRIBUTOR_HEADERS = [
-        '订单号', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注',
+        '订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注',
     ];
 
     public function __construct(
@@ -58,6 +59,7 @@ class DistributorOrderExportService
             self::ADMIN_HEADERS,
             fn (object $order): array => [
                 (string) $order->trade_no,
+                $this->createdAtLabel($order->created_at),
                 $this->typeLabel((int) $order->type),
                 (int) $order->type === \App\Models\Order::TYPE_RENEWAL
                     ? (string) $order->subscription_trade_no
@@ -101,6 +103,7 @@ class DistributorOrderExportService
             self::DISTRIBUTOR_HEADERS,
             fn (object $order): array => [
                 (string) $order->trade_no,
+                $this->createdAtLabel($order->created_at),
                 $this->typeLabel((int) $order->type),
                 (int) $order->type === \App\Models\Order::TYPE_RENEWAL
                     ? (string) $order->subscription_trade_no
@@ -172,6 +175,7 @@ class DistributorOrderExportService
             foreach ($headers as $index => $header) {
                 $width = match ($header) {
                     '订单号', '关联原订单' => 28,
+                    '下单时间' => 20,
                     '用户名称', '分销商', '套餐', '订阅计划' => 22,
                     '已用流量' => 16,
                     '备注' => 42,
@@ -261,6 +265,15 @@ class DistributorOrderExportService
     private function yuan(mixed $amount): float
     {
         return round(((int) $amount) / 100, 2);
+    }
+
+    private function createdAtLabel(mixed $timestamp): string
+    {
+        $value = (int) $timestamp;
+
+        return $value > 0
+            ? Carbon::createFromTimestamp($value, config('app.timezone'))->format('Y-m-d H:i:s')
+            : '';
     }
 
     private function settlementLabel(int $status): string

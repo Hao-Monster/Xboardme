@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if ((EUID != 0)); then
+  command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1 || {
+    echo 'V2_COMMON_TEST_FAIL=root_execution_unavailable' >&2
+    exit 1
+  }
+  exec sudo -n bash "$0"
+fi
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 temporary_dir=$(mktemp -d)
 cleanup() { rm -rf -- "$temporary_dir"; }
@@ -30,6 +38,52 @@ PATH="$temporary_dir/bin:$PATH"
 source "$repo_root/.github/scripts/release-state.sh"
 # shellcheck source=v2-low-memory-common.sh
 source "$repo_root/.github/scripts/v2-low-memory-common.sh"
+
+backup_release_id=5678-1
+backup_release_dir="$temporary_dir/backup-release/$backup_release_id"
+backup_path="$backup_release_dir/backups/database.sqlite"
+backup_log="$temporary_dir/backup-operations.log"
+mkdir -p "$backup_release_dir/backups"
+export RELEASE_ID=$backup_release_id
+export V2_RELEASE_DIR=$backup_release_dir
+export MOCK_DB_PATH=/www/.docker/.data/database.sqlite
+docker() {
+  printf '%s\n' "$*" >> "$backup_log"
+  if [[ "$1" == exec && "$3" == php ]]; then
+    printf '%s\n' "$MOCK_DB_PATH"
+  elif [[ "$1" == exec && "$3" == test ]]; then
+    return 1
+  elif [[ "$1" == exec && "$3" == sqlite3 && "$5" == 'PRAGMA journal_mode;' ]]; then
+    printf '%s\n' wal
+  elif [[ "$1" == exec && "$3" == sqlite3 && "$5" == 'PRAGMA integrity_check;' ]]; then
+    printf '%s\n' "${MOCK_INTEGRITY:-ok}"
+  elif [[ "$1" == cp ]]; then
+    printf '%s\n' consistent-sqlite-backup > "$3"
+  fi
+}
+backup_sha256=$(v2_backup_sqlite_database source-web "$backup_path")
+[[ "$backup_sha256" == "$(sha256sum "$backup_path" | awk '{print $1}')" ]]
+[[ "$(stat -c '%a' "$backup_path")" == 600 ]]
+grep -Fq "exec source-web sqlite3 /www/.docker/.data/database.sqlite .backup '/www/.docker/.data/.codex-v2-release-$backup_release_id.sqlite'" "$backup_log"
+grep -Fq "exec source-web sqlite3 /www/.docker/.data/.codex-v2-release-$backup_release_id.sqlite PRAGMA integrity_check;" "$backup_log"
+grep -Fq "exec source-web rm -f -- /www/.docker/.data/.codex-v2-release-$backup_release_id.sqlite" "$backup_log"
+
+rm -f -- "$backup_path"
+MOCK_INTEGRITY=corrupt
+if v2_backup_sqlite_database source-web "$backup_path" 2>"$temporary_dir/corrupt-backup-error.log"; then
+  echo 'V2_COMMON_TEST_FAIL=corrupt_database_backup_was_accepted' >&2
+  exit 1
+fi
+grep -Fxq 'V2_FAIL=sqlite_backup_integrity_failed' "$temporary_dir/corrupt-backup-error.log"
+[[ ! -e "$backup_path" ]]
+unset MOCK_INTEGRITY
+
+MOCK_DB_PATH=/tmp/database.sqlite
+if v2_backup_sqlite_database source-web "$backup_release_dir/backups/invalid.sqlite" 2>"$temporary_dir/invalid-backup-error.log"; then
+  echo 'V2_COMMON_TEST_FAIL=invalid_database_path_was_accepted' >&2
+  exit 1
+fi
+grep -Fxq 'V2_FAIL=invalid_sqlite_database_path' "$temporary_dir/invalid-backup-error.log"
 
 env_file="$temporary_dir/work/.env"
 data_path="$temporary_dir/work/data"
@@ -85,6 +139,7 @@ state_release_dir="$state_workdir/.codex-v2-release/$state_release_id"
 state_file="$state_release_dir/state.json"
 state_redis_password="$state_release_dir/redis-password"
 state_caddy_backup="$state_release_dir/backups/caddy.conf"
+state_database_backup="$state_release_dir/backups/database.sqlite"
 privileged=()
 if ((EUID != 0)); then
   sudo -n true >/dev/null 2>&1 || {
@@ -102,7 +157,10 @@ printf '%s\n' '0123456789abcdef0123456789abcdef' > "$state_redis_password"
 "${privileged[@]}" chmod 440 "$state_redis_password"
 printf '%s\n' ':443 { respond 200 }' > "$state_caddy_backup"
 chmod 600 "$state_caddy_backup"
-"${privileged[@]}" chown 0:0 "$state_release_dir/runtime.env" "$state_caddy_backup"
+printf '%s\n' consistent-database > "$state_database_backup"
+chmod 600 "$state_database_backup"
+state_database_backup_sha256=$(sha256sum "$state_database_backup" | awk '{print $1}')
+"${privileged[@]}" chown 0:0 "$state_release_dir/runtime.env" "$state_caddy_backup" "$state_database_backup"
 release_state_create "$state_file" \
   v2_schema_version "$V2_RELEASE_STATE_SCHEMA" \
   release_id "$state_release_id" \
@@ -115,6 +173,8 @@ release_state_create "$state_file" \
   maintenance_port 7003 \
   caddy_config "$state_workdir/Caddyfile" \
   caddy_backup "$state_caddy_backup" \
+  database_backup "$state_database_backup" \
+  database_backup_sha256 "$state_database_backup_sha256" \
   legacy_anchor_id legacy-anchor \
   legacy_web_id legacy-web \
   legacy_horizon_id legacy-horizon \
@@ -137,6 +197,13 @@ v2_load_state
 [[ "$TRAFFIC_STATE" == prepared ]]
 [[ "$LEGACY_TOPOLOGY" == legacy ]]
 [[ -z "$LEGACY_WS_ID" && -z "$LEGACY_EDGE_ID" ]]
+printf '%s\n' tampered-database > "$state_database_backup"
+if v2_load_state 2>"$temporary_dir/tampered-state-error.log"; then
+  echo 'V2_COMMON_TEST_FAIL=tampered_database_backup_was_accepted' >&2
+  exit 1
+fi
+grep -Fxq 'V2_FAIL=database_backup_checksum_mismatch' "$temporary_dir/tampered-state-error.log"
+printf '%s\n' consistent-database > "$state_database_backup"
 release_state_set "$state_file" legacy_topology v2
 release_state_set "$state_file" legacy_ws_id legacy-ws
 release_state_set "$state_file" legacy_edge_id legacy-edge
@@ -351,4 +418,4 @@ docker() {
 v2_restore_legacy_redis_owner
 [[ ! -s "$operation_log" ]]
 
-echo 'V2_LOW_MEMORY_COMMON=PASS caddy_rollback=true lock_exclusive=true queue_drain=true v2_upgrade=true redis_owner_restore=true redis_owner_retry=true'
+echo 'V2_LOW_MEMORY_COMMON=PASS database_backup=true caddy_rollback=true lock_exclusive=true queue_drain=true v2_upgrade=true redis_owner_restore=true redis_owner_retry=true'

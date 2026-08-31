@@ -322,6 +322,8 @@ caddy_backup="$release_dir/backups/caddy-before-v2.conf"
 cp -p -- "$caddy_config" "$caddy_backup"
 chmod 600 "$caddy_backup"
 caddy validate --config "$caddy_backup" --adapter caddyfile >/dev/null
+database_backup="$release_dir/backups/database.sqlite"
+database_backup_sha256=$(v2_backup_sqlite_database "$legacy_web_id" "$database_backup")
 
 state_file="$release_dir/state.json"
 release_state_create "$state_file" \
@@ -336,6 +338,8 @@ release_state_create "$state_file" \
   maintenance_port "$MAINTENANCE_PORT" \
   caddy_config "$caddy_config" \
   caddy_backup "$caddy_backup" \
+  database_backup "$database_backup" \
+  database_backup_sha256 "$database_backup_sha256" \
   legacy_anchor_id "$legacy_anchor_id" \
   legacy_web_id "$legacy_web_id" \
   legacy_horizon_id "$legacy_horizon_id" \
@@ -356,5 +360,6 @@ release_state_create "$state_file" \
 
 cleanup_release=0
 trap - EXIT
+echo "V2_DATABASE_BACKUP=PASS path=$database_backup sha256=$database_backup_sha256"
 echo "V2_PREPARE=PASS id=$RELEASE_ID sha=$EXPECTED_RELEASE_SHA active_port=$active_port maintenance_port=$MAINTENANCE_PORT traffic_state prepared"
-echo 'V2_PREPARE_MUTATION=release_artifacts_image_pull_and_isolated_compatibility_checks_only'
+echo 'V2_PREPARE_MUTATION=release_artifacts_image_pull_consistent_database_backup_and_isolated_compatibility_checks_only'
