@@ -57,6 +57,14 @@ run_resolver() (
   v2_validate_release_id() { [[ "$RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]]; }
   v2_find_workdir() { V2_WORKDIR=$workdir; }
   v2_acquire_lock() { :; }
+  stat() {
+    [[ ${1:-} == -c && ${2:-} == '%u:%a' ]]
+    case ${3:-} in
+      "$release_dir") printf '0:700\n' ;;
+      "$state_file") printf '0:600\n' ;;
+      *) return 1 ;;
+    esac
+  }
   docker() {
     case "${1:-}" in
       ps)
