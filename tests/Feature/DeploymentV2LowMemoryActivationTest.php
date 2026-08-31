@@ -94,8 +94,13 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $this->assertStringContainsString('release_state_open', $common);
         $this->assertStringContainsString('release_state_schema_mismatch', $common);
         $this->assertStringNotContainsString('source "$state_file"', $common);
-        $this->assertStringContainsString('v2_open_release', $resolvePort);
-        $this->assertStringContainsString("printf '%s\\n' \"\$ACTIVE_PORT\"", $resolvePort);
+        $this->assertStringContainsString('stable release-state keys', $resolvePort);
+        $this->assertStringContainsString('release_state_get "$V2_STATE_FILE" active_port', $resolvePort);
+        $this->assertStringContainsString('active_port_owner_count', $resolvePort);
+        $this->assertStringContainsString('active_web_revision_mismatch', $resolvePort);
+        $this->assertStringNotContainsString('v2_open_release', $resolvePort);
+        $this->assertStringNotContainsString('database_backup', $resolvePort);
+        $this->assertStringContainsString("printf '%s\\n' \"\$active_port\"", $resolvePort);
 
         $this->assertStringContainsString('release_state_create', $prepare);
         $this->assertStringContainsString('v2_schema_version "$V2_RELEASE_STATE_SCHEMA"', $prepare);
@@ -204,6 +209,7 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $this->assertStringContainsString('SMOKE_VERIFY_PUBLIC_ROUTE', $smoke);
         $this->assertStringContainsString('if [[ "$SMOKE_VERIFY_PUBLIC_ROUTE" == true ]]', $smoke);
         $this->assertStringContainsString('resolve-xboard-v2-port.sh', $smoke);
+        $this->assertStringContainsString('bash .github/scripts/test-resolve-xboard-v2-port.sh', $workflow);
         $this->assertStringContainsString('git merge-base --is-ancestor', $smoke);
         $this->assertStringContainsString('git show "$V2_EXPECTED_ASSET_VERSION:theme/Xboard/assets/$asset"', $smoke);
         $this->assertSame(3, substr_count($workflow, 'v2_release_id: ${{ inputs.release_id }}'));

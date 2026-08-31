@@ -351,6 +351,7 @@ jobs:
           bash -n .github/scripts/cleanup-xboard-network-debt.sh
           bash -n .github/scripts/test-audit-xboard-network-debt.sh
           bash -n .github/scripts/test-cleanup-xboard-network-debt.sh
+          bash -n .github/scripts/test-resolve-xboard-v2-port.sh
           bash -n .github/scripts/test-finalize-xboard-v2-low-memory.sh
           bash -n .github/scripts/test-cleanup-xboard-retention.sh
           bash -n .github/scripts/test-v2-low-memory-common.sh
@@ -365,6 +366,7 @@ jobs:
           bash .github/scripts/test-cleanup-xboard-retention.sh
           bash .github/scripts/test-audit-xboard-network-debt.sh
           bash .github/scripts/test-cleanup-xboard-network-debt.sh
+          bash .github/scripts/test-resolve-xboard-v2-port.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
           bash .github/scripts/test-release-state.sh
