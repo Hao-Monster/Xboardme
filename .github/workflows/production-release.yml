@@ -51,6 +51,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash --noprofile --norc -e -o pipefail {0}
+
 concurrency:
   group: xboard-production-release
   cancel-in-progress: false

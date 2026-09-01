@@ -112,6 +112,22 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertStringContainsString('RELEASE_IMAGE: ' . $imageReference, $workflow);
     }
 
+    public function test_release_workflow_propagates_pipeline_failures(): void
+    {
+        $path = base_path('.github/workflows/production-release.yml');
+        $workflow = file_get_contents($path);
+        $parsed = Yaml::parseFile($path);
+
+        $this->assertIsString($workflow);
+        $this->assertSame(
+            'bash --noprofile --norc -e -o pipefail {0}',
+            $parsed['defaults']['run']['shell'] ?? null
+        );
+        $this->assertStringContainsString('tee "$RUNNER_TEMP/retention-audit.txt"', $workflow);
+        $this->assertStringContainsString('tee "$RUNNER_TEMP/network-debt-audit.txt"', $workflow);
+        $this->assertStringContainsString('tee "$RUNNER_TEMP/retention-cleanup.txt"', $workflow);
+    }
+
     public function test_release_retention_lifecycle_is_guarded_and_does_not_rebuild_images(): void
     {
         $path = base_path('.github/workflows/production-release.yml');
