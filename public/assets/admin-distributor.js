@@ -16,6 +16,8 @@
     selectedDistributor: '',
     settlementStatus: '',
     settlementMonth: '',
+    openMonthPicker: '',
+    monthPickerYears: { admin: null, native: null },
     orderSearch: '',
     summary: null,
     page: 1,
@@ -31,6 +33,78 @@
     const match = /^(\d{4})-(\d{2})$/.exec(state.settlementMonth);
     return match ? `${Number(match[1])}年${Number(match[2])}月` : '';
   };
+  const settlementMonthFieldLabel = () => {
+    const match = /^(\d{4})-(\d{2})$/.exec(state.settlementMonth);
+    return match ? `${match[1]}年${match[2]}月` : '请选择月份';
+  };
+  const settlementMonthPickerYear = (scope) => {
+    const selectedYear = Number(/^(\d{4})-\d{2}$/.exec(state.settlementMonth)?.[1]);
+    return state.monthPickerYears[scope] || selectedYear || new Date().getFullYear();
+  };
+
+  function settlementMonthPicker(scope, id) {
+    const year = settlementMonthPickerYear(scope);
+    const selected = /^(\d{4})-(\d{2})$/.exec(state.settlementMonth);
+    const isOpen = state.openMonthPicker === scope;
+    const months = Array.from({ length: 12 }, (_, index) => {
+      const month = index + 1;
+      const isSelected = Number(selected?.[1]) === year && Number(selected?.[2]) === month;
+      return `<button type="button" class="admin-dist-month-option${isSelected ? ' selected' : ''}" data-settlement-month-action="select" data-month-scope="${scope}" data-year="${year}" data-month="${month}" aria-pressed="${isSelected}">${month}月</button>`;
+    }).join('');
+    return `<div class="admin-dist-month-picker" data-settlement-month-picker="${scope}">
+      <button id="${id}" type="button" class="admin-dist-month-trigger" data-settlement-month-action="toggle" data-month-scope="${scope}" aria-haspopup="dialog" aria-expanded="${isOpen}" aria-controls="${id}-popover"><span>${settlementMonthFieldLabel()}</span><span aria-hidden="true">▣</span></button>
+      <div id="${id}-popover" class="admin-dist-month-popover" role="dialog" aria-label="选择结算月份" ${isOpen ? '' : 'hidden'}>
+        <header><button type="button" data-settlement-month-action="previous-year" data-month-scope="${scope}" aria-label="上一年" ${year <= 2000 ? 'disabled' : ''}>‹</button><strong>${year}年</strong><button type="button" data-settlement-month-action="next-year" data-month-scope="${scope}" aria-label="下一年" ${year >= 2100 ? 'disabled' : ''}>›</button></header>
+        <div class="admin-dist-month-grid" role="grid">${months}</div>
+        <footer><button type="button" data-settlement-month-action="clear" data-month-scope="${scope}">清除</button><button type="button" data-settlement-month-action="current" data-month-scope="${scope}">本月</button></footer>
+      </div>
+    </div>`;
+  }
+
+  function rerenderMonthPicker(scope) {
+    if (scope === 'native') renderNativeOrders();
+    else if (state.open && state.tab === 'orders') renderOrders();
+  }
+
+  async function handleSettlementMonthAction(event, refresh, scope) {
+    const target = event.target.closest?.('[data-settlement-month-action]');
+    if (!target || target.dataset.monthScope !== scope) return false;
+    const action = target.dataset.settlementMonthAction;
+    if (action === 'toggle') {
+      state.openMonthPicker = state.openMonthPicker === scope ? '' : scope;
+      state.monthPickerYears[scope] = settlementMonthPickerYear(scope);
+      rerenderMonthPicker(scope);
+      return true;
+    }
+    if (action === 'previous-year' || action === 'next-year') {
+      const year = settlementMonthPickerYear(scope) + (action === 'next-year' ? 1 : -1);
+      state.monthPickerYears[scope] = Math.max(2000, Math.min(2100, year));
+      state.openMonthPicker = scope;
+      rerenderMonthPicker(scope);
+      return true;
+    }
+
+    let value = '';
+    if (action === 'select') {
+      const year = Number(target.dataset.year);
+      const month = Number(target.dataset.month);
+      if (!Number.isInteger(year) || year < 2000 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) return true;
+      value = `${year}-${String(month).padStart(2, '0')}`;
+      state.monthPickerYears[scope] = year;
+    } else if (action === 'current') {
+      const current = new Date();
+      value = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
+      state.monthPickerYears[scope] = current.getFullYear();
+    } else if (action !== 'clear') {
+      return false;
+    }
+
+    state.settlementMonth = value;
+    state.openMonthPicker = '';
+    state.page = 1;
+    await refresh();
+    return true;
+  }
   const selectedDistributor = () => state.distributors
     .find((user) => String(user.id) === String(state.selectedDistributor));
   const selectedDistributorName = () => {
@@ -539,7 +613,7 @@
     renderPanel(`<div class="admin-dist-toolbar">
       <label>分销商<select id="admin-dist-distributor">${distributorOptions(true)}</select></label>
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
-      <label>结算月份<input id="admin-dist-settlement-month" type="month" lang="zh-CN" aria-label="结算月份，格式为年在前、月在后" value="${escapeHtml(state.settlementMonth)}"></label>
+      <label>结算月份${settlementMonthPicker('admin', 'admin-dist-settlement-month')}</label>
       <div class="admin-dist-search"><input id="admin-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button data-admin-dist="search-orders">查询</button><button class="secondary" data-admin-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>下单时间</th><th>用户名称</th><th>已绑定设备</th><th>已用流量</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="11" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
@@ -709,6 +783,7 @@
   }
 
   async function handleClick(event) {
+    if (await handleSettlementMonthAction(event, loadOrders, 'admin')) return;
     const close = event.target.closest('[data-admin-dist="close"]');
     if (close) { state.open = false; renderPanel(''); return; }
     const tab = event.target.closest('[data-tab]');
@@ -742,10 +817,6 @@
       try { await loadOrders(); } catch (e) { toast(e.message, 'error'); }
     } else if (event.target.id === 'admin-dist-settlement') {
       state.settlementStatus = event.target.value;
-      state.page = 1;
-      try { await loadOrders(); } catch (e) { toast(e.message, 'error'); }
-    } else if (event.target.id === 'admin-dist-settlement-month') {
-      state.settlementMonth = event.target.value;
       state.page = 1;
       try { await loadOrders(); } catch (e) { toast(e.message, 'error'); }
     }
@@ -794,7 +865,7 @@
       <div class="admin-dist-toolbar xboard-native-dist-toolbar">
         <label>分销商<select id="native-dist-distributor">${distributorOptions(true)}</select></label>
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
-        <label>结算月份<input id="native-dist-settlement-month" type="month" lang="zh-CN" aria-label="结算月份，格式为年在前、月在后" value="${escapeHtml(state.settlementMonth)}"></label>
+        <label>结算月份${settlementMonthPicker('native', 'native-dist-settlement-month')}</label>
         <div class="admin-dist-search"><input id="native-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button type="button" data-native-dist="search-orders">查询</button><button type="button" class="secondary" data-native-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       </div>${nativeSummary()}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>下单时间</th><th>用户名称</th><th>已绑定设备</th><th>已用流量</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="11" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
@@ -818,6 +889,7 @@
 
   async function handleNativeOrderClick(event) {
     try {
+      if (await handleSettlementMonthAction(event, loadNativeOrders, 'native')) return;
       const action = event.target.closest('[data-native-dist]')?.dataset.nativeDist;
       if (action === 'refresh') await loadNativeOrders();
       else if (action === 'export') await exportOrders(event.target.closest('[data-native-dist]'));
@@ -847,8 +919,6 @@
       state.selectedDistributor = event.target.value;
     } else if (event.target.id === 'native-dist-settlement') {
       state.settlementStatus = event.target.value;
-    } else if (event.target.id === 'native-dist-settlement-month') {
-      state.settlementMonth = event.target.value;
     } else {
       return;
     }
@@ -876,6 +946,11 @@
 
   installRequestBridge();
   document.addEventListener('click', async (event) => {
+    if (state.openMonthPicker && !event.target.closest?.('[data-settlement-month-picker]')) {
+      const scope = state.openMonthPicker;
+      state.openMonthPicker = '';
+      rerenderMonthPicker(scope);
+    }
     const manage = event.target.closest('[data-native-manage-entitlement]');
     if (manage) {
       try { await showOrderDetail(manage.dataset.nativeManageEntitlement); }
@@ -897,6 +972,12 @@
     }
   });
   document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && state.openMonthPicker) {
+      const scope = state.openMonthPicker;
+      state.openMonthPicker = '';
+      rerenderMonthPicker(scope);
+      return;
+    }
     if (event.key !== 'Enter' || !['admin-dist-order-search', 'native-dist-order-search'].includes(event.target.id)) return;
     event.preventDefault();
     state.orderSearch = event.target.value.trim();

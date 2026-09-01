@@ -267,7 +267,11 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.ok(host, 'the distributor settlement section should mount in the existing order page');
   assert.match(host.innerHTML, /id="native-dist-distributor"/);
   assert.match(host.innerHTML, /id="native-dist-settlement"/);
-  assert.match(host.innerHTML, /id="native-dist-settlement-month"[^>]*type="month"[^>]*lang="zh-CN"/);
+  assert.match(host.innerHTML, /id="native-dist-settlement-month"[^>]*type="button"[^>]*aria-haspopup="dialog"/);
+  assert.match(host.innerHTML, /data-settlement-month-action="select"[^>]*data-month="1"[^>]*>1月<\/button>/);
+  assert.match(host.innerHTML, />清除<\/button>/);
+  assert.match(host.innerHTML, />本月<\/button>/);
+  assert.doesNotMatch(host.innerHTML, /type="month"/);
   assert.doesNotMatch(host.innerHTML, /data-native-dist="settle"/);
   assert.match(host.innerHTML, /华东渠道/);
   assert.doesNotMatch(host.innerHTML, /dealer@example\.com/);
@@ -292,7 +296,8 @@ test('admin order page exposes distributor filters, summary and settlement actio
   const panelRoot = document.getElementById('admin-dist-root');
   await entry.listeners.get('click')[0]();
   await flush();
-  assert.match(panelRoot.innerHTML, /id="admin-dist-settlement-month"[^>]*type="month"[^>]*lang="zh-CN"/);
+  assert.match(panelRoot.innerHTML, /id="admin-dist-settlement-month"[^>]*type="button"[^>]*aria-haspopup="dialog"/);
+  assert.doesNotMatch(panelRoot.innerHTML, /type="month"/);
   assert.doesNotMatch(panelRoot.innerHTML, /data-admin-dist="settle"/);
 
   const change = host.listeners.get('change')[0];
@@ -303,8 +308,23 @@ test('admin order page exposes distributor filters, summary and settlement actio
   await flush();
   assert.doesNotMatch(host.innerHTML, /data-native-dist="settle"/);
 
-  change({ target: { id: 'native-dist-settlement-month', value: '2026-08' } });
-  await flush();
+  const monthToggleTarget = {
+    dataset: { settlementMonthAction: 'toggle', monthScope: 'native' },
+    closest(selector) {
+      return selector === '[data-settlement-month-action]' ? this : null;
+    },
+  };
+  await click({ target: monthToggleTarget });
+  assert.match(host.innerHTML, /id="native-dist-settlement-month"[^>]*aria-expanded="true"/);
+  assert.match(host.innerHTML, /<strong>2026年<\/strong>/);
+
+  const monthTarget = {
+    dataset: { settlementMonthAction: 'select', monthScope: 'native', year: '2026', month: '8' },
+    closest(selector) {
+      return selector === '[data-settlement-month-action]' ? this : null;
+    },
+  };
+  await click({ target: monthTarget });
 
   assert.match(host.innerHTML, /未结算：<b>2<\/b> 个订单/);
   assert.match(host.innerHTML, /合计 <b>¥60\.00<\/b>/);
@@ -320,7 +340,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
 
   await entry.listeners.get('click')[0]();
   await flush();
-  assert.match(panelRoot.innerHTML, /id="admin-dist-settlement-month"[^>]*value="2026-08"/);
+  assert.match(panelRoot.innerHTML, /id="admin-dist-settlement-month"[^>]*>[\s\S]*?2026年08月/);
   assert.match(panelRoot.innerHTML, /结算 华东渠道 2026年8月未结算订单/);
 
   const exportTarget = {
