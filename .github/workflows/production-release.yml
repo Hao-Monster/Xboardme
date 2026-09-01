@@ -227,6 +227,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ inputs.release_expected_sha }}
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   cleanup-orphan-production-networks:
@@ -362,6 +363,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ inputs.release_expected_sha }}
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   pre-finalize-v2-smoke:
@@ -412,6 +414,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ inputs.release_expected_sha }}
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   finalize-v2-release:
@@ -532,6 +535,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ inputs.release_expected_sha }}
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   pre-retention-cleanup-smoke:
@@ -587,6 +591,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ inputs.release_expected_sha }}
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   cleanup-retired-production-assets:
@@ -720,6 +725,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ inputs.release_expected_sha }}
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   resolve-signed-image:

@@ -434,13 +434,17 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(source, /event\.key !== 'Enter'/);
 });
 
-test('release smoke checks require the monthly settlement asset contract', () => {
-  for (const script of [
-    '.github/scripts/smoke-admin-assets-remote.sh',
-    '.github/scripts/smoke-distributor-remote.sh',
-  ]) {
-    const source = fs.readFileSync(script, 'utf8');
+test('release smoke checks the monthly contract against the requested asset version', () => {
+  const adminSmoke = fs.readFileSync('.github/scripts/smoke-admin-assets-remote.sh', 'utf8');
+  const distributorSmoke = fs.readFileSync('.github/scripts/smoke-distributor-remote.sh', 'utf8');
+  const releaseWorkflow = fs.readFileSync('.github/workflows/production-release.yml', 'utf8');
+
+  for (const source of [adminSmoke, distributorSmoke]) {
     assert.match(source, /native-dist-settlement-month/);
     assert.match(source, /expected_total_amount/);
+    assert.match(source, /cmp --silent/);
   }
+  assert.match(adminSmoke, /EXPECTED_ADMIN_ASSET_VERSION:public\/assets\/admin-distributor\.js/);
+  assert.match(distributorSmoke, /V2_EXPECTED_ASSET_VERSION:public\/assets\/admin-distributor\.js/);
+  assert.match(releaseWorkflow, /EXPECTED_ADMIN_ASSET_VERSION: \$\{\{ inputs\.release_expected_sha \}\}/);
 });

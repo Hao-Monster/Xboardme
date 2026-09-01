@@ -7,6 +7,7 @@ set -euo pipefail
 : "${DEPLOY_USER:?DEPLOY_USER is required}"
 : "${SSHPASS:?SSHPASS is required}"
 : "${TARGET_PORT:=active}"
+: "${EXPECTED_ADMIN_ASSET_VERSION:=}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ssh_with_password="$script_dir/ssh-with-password.sh"
@@ -56,8 +57,15 @@ grep -q 'distributor-message-guard.js' "$work_dir/dashboard.html"
 curl --silent --show-error --fail --output "$work_dir/admin-distributor.js" \
   'http://127.0.0.1:17001/assets/admin-distributor.js'
 grep -q '下单时间' "$work_dir/admin-distributor.js"
-grep -q 'native-dist-settlement-month' "$work_dir/admin-distributor.js"
-grep -q 'expected_total_amount' "$work_dir/admin-distributor.js"
+if [[ -n "$EXPECTED_ADMIN_ASSET_VERSION" ]]; then
+  [[ "$EXPECTED_ADMIN_ASSET_VERSION" =~ ^[a-f0-9]{40}$ ]]
+  git show "$EXPECTED_ADMIN_ASSET_VERSION:public/assets/admin-distributor.js" \
+    > "$work_dir/expected-admin-distributor.js"
+  cmp --silent "$work_dir/expected-admin-distributor.js" "$work_dir/admin-distributor.js"
+else
+  grep -q 'native-dist-settlement-month' "$work_dir/admin-distributor.js"
+  grep -q 'expected_total_amount' "$work_dir/admin-distributor.js"
+fi
 
 bash .github/scripts/smoke-admin-assets.sh
 
