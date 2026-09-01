@@ -41,6 +41,16 @@ run_network_cleanup_case() (
   elif [[ "$scenario" == protected-project ]]; then
     sed 's/project=xboard-v2-111-1/project=xboard-v2-333-1/' "$NETWORK_TEST_INVENTORY" > "$NETWORK_TEST_INVENTORY.tmp"
     network_inventory=$NETWORK_TEST_INVENTORY.tmp
+  elif [[ "$scenario" == direct-rollback-project ]]; then
+    RETENTION_REQUIRE_FINALIZED=false
+    active_traffic_state=active_v2
+    active_rollback_supported=true
+    direct_previous_project=xboard-v2-111-1
+  elif [[ "$scenario" == rollback-preserved ]]; then
+    RETENTION_REQUIRE_FINALIZED=false
+    active_traffic_state=active_v2
+    active_rollback_supported=true
+    direct_previous_project=xboard-v2-222-1
   fi
 
   release_state_validate() { [[ $1 == "$NETWORK_TEST_STATE" ]]; }
@@ -144,8 +154,22 @@ set -e
 grep -q 'NETWORK_DEBT_CLEANUP_FAIL=protected_project_in_candidates' "$protected_output"
 [[ ! -s "$NETWORK_TEST_LOG" ]]
 
+direct_rollback_output=$NETWORK_TEST_ROOT/direct-rollback.out
+set +e
+run_network_cleanup_case direct-rollback-project >"$direct_rollback_output" 2>&1
+direct_rollback_status=$?
+set -e
+((direct_rollback_status != 0))
+grep -q 'NETWORK_DEBT_CLEANUP_FAIL=protected_project_in_candidates' "$direct_rollback_output"
+[[ ! -s "$NETWORK_TEST_LOG" ]]
+
 run_network_cleanup_case happy >"$NETWORK_TEST_ROOT/happy.out"
 grep -Fxq 'network-rm old-network-id' "$NETWORK_TEST_LOG"
 grep -q 'NETWORK_DEBT_CLEANUP=PASS id=333-1 removed_networks=1 containers=preserved volumes=preserved images=preserved directories=preserved' "$NETWORK_TEST_ROOT/happy.out"
+
+: > "$NETWORK_TEST_LOG"
+run_network_cleanup_case rollback-preserved >"$NETWORK_TEST_ROOT/rollback-preserved.out"
+grep -Fxq 'network-rm old-network-id' "$NETWORK_TEST_LOG"
+grep -q 'NETWORK_DEBT_CLEANUP=PASS id=333-1 removed_networks=1 containers=preserved volumes=preserved images=preserved directories=preserved' "$NETWORK_TEST_ROOT/rollback-preserved.out"
 
 echo 'NETWORK_DEBT_CLEANUP_TEST=PASS'

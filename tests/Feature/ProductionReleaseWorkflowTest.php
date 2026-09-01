@@ -199,7 +199,7 @@ class ProductionReleaseWorkflowTest extends TestCase
         $networkCleanupRun = collect($parsed['jobs']['cleanup-orphan-production-networks']['steps'] ?? [])
             ->firstWhere('name', 'Remove only fingerprinted empty retired Xboard networks')['run'] ?? '';
         $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=false', $networkAuditRun);
-        $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=true', $networkCleanupRun);
+        $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=false', $networkCleanupRun);
         $this->assertStringContainsString('cleanup_expected_resource_fingerprint', $workflow);
         $this->assertStringContainsString('Verify public production before exact retention cleanup', $workflow);
         $this->assertStringContainsString('Verify public production after exact retention cleanup', $workflow);
@@ -373,9 +373,9 @@ class ProductionReleaseWorkflowTest extends TestCase
         }
         foreach ([
             'EXPECTED_NETWORK_DEBT_FINGERPRINT is required',
-            'active_release_not_finalized',
-            'rollback_support_not_closed',
-            'direct_rollback_still_present',
+            'active_v2_rollback_state_invalid',
+            'finalized_rollback_state_invalid',
+            'unsupported_active_traffic_state',
             'fingerprint_mismatch',
             'candidate_gained_endpoints',
             'candidate_state_changed',

@@ -16,7 +16,6 @@ network_cleanup_fail() {
 [[ "$EXPECTED_NETWORK_DEBT_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]] || network_cleanup_fail invalid_fingerprint
 [[ "$EXPECTED_ACTIVE_RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]] || network_cleanup_fail invalid_release_id
 [[ "$EXPECTED_ACTIVE_RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]] || network_cleanup_fail invalid_release_sha
-[[ "${RETENTION_REQUIRE_FINALIZED:-false}" == true ]] || network_cleanup_fail finalized_audit_required
 [[ "${RETENTION_ACQUIRE_LOCK:-false}" == true ]] || network_cleanup_fail deployment_lock_required
 [[ "${active_release_id:-}" == "$EXPECTED_ACTIVE_RELEASE_ID" ]] || network_cleanup_fail active_release_id_mismatch
 [[ "${active_revision:-}" == "$EXPECTED_ACTIVE_RELEASE_SHA" ]] || network_cleanup_fail active_release_sha_mismatch
@@ -24,9 +23,21 @@ network_cleanup_fail() {
 [[ -n "${active_container:-}" && -n "${active_app_data_id:-}" &&
    -n "${active_app_data_path:-}" && -n "${active_redis_volume:-}" &&
    -n "${workdir:-}" ]] || network_cleanup_fail retention_context_missing
-[[ "${active_traffic_state:-}" == finalized ]] || network_cleanup_fail active_release_not_finalized
-[[ "${active_rollback_supported:-}" == false ]] || network_cleanup_fail rollback_support_not_closed
-[[ -z "${direct_previous_project:-}" ]] || network_cleanup_fail direct_rollback_still_present
+case "${active_traffic_state:-}" in
+  active_v2)
+    if [[ "${active_rollback_supported:-}" == true ]]; then
+      [[ -n "${direct_previous_project:-}" ]] || network_cleanup_fail active_v2_rollback_state_invalid
+    else
+      [[ "${active_rollback_supported:-}" == false && -z "${direct_previous_project:-}" ]] ||
+        network_cleanup_fail active_v2_rollback_state_invalid
+    fi
+    ;;
+  finalized)
+    [[ "${active_rollback_supported:-}" == false && -z "${direct_previous_project:-}" ]] ||
+      network_cleanup_fail finalized_rollback_state_invalid
+    ;;
+  *) network_cleanup_fail unsupported_active_traffic_state ;;
+esac
 [[ "${network_debt_fingerprint:-}" == "$EXPECTED_NETWORK_DEBT_FINGERPRINT" ]] || network_cleanup_fail fingerprint_mismatch
 [[ -n "${network_inventory:-}" && -f "$network_inventory" ]] || network_cleanup_fail audit_inventory_missing
 
