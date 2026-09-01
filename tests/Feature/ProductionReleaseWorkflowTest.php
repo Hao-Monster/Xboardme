@@ -194,6 +194,12 @@ class ProductionReleaseWorkflowTest extends TestCase
         );
         $this->assertStringContainsString('RETENTION_ACQUIRE_LOCK=true', $workflow);
         $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=true', $workflow);
+        $networkAuditRun = collect($parsed['jobs']['network-debt-audit']['steps'] ?? [])
+            ->firstWhere('name', 'Inventory orphan Xboard networks without mutation')['run'] ?? '';
+        $networkCleanupRun = collect($parsed['jobs']['cleanup-orphan-production-networks']['steps'] ?? [])
+            ->firstWhere('name', 'Remove only fingerprinted empty retired Xboard networks')['run'] ?? '';
+        $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=false', $networkAuditRun);
+        $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=true', $networkCleanupRun);
         $this->assertStringContainsString('cleanup_expected_resource_fingerprint', $workflow);
         $this->assertStringContainsString('Verify public production before exact retention cleanup', $workflow);
         $this->assertStringContainsString('Verify public production after exact retention cleanup', $workflow);

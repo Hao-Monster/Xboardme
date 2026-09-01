@@ -166,7 +166,7 @@ jobs:
               .github/scripts/audit-xboard-network-debt.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true RETENTION_ACQUIRE_LOCK=true bash -s" |
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=false RETENTION_ACQUIRE_LOCK=true bash -s" |
             tee "$RUNNER_TEMP/network-debt-audit.txt"
 
       - name: Preserve the reviewed network inventory
