@@ -17,7 +17,7 @@
   ];
   const COPY = {
     'zh-CN': {
-      buy: '购买订阅', orders: '我的订单', invite: '我的邀请', knowledge: '使用文档', clients: '客户端下载', logout: '退出登录',
+      buy: '购买订阅', overview: '经营概览', orders: '我的订单', invite: '我的邀请', knowledge: '使用文档', clients: '客户端下载', logout: '退出登录',
       title: '分销订阅中心', subtitle: '每个订单生成一份独立订阅，客户扫码领取后不可再次领取。',
       buyNow: '立即下单', original: '原价', free: '分销免支付', cancel: '取消',
       allPlans: '全部套餐', highTraffic: '大流量', unlimitedSpeed: '不限速', unlimitedDevices: '不限设备',
@@ -25,6 +25,7 @@
       followSystem: '跟随系统', firstDayMonth: '每月1日', monthlyReset: '按月重置', neverReset: '不重置', firstDayYear: '每年1月1日', yearlyReset: '按年重置',
       perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次性交付',
       saved: '已省', orderAction: '已确认，直接下单', soldOut: '已售罄',
+      showPrices: '显示价格', hidePrices: '隐藏价格', pricesAutoHide: '价格将在 10 秒后自动隐藏', retry: '重试',
       promoStable: '稳定', promoFast: '高速', promoCompensation: '慢必赔',
       deliveryStepOne: '选择套餐并下单', deliveryStepTwo: '客户扫描二维码', deliveryStepThree: '确认节点可用',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
@@ -63,7 +64,7 @@
       lastUpdated: '最后更新', noArticles: '暂无使用文档', copyShare: '复制分享', copySuccess: '复制成功', copyFailed: '复制失败，请重试',
     },
     'en-US': {
-      buy: 'Buy Subscription', orders: 'My Orders', invite: 'My Invitations', knowledge: 'Documentation', clients: 'Client downloads', logout: 'Sign out',
+      buy: 'Buy Subscription', overview: 'Business Overview', orders: 'My Orders', invite: 'My Invitations', knowledge: 'Documentation', clients: 'Client downloads', logout: 'Sign out',
       title: 'Distributor Center', subtitle: 'Each order creates an independent subscription that can be claimed once.',
       buyNow: 'Place order', original: 'Original price', free: 'Distributor — no online payment', cancel: 'Cancel',
       allPlans: 'All plans', highTraffic: 'High traffic', unlimitedSpeed: 'Unlimited speed', unlimitedDevices: 'Unlimited devices',
@@ -71,6 +72,7 @@
       followSystem: 'System default', firstDayMonth: '1st of each month', monthlyReset: 'Monthly', neverReset: 'Never', firstDayYear: 'January 1st', yearlyReset: 'Yearly',
       perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time delivery',
       saved: 'Saved', orderAction: 'Confirmed — place order', soldOut: 'Sold out',
+      showPrices: 'Show prices', hidePrices: 'Hide prices', pricesAutoHide: 'Prices will hide automatically in 10 seconds', retry: 'Retry',
       promoStable: 'Stable', promoFast: 'Fast', promoCompensation: 'Performance guaranteed',
       deliveryStepOne: 'Choose and order', deliveryStepTwo: 'Customer scans QR', deliveryStepThree: 'Verify service',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
@@ -138,6 +140,11 @@
     plans: [],
     planFilter: 'all',
     selectedPeriods: {},
+    purchasingPlanId: null,
+    planPricesVisible: false,
+    planPricesTimer: null,
+    renderGeneration: 0,
+    analyticsRequestToken: 0,
     orders: [],
   };
 
@@ -451,11 +458,23 @@
     const hash = (window.location.hash || '#/plan').replace(/^#/, '');
     const [path, query = ''] = hash.split('?');
     if (path === '/knowledge' && new URLSearchParams(query).get('client-center') === '1') return '/clients';
-    return ['/plan', '/order', '/invite', '/knowledge', '/clients'].includes(path) ? path : '/plan';
+    return ['/plan', '/overview', '/order', '/invite', '/knowledge', '/clients'].includes(path) ? path : '/plan';
   }
 
   function navigate(path) {
+    if (path !== '/plan') closePlanPrices(false);
     window.location.hash = path === '/clients' ? '#/knowledge?client-center=1' : `#${path}`;
+  }
+
+  function beginRouteRender(route) {
+    return { route, generation: ++state.renderGeneration };
+  }
+
+  function isCurrentRouteRender(renderContext) {
+    return Boolean(renderContext)
+      && state.active
+      && renderContext.generation === state.renderGeneration
+      && currentPage() === renderContext.route;
   }
 
   function isCurrentRouteCanonical(page) {
@@ -480,6 +499,7 @@
           <div class="dist-brand"><img class="dist-brand-mark" src="https://cloud.thinderbox.com/assets/branding/thinderbox-logo.png?v=39e70a98" alt="${escapeHtml(window.settings?.title || 'XBoard')} logo"><span>${escapeHtml(window.settings?.title || 'XBoard')}</span></div>
           <nav>
             <button data-nav="/plan" class="${page === '/plan' ? 'active' : ''}"><span>▣</span>${t('buy')}</button>
+            <button data-nav="/overview" class="${page === '/overview' ? 'active' : ''}"><span>⌁</span>${t('overview')}</button>
             <button data-nav="/order" class="${page === '/order' ? 'active' : ''}"><span>☷</span>${t('orders')}</button>
             <button data-nav="/invite" class="${page === '/invite' ? 'active' : ''}"><span>♧</span>${t('invite')}</button>
             <button data-nav="/knowledge" class="${page === '/knowledge' ? 'active' : ''}"><span>▤</span>${t('knowledge')}</button>
@@ -504,7 +524,17 @@
 
   function setContent(content) {
     const root = document.getElementById('distributor-app');
-    if (root) root.innerHTML = shell(content);
+    if (!root) return;
+    root.innerHTML = shell(content);
+    window.requestAnimationFrame(() => {
+      const nav = root.querySelector('.dist-sidebar nav');
+      const active = nav?.querySelector('button.active');
+      if (!nav || !active || nav.scrollWidth <= nav.clientWidth) return;
+      const left = active.offsetLeft;
+      const right = left + active.offsetWidth;
+      if (left < nav.scrollLeft) nav.scrollLeft = left;
+      else if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth;
+    });
   }
 
   function loadingView() {
@@ -518,24 +548,33 @@
       navigate(page);
       return;
     }
+    const renderContext = beginRouteRender(page);
     loadingView();
     try {
-      if (page === '/order') await renderOrders();
-      else if (page === '/invite') await renderInvite();
-      else if (page === '/knowledge') await renderKnowledge();
+      if (page === '/overview') await renderOverview(renderContext);
+      else if (page === '/order') await renderOrders({ renderContext });
+      else if (page === '/invite') await renderInvite(renderContext);
+      else if (page === '/knowledge') await renderKnowledge(renderContext);
       else if (page === '/clients') await renderClients();
-      else await renderPlans();
+      else await renderPlans(renderContext);
     } catch (error) {
-      setContent(`<div class="dist-error"><h2>${escapeHtml(error.message)}</h2><button data-action="retry">${t('loading')}</button></div>`);
+      if (isCurrentRouteRender(renderContext)) renderRouteError(error);
     }
+  }
+
+  function renderRouteError(error) {
+    setContent(`<div class="dist-error" role="alert"><h2>${escapeHtml(error.message)}</h2><button data-action="retry">${t('retry')}</button></div>`);
   }
 
   async function fetchAvailablePlans() {
     return (dataOf(await api('/user/plan/fetch')) || []).filter((plan) => availablePeriods(plan).length);
   }
 
-  async function renderPlans() {
-    state.plans = await fetchAvailablePlans();
+  async function renderPlans(renderContext) {
+    renderContext ||= beginRouteRender('/plan');
+    const plans = await fetchAvailablePlans();
+    if (!isCurrentRouteRender(renderContext)) return;
+    state.plans = plans;
     state.plans.forEach((plan) => {
       if (!availablePeriods(plan).some(([key]) => key === state.selectedPeriods[plan.id])) {
         state.selectedPeriods[plan.id] = availablePeriods(plan)[0][0];
@@ -561,19 +600,32 @@
       const selectedSaving = periodSavings(plan, selectedPeriod);
       const isFeatured = plan.id === state.plans[0]?.id;
       const soldOut = typeof plan.capacity_limit === 'string';
+      const purchaseInFlight = state.purchasingPlanId !== null;
+      const isPurchasing = String(state.purchasingPlanId) === String(plan.id);
       const tags = [
         isFeatured ? t('featured') : '',
         Number(plan.transfer_enable) >= 100 ? t('highTraffic') : '',
         planHasUnlimitedSpeed(plan) ? t('unlimitedSpeed') : '',
         planHasUnlimitedDevices(plan) ? t('unlimitedDevices') : '',
       ].filter(Boolean).slice(0, 3).map((tag, index) => `<span class="${index === 0 && isFeatured ? 'primary' : ''}">${tag}</span>`).join('');
-      const periodButtons = prices.map(([key]) => `<button type="button" role="radio" aria-checked="${selectedPeriod === key}" class="${selectedPeriod === key ? 'active' : ''}" data-plan-period="${key}" data-plan-id="${plan.id}"><span>${periodName(key)}</span><strong>${money(plan[key])}</strong><small>${periodInsight(plan, key)}</small></button>`).join('');
+      const periodButtons = prices.map(([key]) => {
+        const periodPriceDetails = state.planPricesVisible
+          ? `<strong>${money(plan[key])}</strong><small>${periodInsight(plan, key)}</small>`
+          : '';
+        return `<button type="button" role="radio" aria-checked="${selectedPeriod === key}" class="${selectedPeriod === key ? 'active' : ''}" data-plan-period="${key}" data-plan-id="${plan.id}"><span>${periodName(key)}</span>${periodPriceDetails}</button>`;
+      }).join('');
+      const currentPriceDetails = state.planPricesVisible
+        ? `<div class="dist-plan-current-price"><small>${periodName(selectedPeriod)}</small><strong>${money(selectedPrice)}</strong></div>`
+        : '';
+      const actionPriceDetails = state.planPricesVisible
+        ? `<span>${t('original')} ${money(selectedPrice)}</span><span>${t('saved')} ${money(selectedSaving)}</span>`
+        : '';
       return `<article class="dist-plan-card ${isFeatured ? 'is-featured' : ''}">
         <div class="dist-plan-body">
           <div class="dist-plan-tags">${tags}</div>
           <div class="dist-plan-heading">
             <div><h2>${escapeHtml(plan.name)}</h2><p>${escapeHtml(planSummary(plan))}</p></div>
-            <div class="dist-plan-current-price"><small>${periodName(selectedPeriod)}</small><strong>${money(selectedPrice)}</strong></div>
+            ${currentPriceDetails}
           </div>
           <div class="dist-plan-specs">
             <div><span>${t('traffic')}</span><strong>${escapeHtml(plan.transfer_enable)} GB</strong></div>
@@ -585,15 +637,41 @@
           <div class="dist-period-options" role="radiogroup" aria-label="${t('period')}">${periodButtons}</div>
         </div>
         <div class="dist-plan-actions">
-          <button type="button" data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}" ${soldOut ? 'disabled' : ''}>${soldOut ? t('soldOut') : `<span>${t('original')} ${money(selectedPrice)}</span><span>${t('saved')} ${money(selectedSaving)}</span><strong>${t('orderAction')}</strong>`}</button>
+          <button type="button" data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}" ${soldOut || purchaseInFlight ? 'disabled' : ''} ${isPurchasing ? 'aria-busy="true"' : ''}>${soldOut ? t('soldOut') : `${actionPriceDetails}<strong>${t('orderAction')}</strong>`}</button>
         </div>
       </article>`;
     }).join('');
+    const priceToggleIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.5"></circle>${state.planPricesVisible ? '' : '<path d="m4 4 16 16"></path>'}</svg>`;
     setContent(`<section class="dist-catalog-topbar">
         <div class="dist-plan-filters">${filterButtons}</div>
+        <button type="button" class="dist-price-privacy-toggle" data-action="toggle-plan-prices" aria-pressed="${state.planPricesVisible}" aria-label="${t(state.planPricesVisible ? 'hidePrices' : 'showPrices')}" title="${t(state.planPricesVisible ? 'hidePrices' : 'showPrices')}">${priceToggleIcon}<span>${t(state.planPricesVisible ? 'hidePrices' : 'showPrices')}</span></button>
       </section>
       <div class="dist-plan-grid">${cards || `<div class="dist-empty">${t('empty')}</div>`}</div>
     `);
+  }
+
+  function clearPlanPriceTimer() {
+    if (state.planPricesTimer !== null) window.clearTimeout(state.planPricesTimer);
+    state.planPricesTimer = null;
+  }
+
+  function closePlanPrices(render = true) {
+    clearPlanPriceTimer();
+    if (!state.planPricesVisible) return;
+    state.planPricesVisible = false;
+    if (render && state.active && currentPage() === '/plan') renderPlanCatalog();
+  }
+
+  function togglePlanPrices() {
+    if (state.planPricesVisible) {
+      closePlanPrices();
+      return;
+    }
+    clearPlanPriceTimer();
+    state.planPricesVisible = true;
+    renderPlanCatalog();
+    toast(t('pricesAutoHide'));
+    state.planPricesTimer = window.setTimeout(() => closePlanPrices(), 10000);
   }
 
   async function purchasePlan(plan, period, button) {
@@ -601,17 +679,22 @@
       toast(t('planUnavailable'), 'error');
       return;
     }
+    if (state.purchasingPlanId !== null) return;
     state.selectedPeriods[plan.id] = period;
+    state.purchasingPlanId = plan.id;
     if (button) button.disabled = true;
     try {
       const tradeNo = dataOf(await api('/user/order/save', {
         method: 'POST', data: { plan_id: plan.id, period },
       }));
+      invalidateOrderAnalytics();
       await openDelivery(tradeNo);
     } catch (error) {
       toast(error.message, 'error');
     } finally {
-      if (button) button.disabled = false;
+      state.purchasingPlanId = null;
+      if (currentPage() === '/plan') renderPlanCatalog();
+      else if (button) button.disabled = false;
     }
   }
 
@@ -654,18 +737,27 @@
     return dataOf(await api(`/user/order/statistics?${params}`));
   }
 
-  async function ensureOrderAnalytics(forceSummary = false, forceTrend = false) {
+  function invalidateOrderAnalytics() {
+    state.orderSummary = null;
+    state.orderTrend = null;
+    state.analyticsRequestToken += 1;
+  }
+
+  async function ensureOrderAnalytics(forceSummary = false, forceTrend = false, renderContext) {
     const today = shanghaiDate();
     state.orderSummaryRange ||= { startDate: today, endDate: today };
     state.orderTrendRange ||= defaultTrendRange(state.orderTrendPreset);
-    const requests = [];
-    if (!state.orderSummary || forceSummary) {
-      requests.push(fetchOrderStatistics(state.orderSummaryRange).then((data) => { state.orderSummary = data; }));
-    }
-    if (!state.orderTrend || forceTrend) {
-      requests.push(fetchOrderStatistics(state.orderTrendRange).then((data) => { state.orderTrend = data; }));
-    }
-    await Promise.all(requests);
+    const requestToken = ++state.analyticsRequestToken;
+    const summaryRange = { ...state.orderSummaryRange };
+    const trendRange = { ...state.orderTrendRange };
+    const [summary, trend] = await Promise.all([
+      !state.orderSummary || forceSummary ? fetchOrderStatistics(summaryRange) : Promise.resolve(state.orderSummary),
+      !state.orderTrend || forceTrend ? fetchOrderStatistics(trendRange) : Promise.resolve(state.orderTrend),
+    ]);
+    if (requestToken !== state.analyticsRequestToken || !isCurrentRouteRender(renderContext)) return false;
+    state.orderSummary = summary;
+    state.orderTrend = trend;
+    return true;
   }
 
   function renderTrendChart(daily, key, label, formatter) {
@@ -708,7 +800,7 @@
     const presetButton = (preset, label) => `<button type="button" data-trend-preset="${preset}" class="${state.orderTrendPreset === preset ? 'active' : ''}" aria-pressed="${state.orderTrendPreset === preset}">${label}</button>`;
 
     return `<section class="dist-order-insights" aria-labelledby="dist-order-overview-title">
-      <div class="dist-insights-heading"><div><h2 id="dist-order-overview-title">${t('orderOverview')}</h2><p>${t('orderOverviewHint')}</p></div>
+      <div class="dist-insights-heading"><div><h1 id="dist-order-overview-title">${t('orderOverview')}</h1><p>${t('orderOverviewHint')}</p></div>
         <div class="dist-summary-range"><label>${t('startDate')}<input id="dist-summary-start" type="date" value="${summaryRange.startDate}"></label><span>—</span><label>${t('endDate')}<input id="dist-summary-end" type="date" value="${summaryRange.endDate}"></label><button type="button" data-action="apply-summary-range">${t('apply')}</button></div>
       </div>
       <div class="dist-order-summary-cards">
@@ -723,10 +815,21 @@
     </section>`;
   }
 
+  async function renderOverview(renderContext) {
+    renderContext ||= beginRouteRender('/overview');
+    if (!await ensureOrderAnalytics(true, true, renderContext)) return;
+    setContent(renderOrderAnalytics());
+  }
+
   async function refreshOrderAnalytics(forceSummary = false, forceTrend = false) {
-    await ensureOrderAnalytics(forceSummary, forceTrend);
-    const current = document.querySelector('.dist-order-insights');
-    if (current) current.outerHTML = renderOrderAnalytics();
+    const renderContext = beginRouteRender('/overview');
+    try {
+      if (!await ensureOrderAnalytics(forceSummary, forceTrend, renderContext)) return;
+      const current = document.querySelector('.dist-order-insights');
+      if (current) current.outerHTML = renderOrderAnalytics();
+    } catch (error) {
+      if (isCurrentRouteRender(renderContext)) renderRouteError(error);
+    }
   }
 
   function renderBoundDevices(order) {
@@ -764,6 +867,7 @@
   }
 
   async function renderOrders(options = {}) {
+    const renderContext = options.renderContext || beginRouteRender('/order');
     const append = Boolean(options.append);
     const requestedPage = append ? state.orderPage + 1 : state.orderPage;
     const params = new URLSearchParams({ page: String(requestedPage), per_page: String(state.orderPerPage) });
@@ -771,10 +875,8 @@
     if (state.orderSearch) params.set('search', state.orderSearch);
     appendOrderFilters(params);
     const oldScrollY = window.scrollY;
-    const [payload] = await Promise.all([
-      api(`/user/order/fetch?${params}`),
-      ensureOrderAnalytics(Boolean(options.refreshSummary), Boolean(options.refreshTrend)),
-    ]);
+    const payload = await api(`/user/order/fetch?${params}`);
+    if (!isCurrentRouteRender(renderContext)) return;
     const fetchedOrders = Array.isArray(payload?.data) ? payload.data : [];
     state.orders = append ? [...state.orders, ...fetchedOrders] : fetchedOrders;
     state.orderPage = Number(payload?.current_page || requestedPage);
@@ -837,9 +939,7 @@
     const mobilePagination = state.orderPage < state.orderLastPage
       ? `<button type="button" class="dist-load-more" data-action="load-more-orders">${t('loadMore')}（${state.orders.length}/${state.orderTotal}）</button>`
       : `<p class="dist-mobile-order-total">${t('totalOrders').replace('{count}', state.orderTotal)}</p>`;
-    setContent(`<section class="dist-page-head"><h1>${t('orders')}</h1><p>${t('subtitle')}</p></section>
-      ${renderOrderAnalytics()}
-      <div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button type="button" class="secondary dist-filter-toggle" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button data-action="export-orders">${t('exportExcel')}</button></div>
+    setContent(`<div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button type="button" class="secondary dist-filter-toggle" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button data-action="export-orders">${t('exportExcel')}</button></div>
       ${renderOrderFilters()}
       <div class="dist-table-wrap dist-order-list"><table class="dist-orders-table"><thead><tr><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
       <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="11" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>${desktopPagination}${mobilePagination}`);
@@ -850,9 +950,11 @@
     return periodName(period);
   }
 
-  async function renderInvite() {
+  async function renderInvite(renderContext) {
+    renderContext ||= beginRouteRender('/invite');
     const info = dataOf(await api('/user/invite/fetch')) || { codes: [], stat: [] };
     const historyPayload = await api('/user/invite/details?current=1&page_size=50');
+    if (!isCurrentRouteRender(renderContext)) return;
     const history = historyPayload?.data || [];
     const stat = info.stat || [];
     const cards = [
@@ -874,10 +976,12 @@
       <section class="dist-panel"><h2>${t('commissionHistory')}</h2><div class="dist-table-wrap"><table><thead><tr><th>${t('orderNo')}</th><th>${t('amount')}</th><th>${t('validCommission')}</th><th>${t('created')}</th></tr></thead><tbody>${historyRows || `<tr><td colspan="4" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div></section>`);
   }
 
-  async function renderKnowledge() {
+  async function renderKnowledge(renderContext) {
+    renderContext ||= beginRouteRender('/knowledge');
     const params = new URLSearchParams({ language: state.locale });
     if (state.knowledgeSearch) params.set('keyword', state.knowledgeSearch);
     const grouped = dataOf(await api(`/user/knowledge/fetch?${params}`)) || {};
+    if (!isCurrentRouteRender(renderContext)) return;
     const categories = Object.entries(grouped).map(([category, articles]) => {
       const items = (Array.isArray(articles) ? articles : []).map((article) => {
         const shareUrl = article.share_url || `${window.location.origin}/guide/${article.id}`;
@@ -896,8 +1000,11 @@
   }
 
   async function renderClients() {
+    const renderContext = { route: '/clients', generation: state.renderGeneration };
+    if (!isCurrentRouteRender(renderContext)) return;
     setContent('<div class="xcc-host"><div class="xcc-loading">正在加载客户端目录…</div></div>');
     if (!window.XBoardClientCenter) throw new Error('Client center is unavailable');
+    if (!isCurrentRouteRender(renderContext)) return;
     await window.XBoardClientCenter.mount(document.querySelector('.dist-content .xcc-host'));
   }
 
@@ -1229,8 +1336,11 @@
     }
     const action = target.closest('[data-action]')?.dataset.action;
     if (action === 'logout') {
+      closePlanPrices(false);
       localStorage.removeItem(TOKEN_KEY);
       window.location.href = '/#/login';
+    } else if (action === 'toggle-plan-prices') {
+      togglePlanPrices();
     } else if (action === 'language') {
       state.locale = state.locale === 'zh-CN' ? 'en-US' : 'zh-CN';
       localStorage.setItem('xboard_distributor_locale', state.locale);
@@ -1316,7 +1426,8 @@
           },
         }));
         state.modal.submitting = false;
-        await renderOrders({ refreshSummary: true, refreshTrend: true });
+        invalidateOrderAnalytics();
+        await renderOrders();
         renderModal();
       } catch (error) {
         state.modal.submitting = false;
@@ -1370,7 +1481,7 @@
       document.body.appendChild(root);
     }
     document.documentElement.classList.add('distributor-mode');
-    if (!['/plan', '/order', '/invite', '/knowledge', '/clients'].includes(currentPage())) navigate('/plan');
+    if (!['/plan', '/overview', '/order', '/invite', '/knowledge', '/clients'].includes(currentPage())) navigate('/plan');
     renderPage();
   }
 
@@ -1434,7 +1545,14 @@
     const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
     setActiveTrendPoint(Math.round(ratio * (daily.length - 1)));
   });
-  window.addEventListener('hashchange', () => { if (state.active) renderPage(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) closePlanPrices();
+  });
+  window.addEventListener('hashchange', () => {
+    if (!state.active) return;
+    if (currentPage() !== '/plan') closePlanPrices(false);
+    renderPage();
+  });
   const detector = setInterval(() => {
     if (state.active) clearInterval(detector);
     else detectDistributor();

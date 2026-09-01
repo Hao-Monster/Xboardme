@@ -22,16 +22,33 @@ test('distributor shell uses the published site logo instead of the text mark', 
   assert.match(styles, /\.dist-brand-mark \{[^}]*width:32px[^}]*height:32px[^}]*object-fit:cover/);
 });
 
-test('order button combines original price, calculated saving and emphasized action', () => {
+test('price privacy is closed by default and restores every structured price for ten seconds', () => {
   const savingBlock = source.match(/const periodSavings = \(plan, period\) => \{[\s\S]*?\n  };/);
   assert.ok(savingBlock, 'period saving calculator should exist');
   assert.match(savingBlock[0], /monthlyPrice \* months/);
   assert.match(savingBlock[0], /Math\.max\(0/);
+  assert.match(source, /planPricesVisible:\s*false/);
+  assert.match(source, /planPricesTimer:\s*null/);
+  assert.match(source, /purchasingPlanId:\s*null/);
+  assert.match(source, /data-action="toggle-plan-prices"/);
+  assert.match(source, /aria-pressed="\$\{state\.planPricesVisible\}"/);
+  assert.match(source, /const periodPriceDetails = state\.planPricesVisible/);
+  assert.match(source, /const currentPriceDetails = state\.planPricesVisible/);
+  assert.match(source, /const actionPriceDetails = state\.planPricesVisible/);
+  assert.match(source, /window\.setTimeout\([\s\S]*?,\s*10000\)/);
+  assert.match(source, /document\.addEventListener\('visibilitychange'/);
+  assert.match(source, /if \(document\.hidden\) closePlanPrices\(\)/);
+  assert.match(source, /if \(state\.purchasingPlanId !== null\) return/);
+  assert.match(source, /soldOut \|\| purchaseInFlight \? 'disabled'/);
   assert.match(source, /const selectedSaving = periodSavings\(plan, selectedPeriod\)/);
-  assert.match(source, /<span>\$\{t\('original'\)\} \$\{money\(selectedPrice\)\}<\/span><span>\$\{t\('saved'\)\} \$\{money\(selectedSaving\)\}<\/span><strong>\$\{t\('orderAction'\)\}<\/strong>/);
+  assert.match(source, /\$\{actionPriceDetails\}<strong>\$\{t\('orderAction'\)\}<\/strong>/);
   assert.match(source, /saved: '已省'/);
   assert.match(source, /orderAction: '已确认，直接下单'/);
+  assert.match(source, /showPrices: '显示价格'/);
+  assert.match(source, /hidePrices: '隐藏价格'/);
+  assert.match(source, /pricesAutoHide: '价格将在 10 秒后自动隐藏'/);
   assert.match(styles, /\.dist-plan-actions button strong \{[^}]*font-size:18px/);
+  assert.match(styles, /\.dist-price-privacy-toggle \{[^}]*min-width:44px[^}]*min-height:44px/);
 });
 
 test('plan route renders the slogan and compact delivery steps inside dist-topbar', () => {
@@ -54,7 +71,8 @@ test('plan route renders the slogan and compact delivery steps inside dist-topba
 test('every period price carries its own gold monthly-equivalent insight', () => {
   const periodButton = source.match(/const periodButtons = prices\.map[\s\S]*?\.join\(''\);/);
   assert.ok(periodButton, 'period price buttons should exist');
-  assert.match(periodButton[0], /<strong>\$\{money\(plan\[key\]\)\}<\/strong><small>\$\{periodInsight\(plan, key\)\}<\/small>/);
+  assert.match(periodButton[0], /\$\{periodPriceDetails\}/);
+  assert.match(source, /<strong>\$\{money\(plan\[key\]\)\}<\/strong><small>\$\{periodInsight\(plan, key\)\}<\/small>/);
   assert.match(source, /perMonth: '折合 \{price\}\/月'/);
   assert.match(source, /save: '省 \{percent\}%'/);
   assert.match(styles, /\.dist-period-options button small \{[^}]*color:#b7791f/);

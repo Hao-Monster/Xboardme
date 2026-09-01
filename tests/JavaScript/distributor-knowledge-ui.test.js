@@ -7,13 +7,13 @@ const styles = fs.readFileSync('theme/Xboard/assets/distributor.css', 'utf8');
 
 test('distributor navigation exposes documentation after invitations', () => {
   assert.match(source, /invite: '我的邀请', knowledge: '使用文档'/);
-  assert.match(source, /\['\/plan', '\/order', '\/invite', '\/knowledge', '\/clients'\]\.includes\(path\)/);
+  assert.match(source, /\['\/plan', '\/overview', '\/order', '\/invite', '\/knowledge', '\/clients'\]\.includes\(path\)/);
   assert.match(source, /data-nav="\/invite"[\s\S]*data-nav="\/knowledge"/);
-  assert.match(source, /page === '\/knowledge'\) await renderKnowledge\(\)/);
+  assert.match(source, /page === '\/knowledge'\) await renderKnowledge\(renderContext\)/);
 });
 
 test('documentation supports search, grouped articles and server-rendered details', () => {
-  assert.match(source, /async function renderKnowledge\(\)/);
+  assert.match(source, /async function renderKnowledge\(renderContext\)/);
   assert.match(source, /\/user\/knowledge\/fetch\?\$\{params\}/);
   assert.match(source, /data-knowledge-id/);
   assert.match(source, /new URLSearchParams\(\{ id, language: state\.locale, render: 'html' \}\)/);
@@ -34,9 +34,9 @@ test('every distributor article exposes an isolated permanent share action with 
   assert.match(styles, /\.dist-knowledge-copy\.copied/);
 });
 
-test('documentation styles stay scoped and mobile navigation accommodates five entries', () => {
+test('documentation styles stay scoped and mobile navigation accommodates six entries', () => {
   assert.match(styles, /\.dist-knowledge-toolbar/);
   assert.match(styles, /\.dist-knowledge-category/);
   assert.match(styles, /\.dist-knowledge-body/);
-  assert.match(styles, /\.dist-sidebar nav \{ grid-template-columns:repeat\(5,1fr\); \}/);
+  assert.match(styles, /\.dist-sidebar nav \{[^}]*overflow-x:auto/);
 });
