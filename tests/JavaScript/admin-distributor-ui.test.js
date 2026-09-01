@@ -267,7 +267,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.ok(host, 'the distributor settlement section should mount in the existing order page');
   assert.match(host.innerHTML, /id="native-dist-distributor"/);
   assert.match(host.innerHTML, /id="native-dist-settlement"/);
-  assert.match(host.innerHTML, /id="native-dist-settlement-month"[^>]*type="month"/);
+  assert.match(host.innerHTML, /id="native-dist-settlement-month"[^>]*type="month"[^>]*lang="zh-CN"/);
   assert.doesNotMatch(host.innerHTML, /data-native-dist="settle"/);
   assert.match(host.innerHTML, /华东渠道/);
   assert.doesNotMatch(host.innerHTML, /dealer@example\.com/);
@@ -292,7 +292,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
   const panelRoot = document.getElementById('admin-dist-root');
   await entry.listeners.get('click')[0]();
   await flush();
-  assert.match(panelRoot.innerHTML, /id="admin-dist-settlement-month"[^>]*type="month"/);
+  assert.match(panelRoot.innerHTML, /id="admin-dist-settlement-month"[^>]*type="month"[^>]*lang="zh-CN"/);
   assert.doesNotMatch(panelRoot.innerHTML, /data-admin-dist="settle"/);
 
   const change = host.listeners.get('change')[0];
