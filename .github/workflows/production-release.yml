@@ -1326,6 +1326,7 @@ jobs:
           verify_public_assets: true
           expected_asset_version: ${{ inputs.expected_sha }}
           v2_release_id: ${{ needs.prepare-approved-release.outputs.release_id }}
+          timeout_seconds: 300
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -1351,9 +1352,51 @@ jobs:
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
               "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s"
 
-      - name: Automatically restore the previous release after any failed cutover check
+  auto-rollback-failed-approved-release:
+    name: Automatically restore the previous release after a failed cutover
+    if: >-
+      ${{ always() &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'none' &&
+          needs.prepare-approved-release.result == 'success' &&
+          needs.switch-approved-release.result != 'success' }}
+    needs:
+      - prepare-approved-release
+      - switch-approved-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: distributor-server
+    permissions:
+      contents: read
+    outputs:
+      rollback_port: ${{ steps.rollback.outputs.rollback_port }}
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify failed release identity
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_ID: ${{ needs.prepare-approved-release.outputs.release_id }}
+        run: |
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Restore the exact previous release
         id: rollback
-        if: ${{ failure() && (steps.start.outcome == 'success' || steps.start.outcome == 'failure') }}
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -1380,13 +1423,34 @@ jobs:
                 "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
           )
           test "$rollback_port" = "$(printf '%s' "$rollback_port" | grep -E '^[0-9]+$')"
-          echo "ROLLBACK_PORT=$rollback_port" >> "$GITHUB_ENV"
+          echo "rollback_port=$rollback_port" >> "$GITHUB_OUTPUT"
+
+  smoke-auto-rolled-back-approved-release:
+    name: Verify the automatically restored previous release
+    if: >-
+      ${{ always() &&
+          github.ref == 'refs/heads/codex/distributor' &&
+          inputs.maintenance_action == 'none' &&
+          needs.auto-rollback-failed-approved-release.result == 'success' }}
+    needs:
+      - auto-rollback-failed-approved-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Smoke the automatically restored release
-        if: ${{ failure() && steps.rollback.outcome == 'success' }}
         uses: ./.github/actions/distributor-smoke
         with:
           validation_mode: rollback
+          timeout_seconds: 300
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -1394,4 +1458,4 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
-          TARGET_PORT: ${{ env.ROLLBACK_PORT }}
+          TARGET_PORT: ${{ needs.auto-rollback-failed-approved-release.outputs.rollback_port }}

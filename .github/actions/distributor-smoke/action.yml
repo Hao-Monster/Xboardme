@@ -22,6 +22,10 @@ inputs:
     description: Resolve the candidate loopback port from this protected V2 release state.
     required: false
     default: ''
+  timeout_seconds:
+    description: Hard deadline for the complete smoke, including tunnels and browser verification.
+    required: false
+    default: '300'
 
 runs:
   using: composite
@@ -40,7 +44,10 @@ runs:
         SMOKE_VALIDATION_MODE: ${{ inputs.validation_mode }}
         SMOKE_VERIFY_PUBLIC_ASSETS: ${{ inputs.verify_public_assets }}
         SMOKE_VERIFY_PUBLIC_ROUTE: ${{ inputs.verify_public_route }}
+        SMOKE_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
         EXPECTED_ASSET_VERSION: ${{ github.sha }}
         V2_EXPECTED_ASSET_VERSION: ${{ inputs.expected_asset_version }}
         V2_RELEASE_ID: ${{ inputs.v2_release_id }}
-      run: bash "$GITHUB_WORKSPACE/.github/scripts/smoke-distributor-remote.sh"
+      run: >-
+        bash "$GITHUB_WORKSPACE/.github/scripts/run-distributor-smoke-bounded.sh"
+        "$GITHUB_WORKSPACE/.github/scripts/smoke-distributor-remote.sh"

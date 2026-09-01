@@ -331,6 +331,8 @@ jobs:
           bash -n .github/scripts/test-production-runtime-discovery.sh
           bash -n .github/scripts/smoke-admin-assets.sh
           bash -n .github/scripts/smoke-admin-assets-remote.sh
+          bash -n .github/scripts/run-distributor-smoke-bounded.sh
+          bash -n .github/scripts/test-run-distributor-smoke-bounded.sh
           bash -n .github/scripts/smoke-distributor-remote.sh
           bash -n .github/scripts/smoke-distributor-mobile-browser.sh
           bash -n .github/scripts/cleanup-xboard-live-release.sh
@@ -373,6 +375,7 @@ jobs:
           bash .github/scripts/test-audit-xboard-network-debt.sh
           bash .github/scripts/test-cleanup-xboard-network-debt.sh
           bash .github/scripts/test-resolve-xboard-v2-port.sh
+          bash .github/scripts/test-run-distributor-smoke-bounded.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
           bash .github/scripts/test-release-state.sh
