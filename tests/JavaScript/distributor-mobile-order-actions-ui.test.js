@@ -34,8 +34,9 @@ test('mobile distributor orders become readable cards while the desktop table re
   assert.match(styles, /\.dist-order-toolbar \.dist-order-search \{[^}]*grid-template-columns:minmax\(0,1fr\) auto auto/);
 });
 
-test('order analytics, advanced filters, and responsive pagination are wired independently', () => {
+test('overview analytics and order list controls are wired independently', () => {
   assert.match(source, /\/user\/order\/statistics\?/);
+  assert.match(source, /async function renderOverview\(renderContext\)/);
   assert.match(source, /orderSummaryRange/);
   assert.match(source, /orderTrendRange/);
   assert.match(source, /data-trend-preset="\$\{preset\}"/);

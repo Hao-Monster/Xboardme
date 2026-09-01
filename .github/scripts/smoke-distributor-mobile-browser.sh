@@ -106,6 +106,12 @@ cat > "$fixture" <<HTML
       }
       const data = url.includes('/user/info')
         ? { email: 'release-smoke@example.invalid', distributor_name: 'Release Smoke', is_distributor: true }
+        : url.includes('/user/plan/fetch') ? [{
+          id: 1, name: '移动端验收套餐', content: '套餐说明原文：客户活动价￥999 保持可见', transfer_enable: 100,
+          speed_limit: 0, device_limit: 0, reset_traffic_method: null, capacity_limit: null,
+          month_price: 1000, quarter_price: 2700, half_year_price: null, year_price: null,
+          two_year_price: null, three_year_price: null, onetime_price: null
+        }]
         : url.includes('/user/order/statistics') ? {
           range: { start_date: '2026-08-30', end_date: '2026-08-30', days: 1 },
           summary: { order_count: 1, total_amount: 1200 },
@@ -149,18 +155,47 @@ cat > "$fixture" <<HTML
       if (!document.querySelector('[data-renew]')) failures.push('data-renew');
       if (mobile && actions.some((button) => button.getBoundingClientRect().height < 44)) failures.push('touch_target');
       if (mobile && row && row.scrollWidth > row.clientWidth + 1) failures.push('card_overflow');
-      if (!document.querySelector('.dist-order-summary-cards')) failures.push('summary_cards');
-      if (document.querySelectorAll('.dist-chart').length !== 2) failures.push('trend_charts');
+      if (document.querySelector('.dist-page-head')) failures.push('removed_order_heading');
+      if (document.querySelector('.dist-order-insights')) failures.push('analytics_still_on_orders');
       if (!mobile) {
         const wrapper = document.querySelector('.dist-order-list');
         const actionCell = row?.querySelector('.dist-order-action-cell');
         if (!actionCell || getComputedStyle(actionCell).position !== 'sticky') failures.push('sticky_actions');
         if (wrapper && actionCell && actionCell.getBoundingClientRect().right > wrapper.getBoundingClientRect().right + 1) failures.push('actions_clipped');
       }
-      if (document.documentElement.scrollWidth > window.innerWidth + 1) failures.push('page_overflow');
-      result.textContent = failures.length
-        ? 'MOBILE_ASSET_SMOKE=FAIL ' + failures.join(',')
-        : 'MOBILE_ASSET_SMOKE=PASS';
+      if (document.documentElement.scrollWidth > window.innerWidth + 1) failures.push('order_page_overflow');
+
+      window.location.hash = '#/overview';
+      window.setTimeout(function () {
+        const navItems = Array.from(document.querySelectorAll('.dist-sidebar nav button'));
+        if (!document.querySelector('#dist-order-overview-title')) failures.push('overview_heading');
+        if (!document.querySelector('.dist-order-summary-cards')) failures.push('summary_cards');
+        if (document.querySelectorAll('.dist-chart').length !== 2) failures.push('trend_charts');
+        if (navItems.length !== 6) failures.push('six_nav_items');
+        if (mobile && navItems.some((button) => button.getBoundingClientRect().height < 44)) failures.push('nav_touch_target');
+        if (document.documentElement.scrollWidth > window.innerWidth + 1) failures.push('overview_page_overflow');
+        window.location.hash = '#/plan';
+        window.setTimeout(function () {
+          const toggle = document.querySelector('[data-action="toggle-plan-prices"]');
+          const action = document.querySelector('[data-buy]');
+          const pricesHidden = !document.querySelector('.dist-plan-current-price')
+            && !document.querySelector('.dist-period-options strong')
+            && !document.querySelector('.dist-period-options small')
+            && !document.querySelector('.dist-plan-actions span');
+          if (!toggle || toggle.getAttribute('aria-pressed') !== 'false') failures.push('price_toggle_closed');
+          if (!pricesHidden) failures.push('prices_visible_by_default');
+          if (!document.querySelector('.dist-plan-heading')?.textContent.includes('客户活动价￥999')) failures.push('plan_copy_price_hidden');
+          if (!action || !action.textContent.includes('已确认，直接下单')) failures.push('order_action_copy');
+          toggle?.click();
+          if (!document.querySelector('.dist-plan-current-price') || !document.querySelector('.dist-period-options strong') || !document.querySelector('.dist-plan-actions span')) failures.push('prices_not_restored');
+          window.setTimeout(function () {
+            if (document.querySelector('.dist-plan-current-price') || document.querySelector('.dist-period-options strong') || document.querySelector('.dist-plan-actions span')) failures.push('prices_not_auto_hidden');
+            result.textContent = failures.length
+              ? 'MOBILE_ASSET_SMOKE=FAIL ' + failures.join(',')
+              : 'MOBILE_ASSET_SMOKE=PASS';
+          }, 10100);
+        }, 300);
+      }, 500);
     }, 100);
   </script>
   <script src="$DISTRIBUTOR_JS_URL"></script>
@@ -196,7 +231,7 @@ for viewport in 360,800 390,844 412,924 430,932 1366,900 1440,900 1920,1080; do
       --no-proxy-server \
       --user-data-dir="$work_dir/chrome-profile-$profile_name" \
       --window-size="$viewport" \
-      --virtual-time-budget=8000 \
+      --virtual-time-budget=14000 \
       --dump-dom 'http://127.0.0.1:17002/mobile-order-smoke.html' 2>&1
   )
 
