@@ -26,21 +26,46 @@ tags and container age alone are forbidden deletion selectors.
    resolved to one immutable image digest.
 2. Stage, prepare, start and switch reuse that exact digest.
 3. Switch records `switched_at` and `finalize_due_at`. Direct rollback
-   containers remain intact for at least 24 hours.
+   containers remain intact for 24 hours when no successor release is being
+   delivered. Retention time is not a deployment-admission lock.
 4. `retention_audit` is read-only. It discovers production from Caddy, validates
    the active image revision and release state, and records a full inventory
    fingerprint.
-5. `v2_finalize` is allowed only for the exact active release after the rollback
-   window. It requires an authenticated public smoke test before deletion,
-   retires only the recorded direct rollback containers, preserves volumes and
-   the Compose anchor, and repeats preflight, inventory and authenticated smoke
-   tests afterward.
+5. `v2_finalize` is allowed only for the exact active release. The normal path
+   runs after the 24-hour rollback window. A successor-release path may finalize
+   earlier only after that exact signed successor has passed production
+   preflight, isolated database-clone staging, authenticated browser smoke and
+   immutable preparation. Both paths require an authenticated public smoke test
+   before deletion, retire only the recorded oldest direct rollback containers,
+   preserve volumes, backups, release state and the Compose anchor, and repeat
+   preflight, inventory and authenticated smoke tests afterward.
 6. `retention_cleanup` is a separate post-finalize action. It requires the
    exact reviewed resource fingerprint, holds the deployment lock, is
    retryable through release state, and repeats authenticated smoke and
    read-only inventory checks after cleanup.
-7. A future release is blocked unless the active release is finalized and the
-   selected stage port is unused. This prevents rollback chains from growing.
+7. Standard delivery discovers an unused loopback stage port from the guarded
+   range and maintains exactly one direct rollback generation. If the active
+   release still protects its predecessor, the successor is staged and prepared
+   first; only then is the oldest generation retired under the deployment lock.
+   The active runtime remains untouched and becomes the successor's direct
+   rollback target after switch. A future release is blocked only when identity,
+   lifecycle, port, health, migration or verification invariants fail.
+
+## Continuous delivery contract
+
+1. Pull requests run the complete applicable integration and release-safety
+   checks before merge. An empty check set is not evidence.
+2. A production-branch push builds one immutable image, records its full source
+   SHA and digest, and publishes signed provenance. Release never rebuilds it.
+3. The standard release resolves that exact successful build, performs
+   production preflight, chooses an unused stage port, rehearses against an
+   isolated database clone and runs authenticated browser smoke tests.
+4. Rollback-slot rotation is part of the same serialized release workflow. It
+   has no general-purpose force input and cannot run before candidate staging
+   and immutable preparation succeed.
+5. Production preparation and traffic switch remain explicit protected
+   environment boundaries. Continuous delivery removes manual lifecycle chores;
+   it does not remove production authorization or fail-closed controls.
 
 ## One-time historical debt cleanup
 
@@ -78,9 +103,15 @@ Historical debt predating this policy is handled separately from `finalize`:
 ## Rollback and failure handling
 
 - Before finalize, rollback uses the recorded direct previous runtime.
+- During a successor release, the previous active runtime remains running while
+  the oldest rollback generation is retired. After switch it becomes the new
+  direct rollback target, so rollback depth stays at one without blocking
+  delivery.
 - Finalize is fail-closed and retryable. It records the previous release ID
-  before deleting its containers so a partial cleanup cannot change identity.
+  and, for a successor rotation, the exact superseding SHA before deleting its
+  containers so a partial cleanup cannot change identity.
 - If a post-finalize verification fails, stop further cleanup and investigate;
   do not recreate containers from mutable tags. Restore only from the recorded
   immutable digest and retained state/backups.
-- No further production deployment may start while the retention gate fails.
+- No further production mutation may continue while release-slot planning,
+  identity, health, migration, stage, smoke or rotation verification fails.

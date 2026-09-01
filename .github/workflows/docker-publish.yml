@@ -341,10 +341,12 @@ jobs:
           bash -n .github/scripts/v2-low-memory-common.sh
           bash -n .github/scripts/resolve-xboard-v2-port.sh
           bash -n .github/scripts/prepare-xboard-v2-low-memory.sh
+          bash -n .github/scripts/verify-xboard-v2-prepared-release.sh
           bash -n .github/scripts/start-xboard-v2-low-memory.sh
           bash -n .github/scripts/switch-xboard-v2-low-memory.sh
           bash -n .github/scripts/rollback-xboard-v2-low-memory.sh
           bash -n .github/scripts/finalize-xboard-v2-low-memory.sh
+          bash -n .github/scripts/plan-xboard-release-slot.sh
           bash -n .github/scripts/audit-xboard-retention.sh
           bash -n .github/scripts/cleanup-xboard-retention.sh
           bash -n .github/scripts/audit-xboard-network-debt.sh
@@ -353,6 +355,8 @@ jobs:
           bash -n .github/scripts/test-cleanup-xboard-network-debt.sh
           bash -n .github/scripts/test-resolve-xboard-v2-port.sh
           bash -n .github/scripts/test-finalize-xboard-v2-low-memory.sh
+          bash -n .github/scripts/test-plan-xboard-release-slot.sh
+          bash -n .github/scripts/test-verify-xboard-v2-prepared-release.sh
           bash -n .github/scripts/test-cleanup-xboard-retention.sh
           bash -n .github/scripts/test-v2-low-memory-common.sh
           bash -n .github/scripts/test-v2-redis-owner-restore.sh
@@ -363,6 +367,8 @@ jobs:
           bash .github/scripts/test-v2-redis.sh
           bash .github/scripts/test-v2-low-memory-common.sh
           bash .github/scripts/test-finalize-xboard-v2-low-memory.sh
+          bash .github/scripts/test-plan-xboard-release-slot.sh
+          bash .github/scripts/test-verify-xboard-v2-prepared-release.sh
           bash .github/scripts/test-cleanup-xboard-retention.sh
           bash .github/scripts/test-audit-xboard-network-debt.sh
           bash .github/scripts/test-cleanup-xboard-network-debt.sh

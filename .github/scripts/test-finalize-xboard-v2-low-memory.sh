@@ -24,6 +24,7 @@ run_finalize_case() (
   LEGACY_EDGE_ID=old-edge
   state[traffic_state]=active_v2
   state[switched_at]=2020-01-01T00:00:00Z
+  unset V2_FINALIZE_REASON SUPERSEDING_RELEASE_SHA
 
   case "$scenario" in
     legacy|too_early)
@@ -34,19 +35,32 @@ run_finalize_case() (
       done
       [[ "$scenario" != too_early ]] || state[switched_at]=$(date -u +%FT%TZ)
       ;;
-    v2)
+    v2|superseded|same_candidate)
       LEGACY_TOPOLOGY=v2
       for id in old-redis old-web old-horizon old-scheduler old-ws old-edge \
         xboard-v2-maintenance-111-1 "$MAINTENANCE_CONTAINER"; do
         present[$id]=true
       done
+      if [[ "$scenario" == superseded || "$scenario" == same_candidate ]]; then
+        state[switched_at]=$(date -u +%FT%TZ)
+        V2_FINALIZE_REASON=superseded
+        SUPERSEDING_RELEASE_SHA=$(printf 'b%.0s' {1..40})
+        [[ "$scenario" != same_candidate ]] || SUPERSEDING_RELEASE_SHA=$EXPECTED_RELEASE_SHA
+      fi
       ;;
-    retry)
+    retry|retry_superseded|retry_superseded_mismatch)
       LEGACY_TOPOLOGY=v2
       state[traffic_state]=finalizing
       state[previous_release_retiring_id]=111-1
       present[xboard-v2-maintenance-111-1]=true
       present[$MAINTENANCE_CONTAINER]=true
+      if [[ "$scenario" == retry_superseded || "$scenario" == retry_superseded_mismatch ]]; then
+        V2_FINALIZE_REASON=superseded
+        SUPERSEDING_RELEASE_SHA=$(printf 'b%.0s' {1..40})
+        state[finalize_reason]=superseded
+        state[superseded_by_sha]=$SUPERSEDING_RELEASE_SHA
+        [[ "$scenario" != retry_superseded_mismatch ]] || state[superseded_by_sha]=$(printf 'c%.0s' {1..40})
+      fi
       ;;
     *)
       echo "FINALIZE_TEST_FAIL=unknown_scenario:$scenario" >&2
@@ -94,7 +108,7 @@ run_finalize_case() (
         local format=$2 id=$3
         case "$format" in
           *com.docker.compose.project*)
-            [[ "$scenario" != retry ]] || {
+            [[ "$scenario" != retry && "$scenario" != retry_superseded && "$scenario" != retry_superseded_mismatch ]] || {
               echo 'FINALIZE_TEST_FAIL=retry_recomputed_previous_identity' >&2
               return 1
             }
@@ -140,16 +154,20 @@ run_finalize_case() (
       ! grep -qx compose-anchor "$FINALIZE_TEST_LOG"
       [[ ${state[compose_anchor_preserved]} == compose-anchor ]]
       ;;
-    v2|retry)
+    v2|retry|retry_superseded|superseded)
       [[ ${state[previous_release_retired_id]} == 111-1 ]]
       grep -qx xboard-v2-maintenance-111-1 "$FINALIZE_TEST_LOG"
       [[ ${state[compose_anchor_preserved]} == external ]]
       ;;
   esac
+  if [[ "$scenario" == superseded ]]; then
+    [[ ${state[finalize_reason]} == superseded ]]
+    [[ ${state[superseded_by_sha]} == "$SUPERSEDING_RELEASE_SHA" ]]
+  fi
   grep -qx "$MAINTENANCE_CONTAINER" "$FINALIZE_TEST_LOG"
 )
 
-for scenario in legacy v2 retry; do
+for scenario in legacy v2 retry retry_superseded superseded; do
   FINALIZE_TEST_LOG=$(mktemp)
   export FINALIZE_TEST_LOG
   trap 'rm -f -- "$FINALIZE_TEST_LOG"' EXIT
@@ -173,6 +191,40 @@ fi
 grep -q 'V2_FAIL=rollback_window_open:' "$too_early_output"
 [[ ! -s "$FINALIZE_TEST_LOG" ]]
 rm -f -- "$FINALIZE_TEST_LOG" "$too_early_output"
+trap - EXIT
+
+FINALIZE_TEST_LOG=$(mktemp)
+same_candidate_output=$(mktemp)
+export FINALIZE_TEST_LOG
+trap 'rm -f -- "$FINALIZE_TEST_LOG" "$same_candidate_output"' EXIT
+set +e
+run_finalize_case same_candidate >"$same_candidate_output" 2>&1
+same_candidate_status=$?
+set -e
+if ((same_candidate_status == 0)); then
+  echo 'FINALIZE_TEST_FAIL=same_candidate_was_accepted' >&2
+  exit 1
+fi
+grep -q 'V2_FAIL=superseding_release_matches_active' "$same_candidate_output"
+[[ ! -s "$FINALIZE_TEST_LOG" ]]
+rm -f -- "$FINALIZE_TEST_LOG" "$same_candidate_output"
+trap - EXIT
+
+FINALIZE_TEST_LOG=$(mktemp)
+retry_mismatch_output=$(mktemp)
+export FINALIZE_TEST_LOG
+trap 'rm -f -- "$FINALIZE_TEST_LOG" "$retry_mismatch_output"' EXIT
+set +e
+run_finalize_case retry_superseded_mismatch >"$retry_mismatch_output" 2>&1
+retry_mismatch_status=$?
+set -e
+if ((retry_mismatch_status == 0)); then
+  echo 'FINALIZE_TEST_FAIL=retry_candidate_change_was_accepted' >&2
+  exit 1
+fi
+grep -q 'V2_FAIL=superseding_release_changed_during_retry' "$retry_mismatch_output"
+[[ ! -s "$FINALIZE_TEST_LOG" ]]
+rm -f -- "$FINALIZE_TEST_LOG" "$retry_mismatch_output"
 trap - EXIT
 
 echo 'FINALIZE_V2_LOW_MEMORY_TEST=PASS'

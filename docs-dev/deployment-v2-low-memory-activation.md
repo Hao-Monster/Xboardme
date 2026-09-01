@@ -43,8 +43,11 @@ schema, or retire the legacy rollback runtime.
    report or drain them.
 6. Exactly one Horizon, one scheduler and one Redis owner may run after each
    transition.
-7. The old containers are stopped but retained until an explicit finalize at
-   least 24 hours after switch.
+7. The old containers are stopped and retained for 24 hours when no successor
+   is being delivered. A verified successor may rotate that oldest generation
+   earlier only after signed-image resolution, production preflight, isolated
+   database-clone smoke and immutable preparation; the current active runtime
+   then becomes the successor's rollback target.
 8. Every mutating phase uses one host-wide non-blocking `flock` and a JSON
    release state file with an explicit schema version. A second deployment
    cannot overlap, and incompatible future scripts fail closed.
@@ -60,7 +63,7 @@ schema, or retire the legacy rollback runtime.
 | `v2_start` | `prepared` | maintenance on, legacy stopped, V2 core and owners healthy for a scheduler observation window | maintenance |
 | `v2_switch` | `ready` | restores the validated production Caddy route to the V2 edge | V2 |
 | `v2_rollback` | `ready` or `active_v2` | saves V2 Redis, stops V2, restores exact legacy containers and Caddy backup | legacy |
-| `v2_finalize` | `active_v2` for at least 24 h | removes only the recorded stopped legacy containers; keeps volumes and backups | V2 |
+| `v2_finalize` | `active_v2` for at least 24 h, or an exact verified successor is prepared | removes only the recorded stopped legacy containers; keeps volumes, state and backups | V2 |
 
 An external authenticated smoke failure after `v2_switch` triggers
 `v2_rollback` automatically. A failed `v2_start` first invokes the same
@@ -86,7 +89,9 @@ owner uniqueness or scheduler-reaper failures block switch or trigger rollback.
 
 ## Rollback boundary
 
-Rollback is supported until finalize. Finalize never deletes bind-mounted data,
-the Redis volume, Caddy backups or the V2 release state. Enabling Redis AOF is a
-separate later change and may only occur after the legacy RDB-only rollback
-runtime has been retired.
+Rollback is supported until finalize. During successor delivery, finalize only
+retires the oldest rollback generation after the successor is prepared; the
+still-active runtime remains intact and becomes the new direct rollback target
+after switch. Finalize never deletes bind-mounted data, the Redis volume, Caddy
+backups or the V2 release state. Enabling Redis AOF is a separate later change
+and may only occur after the legacy RDB-only rollback runtime has been retired.

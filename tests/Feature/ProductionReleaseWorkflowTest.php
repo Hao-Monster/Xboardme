@@ -76,15 +76,15 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertIsString($workflow);
         $this->assertIsArray($parsed);
         $this->assertSame(
-            ['resolve-signed-image', 'production-preflight', 'retention-gate'],
+            ['resolve-signed-image', 'production-preflight', 'plan-release-slot'],
             $parsed['jobs']['stage-signed-image']['needs'] ?? null
         );
         $this->assertSame(
-            ['resolve-signed-image', 'stage-signed-image'],
+            ['resolve-signed-image', 'stage-signed-image', 'plan-release-slot'],
             $parsed['jobs']['prepare-approved-release']['needs'] ?? null
         );
         $this->assertSame(
-            ['resolve-signed-image', 'prepare-approved-release'],
+            ['resolve-signed-image', 'prepare-approved-release', 'rotate-rollback-slot', 'plan-release-slot'],
             $parsed['jobs']['switch-approved-release']['needs'] ?? null
         );
 
@@ -162,9 +162,20 @@ class ProductionReleaseWorkflowTest extends TestCase
         }
 
         $this->assertStringContainsString("inputs.maintenance_action == 'none'", $parsed['jobs']['resolve-signed-image']['if'] ?? '');
-        $this->assertSame(['production-preflight'], (array) ($parsed['jobs']['retention-gate']['needs'] ?? []));
-        $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=true', $workflow);
-        $this->assertStringContainsString("RETENTION_REQUIRED_FREE_PORT='\$RETENTION_REQUIRED_FREE_PORT'", $workflow);
+        $this->assertSame(['production-preflight'], (array) ($parsed['jobs']['plan-release-slot']['needs'] ?? []));
+        $this->assertSame(
+            ['plan-release-slot', 'prepare-approved-release'],
+            (array) ($parsed['jobs']['rotate-rollback-slot']['needs'] ?? [])
+        );
+        $this->assertStringContainsString('plan-xboard-release-slot.sh', $workflow);
+        $this->assertStringContainsString('verify-xboard-v2-prepared-release.sh', $workflow);
+        $this->assertStringContainsString('Bind the prepared release to the exact planned predecessor', $workflow);
+        $this->assertStringContainsString('RELEASE_SLOT_ROTATION_REQUIRED', $workflow);
+        $this->assertStringContainsString('V2_FINALIZE_REASON=superseded', $workflow);
+        $this->assertStringContainsString('SUPERSEDING_RELEASE_SHA', $workflow);
+        $this->assertStringContainsString('Verify the candidate before rotating the rollback slot', $workflow);
+        $this->assertStringContainsString('Verify production after rotating the rollback slot', $workflow);
+        $this->assertStringNotContainsString('Require the previous rollback lifecycle to be finalized', $workflow);
         $this->assertStringContainsString('Verify public production before retiring rollback assets', $workflow);
         $this->assertStringContainsString('Audit runtime and retained assets after finalize', $workflow);
         $legacyWorkflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
@@ -216,6 +227,8 @@ class ProductionReleaseWorkflowTest extends TestCase
             'maintenance_container',
             'RETENTION_ACTIVE_REDIS_VOLUME=',
             'RETENTION_ACTIVE_APP_DATA_ID=',
+            'RETENTION_ACTIVE_FINALIZE_REASON=',
+            'RETENTION_ACTIVE_SUPERSEDED_BY_SHA=',
             'RETENTION_DIRECT_PREVIOUS_MAINTENANCE=',
             'active_release_not_finalized',
             'rollback_support_not_closed',
@@ -242,6 +255,49 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertStringNotContainsString("done < <(docker ps -aq --no-trunc)\n  size=", $script);
         $this->assertStringContainsString('image_ref_counts["$image_id"]', $script);
         $this->assertStringContainsString('org.opencontainers.image.source', $script);
+    }
+
+    public function test_release_slot_planning_is_read_only_and_supersession_is_exact(): void
+    {
+        $planner = file_get_contents(base_path('.github/scripts/plan-xboard-release-slot.sh'));
+        $preparedVerifier = file_get_contents(base_path('.github/scripts/verify-xboard-v2-prepared-release.sh'));
+        $finalize = file_get_contents(base_path('.github/scripts/finalize-xboard-v2-low-memory.sh'));
+
+        $this->assertIsString($planner);
+        $this->assertIsString($preparedVerifier);
+        $this->assertIsString($finalize);
+        foreach ([
+            'candidate_matches_active',
+            'active_v2:true',
+            'finalized:false',
+            'incompatible_finalize_in_progress',
+            'active_maintenance_port',
+            'for port in {7003..7010}',
+            'RELEASE_SLOT_PLAN=PASS mode=read_only',
+        ] as $guard) {
+            $this->assertStringContainsString($guard, $planner);
+        }
+        foreach (['docker rm', 'release_state_set', 'rm -rf', 'systemctl', 'docker start', 'docker stop'] as $mutation) {
+            $this->assertStringNotContainsString($mutation, $planner, $mutation);
+        }
+        foreach ([
+            'EXPECTED_PREDECESSOR_SHA is required',
+            'prepared_predecessor_sha_mismatch',
+            'v2_assert_legacy_identity',
+            'prepared_predecessor_not_running',
+        ] as $guard) {
+            $this->assertStringContainsString($guard, $preparedVerifier);
+        }
+        foreach ([
+            'V2_FINALIZE_REASON:=retention_window',
+            'SUPERSEDING_RELEASE_SHA is required for superseded finalize',
+            'superseding_release_matches_active',
+            'finalize_reason_changed_during_retry',
+            'superseding_release_changed_during_retry',
+            'superseded_by_sha',
+        ] as $guard) {
+            $this->assertStringContainsString($guard, $finalize);
+        }
     }
 
     public function test_retention_cleanup_is_fingerprinted_retryable_and_preserves_data(): void
