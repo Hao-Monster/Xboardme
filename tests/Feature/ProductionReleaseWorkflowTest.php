@@ -397,7 +397,9 @@ class ProductionReleaseWorkflowTest extends TestCase
 
     public function test_prepare_and_switch_are_separate_approval_boundaries_without_idle_maintenance(): void
     {
-        $workflow = file_get_contents(base_path('.github/workflows/production-release.yml'));
+        $path = base_path('.github/workflows/production-release.yml');
+        $workflow = file_get_contents($path);
+        $parsed = Yaml::parseFile($path);
 
         $this->assertIsString($workflow);
         preg_match(
@@ -428,13 +430,61 @@ class ProductionReleaseWorkflowTest extends TestCase
         );
         $this->assertStringContainsString('switch-xboard-v2-low-memory.sh', $switch['body']);
         $this->assertStringContainsString('verify_public_assets: true', $switch['body']);
-        $this->assertStringContainsString('rollback-xboard-v2-low-memory.sh', $switch['body']);
-        $this->assertStringContainsString(
-            "failure() && (steps.start.outcome == 'success' || steps.start.outcome == 'failure')",
-            $switch['body']
-        );
-        $this->assertStringContainsString('validation_mode: rollback', $switch['body']);
+        $this->assertStringContainsString('timeout_seconds: 300', $switch['body']);
+        $this->assertStringNotContainsString('rollback-xboard-v2-low-memory.sh', $switch['body']);
         $this->assertStringContainsString('preflight-xboard-compose.sh', $switch['body']);
+
+        $rollback = $parsed['jobs']['auto-rollback-failed-approved-release'] ?? null;
+        $rollbackSmoke = $parsed['jobs']['smoke-auto-rolled-back-approved-release'] ?? null;
+        $this->assertIsArray($rollback);
+        $this->assertIsArray($rollbackSmoke);
+        $this->assertSame(
+            ['prepare-approved-release', 'switch-approved-release'],
+            (array) ($rollback['needs'] ?? [])
+        );
+        $this->assertStringContainsString('always()', $rollback['if'] ?? '');
+        $this->assertStringContainsString(
+            "needs.switch-approved-release.result != 'success'",
+            $rollback['if'] ?? ''
+        );
+        $this->assertStringContainsString('rollback-xboard-v2-low-memory.sh', $workflow);
+        $this->assertSame(
+            ['auto-rollback-failed-approved-release'],
+            (array) ($rollbackSmoke['needs'] ?? [])
+        );
+        $this->assertStringContainsString('always()', $rollbackSmoke['if'] ?? '');
+        $this->assertStringContainsString('validation_mode: rollback', $workflow);
+    }
+
+    public function test_distributor_smoke_is_bounded_below_the_switch_job_timeout(): void
+    {
+        $wrapper = file_get_contents(base_path('.github/scripts/run-distributor-smoke-bounded.sh'));
+        $browserSmoke = file_get_contents(base_path('.github/scripts/smoke-distributor-mobile-browser.sh'));
+        $action = file_get_contents(base_path('.github/actions/distributor-smoke/action.yml'));
+
+        $this->assertIsString($wrapper);
+        $this->assertIsString($browserSmoke);
+        $this->assertIsString($action);
+        $this->assertStringContainsString('SMOKE_TIMEOUT_SECONDS:=300', $wrapper);
+        $this->assertStringContainsString('timeout --signal=TERM --kill-after=15s', $wrapper);
+        $this->assertStringContainsString('DISTRIBUTOR_SMOKE_TIMEOUT=FAIL', $wrapper);
+        $this->assertStringContainsString('timeout_seconds:', $action);
+        $this->assertStringContainsString(
+            'SMOKE_TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}',
+            $action
+        );
+        $this->assertStringContainsString('run-distributor-smoke-bounded.sh', $action);
+        $this->assertStringContainsString(
+            'bash -n .github/scripts/run-distributor-smoke-bounded.sh',
+            file_get_contents(base_path('.github/workflows/docker-publish.yml'))
+        );
+        $this->assertStringContainsString(
+            'bash .github/scripts/test-run-distributor-smoke-bounded.sh',
+            file_get_contents(base_path('.github/workflows/docker-publish.yml'))
+        );
+        $this->assertStringContainsString('BROWSER_SMOKE_TIMEOUT_SECONDS:=30', $browserSmoke);
+        $this->assertStringContainsString('timeout --signal=TERM --kill-after=5s', $browserSmoke);
+        $this->assertStringContainsString('browser_timeout viewport=$viewport', $browserSmoke);
     }
 
     public function test_read_only_preflight_cannot_build_or_publish_an_image(): void

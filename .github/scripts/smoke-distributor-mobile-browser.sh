@@ -4,6 +4,7 @@ set -euo pipefail
 : "${DISTRIBUTOR_CSS_URL:?DISTRIBUTOR_CSS_URL is required}"
 : "${DISTRIBUTOR_JS_URL:?DISTRIBUTOR_JS_URL is required}"
 : "${EXPECTED_ASSET_VERSION:?EXPECTED_ASSET_VERSION is required}"
+: "${BROWSER_SMOKE_TIMEOUT_SECONDS:=30}"
 
 if [[ ! "$EXPECTED_ASSET_VERSION" =~ ^[a-f0-9]{40}$ ]]; then
   echo 'MOBILE_ASSET_SMOKE=FAIL invalid_release_version' >&2
@@ -36,6 +37,14 @@ if [[ -z "$browser" ]]; then
 fi
 command -v python3 >/dev/null 2>&1 || {
   echo 'MOBILE_ASSET_SMOKE=FAIL python_unavailable' >&2
+  exit 1
+}
+[[ "$BROWSER_SMOKE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || {
+  echo 'MOBILE_ASSET_SMOKE=FAIL invalid_browser_timeout' >&2
+  exit 1
+}
+((BROWSER_SMOKE_TIMEOUT_SECONDS >= 1 && BROWSER_SMOKE_TIMEOUT_SECONDS <= 120)) || {
+  echo 'MOBILE_ASSET_SMOKE=FAIL invalid_browser_timeout' >&2
   exit 1
 }
 
@@ -223,8 +232,10 @@ fi
 
 for viewport in 360,800 390,844 412,924 430,932 1366,900 1440,900 1920,1080; do
   profile_name=${viewport/,/-}
+  set +e
   browser_output=$(
-    "$browser" \
+    timeout --signal=TERM --kill-after=5s "${BROWSER_SMOKE_TIMEOUT_SECONDS}s" \
+      "$browser" \
       --headless=new \
       --disable-gpu \
       --no-sandbox \
@@ -234,6 +245,18 @@ for viewport in 360,800 390,844 412,924 430,932 1366,900 1440,900 1920,1080; do
       --virtual-time-budget=14000 \
       --dump-dom 'http://127.0.0.1:17002/mobile-order-smoke.html' 2>&1
   )
+  browser_status=$?
+  set -e
+
+  if ((browser_status == 124 || browser_status == 137)); then
+    echo "MOBILE_ASSET_SMOKE=FAIL browser_timeout viewport=$viewport timeout_seconds=$BROWSER_SMOKE_TIMEOUT_SECONDS" >&2
+    exit 1
+  fi
+  if ((browser_status != 0)); then
+    printf '%s\n' "$browser_output" >&2
+    echo "MOBILE_ASSET_SMOKE=FAIL browser_exit viewport=$viewport status=$browser_status" >&2
+    exit 1
+  fi
 
   if ! grep -Fq 'MOBILE_ASSET_SMOKE=PASS' <<< "$browser_output"; then
     printf '%s\n' "$browser_output" >&2
