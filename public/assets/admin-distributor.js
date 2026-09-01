@@ -539,7 +539,7 @@
     renderPanel(`<div class="admin-dist-toolbar">
       <label>分销商<select id="admin-dist-distributor">${distributorOptions(true)}</select></label>
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
-      <label>结算月份<input id="admin-dist-settlement-month" type="month" value="${escapeHtml(state.settlementMonth)}"></label>
+      <label>结算月份<input id="admin-dist-settlement-month" type="month" lang="zh-CN" aria-label="结算月份，格式为年在前、月在后" value="${escapeHtml(state.settlementMonth)}"></label>
       <div class="admin-dist-search"><input id="admin-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button data-admin-dist="search-orders">查询</button><button class="secondary" data-admin-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>下单时间</th><th>用户名称</th><th>已绑定设备</th><th>已用流量</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="11" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
@@ -794,7 +794,7 @@
       <div class="admin-dist-toolbar xboard-native-dist-toolbar">
         <label>分销商<select id="native-dist-distributor">${distributorOptions(true)}</select></label>
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
-        <label>结算月份<input id="native-dist-settlement-month" type="month" value="${escapeHtml(state.settlementMonth)}"></label>
+        <label>结算月份<input id="native-dist-settlement-month" type="month" lang="zh-CN" aria-label="结算月份，格式为年在前、月在后" value="${escapeHtml(state.settlementMonth)}"></label>
         <div class="admin-dist-search"><input id="native-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button type="button" data-native-dist="search-orders">查询</button><button type="button" class="secondary" data-native-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       </div>${nativeSummary()}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>下单时间</th><th>用户名称</th><th>已绑定设备</th><th>已用流量</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="11" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
