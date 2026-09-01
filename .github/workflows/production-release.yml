@@ -43,7 +43,7 @@ on:
         default: 604800
         type: number
       stage_target_port:
-        description: Inactive loopback port used first by the isolated stage and then by maintenance
+        description: Preferred inactive loopback port; the planner safely falls back within 7003-7010
         required: true
         default: 7004
         type: number
@@ -795,13 +795,18 @@ jobs:
     uses: ./.github/workflows/distributor-preflight.yml
     secrets: inherit
 
-  retention-gate:
+  plan-release-slot:
     needs: production-preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: distributor-server
     permissions:
       contents: read
+    outputs:
+      active_release_id: ${{ steps.plan.outputs.active_release_id }}
+      active_revision: ${{ steps.plan.outputs.active_revision }}
+      rotation_required: ${{ steps.plan.outputs.rotation_required }}
+      stage_port: ${{ steps.plan.outputs.stage_port }}
     steps:
       - name: Checkout exact production workflow
         uses: actions/checkout@v7
@@ -818,27 +823,60 @@ jobs:
           ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: Require the previous rollback lifecycle to be finalized
+      - name: Plan one-generation rollback rotation and an unused stage port
+        id: plan
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
-          RETENTION_REQUIRED_FREE_PORT: ${{ inputs.stage_target_port }}
+          PREFERRED_STAGE_PORT: ${{ inputs.stage_target_port }}
         run: |
-          cat .github/scripts/production-runtime-discovery.sh \
-              .github/scripts/release-state.sh \
-              .github/scripts/audit-xboard-retention.sh |
-            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true RETENTION_REQUIRED_FREE_PORT='$RETENTION_REQUIRED_FREE_PORT' bash -s"
+          test "$EXPECTED_WORKFLOW_SHA" = "$GITHUB_SHA"
+          slot_plan=$(
+            cat .github/scripts/production-runtime-discovery.sh \
+                .github/scripts/release-state.sh \
+                .github/scripts/audit-xboard-retention.sh \
+                .github/scripts/plan-xboard-release-slot.sh |
+              bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+                -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+                "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' EXPECTED_CANDIDATE_SHA='$EXPECTED_WORKFLOW_SHA' PREFERRED_STAGE_PORT='$PREFERRED_STAGE_PORT' bash -s"
+          )
+          printf '%s\n' "$slot_plan" | tee "$RUNNER_TEMP/release-slot-plan.txt"
+          field() {
+            key=$1
+            value=$(printf '%s\n' "$slot_plan" | sed -n "s/^$key=//p")
+            test "$(printf '%s\n' "$value" | grep -c .)" = 1
+            printf '%s\n' "$value"
+          }
+          active_release_id=$(field RELEASE_SLOT_ACTIVE_RELEASE_ID)
+          active_revision=$(field RELEASE_SLOT_ACTIVE_REVISION)
+          rotation_required=$(field RELEASE_SLOT_ROTATION_REQUIRED)
+          stage_port=$(field RELEASE_SLOT_STAGE_PORT)
+          test "$active_release_id" = "$(printf '%s' "$active_release_id" | grep -E '^[0-9]+-[0-9]+$')"
+          test "$active_revision" = "$(printf '%s' "$active_revision" | grep -E '^[0-9a-f]{40}$')"
+          test "$rotation_required" = true || test "$rotation_required" = false
+          test "$stage_port" = "$(printf '%s' "$stage_port" | grep -E '^700[3-9]$|^7010$')"
+          git merge-base --is-ancestor "$active_revision" "$EXPECTED_WORKFLOW_SHA"
+          echo "active_release_id=$active_release_id" >> "$GITHUB_OUTPUT"
+          echo "active_revision=$active_revision" >> "$GITHUB_OUTPUT"
+          echo "rotation_required=$rotation_required" >> "$GITHUB_OUTPUT"
+          echo "stage_port=$stage_port" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve the read-only release slot plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-release-slot-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-slot-plan.txt
+          if-no-files-found: error
+          retention-days: 90
 
   stage-signed-image:
     needs:
       - resolve-signed-image
       - production-preflight
-      - retention-gate
+      - plan-release-slot
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: distributor-staging
@@ -891,7 +929,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           STAGE_IMAGE: ${{ needs.resolve-signed-image.outputs.image_ref }}
           STAGE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-          STAGE_PORT: ${{ inputs.stage_target_port }}
+          STAGE_PORT: ${{ needs.plan-release-slot.outputs.stage_port }}
         run: |
           cat .github/scripts/production-runtime-discovery.sh .github/scripts/stage-xboard-green.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -910,7 +948,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
-          TARGET_PORT: ${{ inputs.stage_target_port }}
+          TARGET_PORT: ${{ needs.plan-release-slot.outputs.stage_port }}
 
       - name: Remove the exact isolated stage
         if: ${{ always() }}
@@ -943,6 +981,7 @@ jobs:
     needs:
       - resolve-signed-image
       - stage-signed-image
+      - plan-release-slot
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: distributor-server
@@ -998,7 +1037,7 @@ jobs:
           RELEASE_ID: ${{ steps.release-identity.outputs.release_id }}
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
           RELEASE_IMAGE: ${{ needs.resolve-signed-image.outputs.image_ref }}
-          MAINTENANCE_PORT: ${{ inputs.stage_target_port }}
+          MAINTENANCE_PORT: ${{ needs.plan-release-slot.outputs.stage_port }}
         run: |
           cat .github/scripts/release-state.sh \
               .github/scripts/v2-low-memory-common.sh \
@@ -1006,6 +1045,23 @@ jobs:
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
               "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' RELEASE_IMAGE='$RELEASE_IMAGE' MAINTENANCE_PORT='$MAINTENANCE_PORT' bash -s"
+
+      - name: Bind the prepared release to the exact planned predecessor
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ steps.release-identity.outputs.release_id }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_PREDECESSOR_SHA: ${{ needs.plan-release-slot.outputs.active_revision }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/verify-xboard-v2-prepared-release.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' EXPECTED_PREDECESSOR_SHA='$EXPECTED_PREDECESSOR_SHA' bash -s"
 
       - name: Logout server from GHCR
         if: ${{ always() }}
@@ -1019,11 +1075,154 @@ jobs:
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker logout ghcr.io >/dev/null 2>&1 || true"
 
+  rotate-rollback-slot:
+    name: Rotate the oldest rollback generation after candidate verification
+    needs:
+      - plan-release-slot
+      - prepare-approved-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Verify the candidate before rotating the rollback slot
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ACTIVE_RELEASE_ID: ${{ needs.plan-release-slot.outputs.active_release_id }}
+          ACTIVE_REVISION: ${{ needs.plan-release-slot.outputs.active_revision }}
+          ROTATION_REQUIRED: ${{ needs.plan-release-slot.outputs.rotation_required }}
+        run: |
+          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$ACTIVE_RELEASE_ID" = "$(printf '%s' "$ACTIVE_RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          test "$ACTIVE_REVISION" = "$(printf '%s' "$ACTIVE_REVISION" | grep -E '^[0-9a-f]{40}$')"
+          test "$ROTATION_REQUIRED" = true || test "$ROTATION_REQUIRED" = false
+          git merge-base --is-ancestor "$ACTIVE_REVISION" "$EXPECTED_SHA"
+
+      - name: Recheck public production before rotating the rollback slot
+        if: ${{ needs.plan-release-slot.outputs.rotation_required == 'true' }}
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ needs.plan-release-slot.outputs.active_revision }}
+          v2_release_id: ${{ needs.plan-release-slot.outputs.active_release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Recheck live admin assets before rotating the rollback slot
+        if: ${{ needs.plan-release-slot.outputs.rotation_required == 'true' }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ needs.plan-release-slot.outputs.active_revision }}
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Retire only the active release's oldest direct rollback generation
+        if: ${{ needs.plan-release-slot.outputs.rotation_required == 'true' }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          RELEASE_ID: ${{ needs.plan-release-slot.outputs.active_release_id }}
+          EXPECTED_RELEASE_SHA: ${{ needs.plan-release-slot.outputs.active_revision }}
+          SUPERSEDING_RELEASE_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/release-state.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/finalize-xboard-v2-low-memory.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' V2_FINALIZE_REASON=superseded SUPERSEDING_RELEASE_SHA='$SUPERSEDING_RELEASE_SHA' bash -s"
+
+      - name: Verify production after rotating the rollback slot
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+          ACTIVE_RELEASE_SHA: ${{ needs.plan-release-slot.outputs.active_revision }}
+          STAGE_PORT: ${{ needs.plan-release-slot.outputs.stage_port }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s"
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/audit-xboard-retention.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true RETENTION_REQUIRED_FREE_PORT='$STAGE_PORT' bash -s" |
+            tee "$RUNNER_TEMP/post-rotation-retention-audit.txt"
+
+      - name: Preserve the post-rotation retention inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-post-rotation-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/post-rotation-retention-audit.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Recheck public production after rotating the rollback slot
+        if: ${{ needs.plan-release-slot.outputs.rotation_required == 'true' }}
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ needs.plan-release-slot.outputs.active_revision }}
+          v2_release_id: ${{ needs.plan-release-slot.outputs.active_release_id }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Recheck live admin assets after rotating the rollback slot
+        if: ${{ needs.plan-release-slot.outputs.rotation_required == 'true' }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ needs.plan-release-slot.outputs.active_revision }}
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
   switch-approved-release:
     name: Switch approval / cold start, switch and public verification
     needs:
       - resolve-signed-image
       - prepare-approved-release
+      - rotate-rollback-slot
+      - plan-release-slot
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: distributor-server
@@ -1085,7 +1284,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
-          TARGET_PORT: ${{ inputs.stage_target_port }}
+          TARGET_PORT: ${{ needs.plan-release-slot.outputs.stage_port }}
 
       - name: Recheck privately immediately before traffic switch
         id: pre-switch-smoke
@@ -1101,7 +1300,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
-          TARGET_PORT: ${{ inputs.stage_target_port }}
+          TARGET_PORT: ${{ needs.plan-release-slot.outputs.stage_port }}
 
       - name: Atomically switch public traffic to the prepared release
         id: switch
@@ -1134,7 +1333,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
-          TARGET_PORT: ${{ inputs.stage_target_port }}
+          TARGET_PORT: ${{ needs.plan-release-slot.outputs.stage_port }}
 
       - name: Audit the switched production runtime
         id: post-switch-preflight

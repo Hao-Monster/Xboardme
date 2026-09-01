@@ -80,6 +80,8 @@ active_release_id=''
 active_state_file=''
 active_traffic_state=legacy
 active_rollback_supported=unknown
+active_finalize_reason=none
+active_superseded_by_sha=none
 active_maintenance_container=''
 active_redis_volume=unknown
 active_app_data_id=unknown
@@ -126,6 +128,10 @@ if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
   active_traffic_state=$(release_state_get "$active_state_file" traffic_state)
   active_rollback_supported=$(release_state_get_optional "$active_state_file" rollback_supported)
   [[ -n "$active_rollback_supported" ]] || active_rollback_supported=unknown
+  active_finalize_reason=$(release_state_get_optional "$active_state_file" finalize_reason)
+  active_superseded_by_sha=$(release_state_get_optional "$active_state_file" superseded_by_sha)
+  [[ -n "$active_finalize_reason" ]] || active_finalize_reason=none
+  [[ -n "$active_superseded_by_sha" ]] || active_superseded_by_sha=none
   active_maintenance_container=$(release_state_get_optional "$active_state_file" maintenance_container)
   if [[ -n "$active_maintenance_container" ]] &&
      docker container inspect "$active_maintenance_container" >/dev/null 2>&1; then
@@ -181,6 +187,8 @@ emit "RETENTION_ACTIVE_PROJECT=$active_project"
 emit "RETENTION_ACTIVE_RELEASE_ID=${active_release_id:-legacy}"
 emit "RETENTION_ACTIVE_TRAFFIC_STATE=$active_traffic_state"
 emit "RETENTION_ACTIVE_ROLLBACK_SUPPORTED=$active_rollback_supported"
+emit "RETENTION_ACTIVE_FINALIZE_REASON=$active_finalize_reason"
+emit "RETENTION_ACTIVE_SUPERSEDED_BY_SHA=$active_superseded_by_sha"
 emit "RETENTION_ACTIVE_REVISION=$active_revision"
 emit "RETENTION_ACTIVE_CONTAINER=$active_name"
 emit "RETENTION_ACTIVE_UPSTREAM=$XBOARD_ACTIVE_UPSTREAM"

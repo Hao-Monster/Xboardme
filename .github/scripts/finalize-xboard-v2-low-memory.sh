@@ -11,8 +11,19 @@ fi
 
 : "${RELEASE_ID:?RELEASE_ID is required}"
 : "${EXPECTED_RELEASE_SHA:?EXPECTED_RELEASE_SHA is required}"
+: "${V2_FINALIZE_REASON:=retention_window}"
 : "${V2_FINALIZE_MIN_AGE_SECONDS:=86400}"
-[[ "$V2_FINALIZE_MIN_AGE_SECONDS" =~ ^[0-9]+$ ]] && ((V2_FINALIZE_MIN_AGE_SECONDS >= 86400)) || v2_fail invalid_finalize_age
+case "$V2_FINALIZE_REASON" in
+  retention_window)
+    [[ "$V2_FINALIZE_MIN_AGE_SECONDS" =~ ^[0-9]+$ ]] && ((V2_FINALIZE_MIN_AGE_SECONDS >= 86400)) || v2_fail invalid_finalize_age
+    ;;
+  superseded)
+    : "${SUPERSEDING_RELEASE_SHA:?SUPERSEDING_RELEASE_SHA is required for superseded finalize}"
+    [[ "$SUPERSEDING_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]] || v2_fail invalid_superseding_release_sha
+    [[ "$SUPERSEDING_RELEASE_SHA" != "$EXPECTED_RELEASE_SHA" ]] || v2_fail superseding_release_matches_active
+    ;;
+  *) v2_fail invalid_finalize_reason ;;
+esac
 
 v2_require_tools
 v2_open_release
@@ -24,7 +35,9 @@ switched_at=$(release_state_get "$V2_STATE_FILE" switched_at)
 switched_epoch=$(date -u -d "$switched_at" +%s 2>/dev/null || true)
 [[ "$switched_epoch" =~ ^[0-9]+$ ]] || v2_fail invalid_switch_timestamp
 age_seconds=$(( $(date -u +%s) - switched_epoch ))
-((age_seconds >= V2_FINALIZE_MIN_AGE_SECONDS)) || v2_fail "rollback_window_open:$age_seconds"
+if [[ "$V2_FINALIZE_REASON" == retention_window ]]; then
+  ((age_seconds >= V2_FINALIZE_MIN_AGE_SECONDS)) || v2_fail "rollback_window_open:$age_seconds"
+fi
 
 for service in redis web ws edge horizon scheduler; do
   v2_service_healthy "$service" || v2_fail "finalize_service_unhealthy:$service"
@@ -65,9 +78,23 @@ if [[ "$TRAFFIC_STATE" == active_v2 ]]; then
     v2_assert_recorded_container "$id" legacy
     ! v2_container_running "$id" || v2_fail legacy_container_still_running
   done < <(v2_legacy_ids)
+  release_state_set "$V2_STATE_FILE" finalize_reason "$V2_FINALIZE_REASON"
+  if [[ "$V2_FINALIZE_REASON" == superseded ]]; then
+    release_state_set "$V2_STATE_FILE" superseded_by_sha "$SUPERSEDING_RELEASE_SHA"
+    release_state_set "$V2_STATE_FILE" superseded_at "$(date -u +%FT%TZ)"
+  fi
   release_state_set "$V2_STATE_FILE" traffic_state finalizing
   release_state_set "$V2_STATE_FILE" finalizing_at "$(date -u +%FT%TZ)"
   TRAFFIC_STATE=finalizing
+else
+  recorded_finalize_reason=$(release_state_get_optional "$V2_STATE_FILE" finalize_reason)
+  [[ -z "$recorded_finalize_reason" || "$recorded_finalize_reason" == "$V2_FINALIZE_REASON" ]] ||
+    v2_fail finalize_reason_changed_during_retry
+  if [[ "$V2_FINALIZE_REASON" == superseded ]]; then
+    recorded_superseding_sha=$(release_state_get_optional "$V2_STATE_FILE" superseded_by_sha)
+    [[ -z "$recorded_superseding_sha" || "$recorded_superseding_sha" == "$SUPERSEDING_RELEASE_SHA" ]] ||
+      v2_fail superseding_release_changed_during_retry
+  fi
 fi
 mapfile -t legacy_ids < <(v2_legacy_ids)
 for ((index = ${#legacy_ids[@]} - 1; index >= 0; index--)); do
@@ -94,4 +121,4 @@ release_state_set "$V2_STATE_FILE" previous_release_retired_id "${previous_relea
 release_state_set "$V2_STATE_FILE" previous_maintenance_retired "${previous_maintenance:-none}"
 release_state_set "$V2_STATE_FILE" compose_anchor_preserved "$([[ "$LEGACY_TOPOLOGY" == legacy ]] && echo "$LEGACY_ANCHOR_ID" || echo external)"
 
-echo "V2_FINALIZE=PASS id=$RELEASE_ID age_seconds=$age_seconds traffic_state active_v2 legacy_containers=retired previous_maintenance=${previous_maintenance:-none} compose_anchor=preserved volumes=preserved"
+echo "V2_FINALIZE=PASS id=$RELEASE_ID reason=$V2_FINALIZE_REASON age_seconds=$age_seconds traffic_state active_v2 legacy_containers=retired previous_maintenance=${previous_maintenance:-none} compose_anchor=preserved volumes=preserved"
