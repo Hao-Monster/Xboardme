@@ -14,6 +14,7 @@ class ElementMock {
     this.textContent = '';
     this.innerHTML = '';
     this.className = '';
+    this.classList = { add() {}, remove() {}, toggle() {} };
     this.attributes = new Map();
     this._id = '';
   }
@@ -144,6 +145,15 @@ function response(payload) {
   };
 }
 
+function errorResponse(status, message) {
+  return {
+    ok: false,
+    status,
+    json: async () => ({ status: 'fail', message }),
+    clone() { return this; },
+  };
+}
+
 function binaryResponse() {
   return {
     ok: true,
@@ -168,7 +178,9 @@ async function flush() {
 test('admin order page exposes distributor filters, summary and settlement action', async () => {
   const document = new DocumentMock();
   const requests = [];
+  const confirmMessages = [];
   let settled = false;
+  let settleAttempts = 0;
 
   const fetchMock = async (url, init = {}) => {
     requests.push({ url, init });
@@ -179,6 +191,10 @@ test('admin order page exposes distributor filters, summary and settlement actio
       return response({ status: 'success', data: { count: settled ? 0 : 2, total_amount: settled ? 0 : 6000 } });
     }
     if (url.includes('/order/settlement/settle')) {
+      settleAttempts += 1;
+      if (settleAttempts === 1) {
+        return errorResponse(409, '结算范围已变化，请刷新后重新确认');
+      }
       settled = true;
       return response({ status: 'success', data: { count: 2, total_amount: 6000 } });
     }
@@ -219,7 +235,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
   const window = {
     settings: { secure_path: 'admin-api' },
     fetch: fetchMock,
-    confirm: () => true,
+    confirm: (message) => { confirmMessages.push(message); return true; },
   };
 
   const sandbox = {
@@ -251,6 +267,8 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.ok(host, 'the distributor settlement section should mount in the existing order page');
   assert.match(host.innerHTML, /id="native-dist-distributor"/);
   assert.match(host.innerHTML, /id="native-dist-settlement"/);
+  assert.match(host.innerHTML, /id="native-dist-settlement-month"[^>]*type="month"/);
+  assert.doesNotMatch(host.innerHTML, /data-native-dist="settle"/);
   assert.match(host.innerHTML, /华东渠道/);
   assert.doesNotMatch(host.innerHTML, /dealer@example\.com/);
   assert.match(host.innerHTML, /DIST-ORDER-1/);
@@ -270,18 +288,40 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(host.innerHTML, /data-native-dist="search-orders"/);
   assert.match(host.innerHTML, /data-native-dist="clear-order-search"/);
 
+  const entry = document.getElementById('admin-dist-entry');
+  const panelRoot = document.getElementById('admin-dist-root');
+  await entry.listeners.get('click')[0]();
+  await flush();
+  assert.match(panelRoot.innerHTML, /id="admin-dist-settlement-month"[^>]*type="month"/);
+  assert.doesNotMatch(panelRoot.innerHTML, /data-admin-dist="settle"/);
+
   const change = host.listeners.get('change')[0];
   const click = host.listeners.get('click')[0];
   change({ target: { id: 'native-dist-distributor', value: '7' } });
   await flush();
+  change({ target: { id: 'native-dist-settlement', value: '0' } });
+  await flush();
+  assert.doesNotMatch(host.innerHTML, /data-native-dist="settle"/);
+
+  change({ target: { id: 'native-dist-settlement-month', value: '2026-08' } });
+  await flush();
 
   assert.match(host.innerHTML, /未结算：<b>2<\/b> 个订单/);
   assert.match(host.innerHTML, /合计 <b>¥60\.00<\/b>/);
+  assert.match(host.innerHTML, /结算 华东渠道 2026年8月未结算订单/);
   const filteredRequest = requests.filter(({ url }) => url.includes('/order/fetch')).at(-1);
-  assert.equal(JSON.parse(filteredRequest.init.body).distributor_user_id, '7');
+  const filteredBody = JSON.parse(filteredRequest.init.body);
+  assert.equal(filteredBody.distributor_user_id, '7');
+  assert.equal(filteredBody.settlement_status, 0);
+  assert.equal(filteredBody.settlement_month, '2026-08');
+  const previewRequest = requests.filter(({ url }) => url.includes('/order/settlement/preview')).at(-1);
+  assert.match(previewRequest.url, /distributor_user_id=7/);
+  assert.match(previewRequest.url, /settlement_month=2026-08/);
 
-  change({ target: { id: 'native-dist-settlement', value: '0' } });
+  await entry.listeners.get('click')[0]();
   await flush();
+  assert.match(panelRoot.innerHTML, /id="admin-dist-settlement-month"[^>]*value="2026-08"/);
+  assert.match(panelRoot.innerHTML, /结算 华东渠道 2026年8月未结算订单/);
 
   const exportTarget = {
     disabled: false,
@@ -296,6 +336,7 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.ok(exportRequest, 'xlsx export endpoint should be called');
   assert.match(exportRequest.url, /distributor_user_id=7/);
   assert.match(exportRequest.url, /settlement_status=0/);
+  assert.match(exportRequest.url, /settlement_month=2026-08/);
   assert.doesNotMatch(exportRequest.url, /current|pageSize/);
 
   const settleTarget = {
@@ -304,13 +345,43 @@ test('admin order page exposes distributor filters, summary and settlement actio
       return null;
     },
   };
+  const previewCountBeforeConflict = requests.filter(({ url }) => url.includes('/order/settlement/preview')).length;
   await click({ target: settleTarget });
   await flush();
 
-  const settleRequest = requests.find(({ url }) => url.includes('/order/settlement/settle'));
-  assert.ok(settleRequest, 'settlement endpoint should be called');
-  assert.equal(JSON.parse(settleRequest.init.body).distributor_user_id, 7);
+  assert.match(host.innerHTML, /未结算：<b>2<\/b> 个订单/);
+  assert.ok(
+    requests.filter(({ url }) => url.includes('/order/settlement/preview')).length > previewCountBeforeConflict,
+    'a stale preview conflict should refresh the settlement summary'
+  );
+
+  await click({ target: settleTarget });
+  await flush();
+
+  const settleRequests = requests.filter(({ url }) => url.includes('/order/settlement/settle'));
+  assert.equal(settleRequests.length, 2);
+  settleRequests.forEach((settleRequest) => {
+    assert.deepEqual(JSON.parse(settleRequest.init.body), {
+      distributor_user_id: 7,
+      settlement_month: '2026-08',
+      expected_count: 2,
+      expected_total_amount: 6000,
+    });
+  });
+  assert.deepEqual(confirmMessages, [
+    '确认结算 华东渠道 2026年8月的 2 个未结算订单，共 ¥60.00？',
+    '确认结算 华东渠道 2026年8月的 2 个未结算订单，共 ¥60.00？',
+  ]);
   assert.match(host.innerHTML, /未结算：<b>0<\/b> 个订单/);
+
+  const previewCountBeforeSettledFilter = requests.filter(({ url }) => url.includes('/order/settlement/preview')).length;
+  change({ target: { id: 'native-dist-settlement', value: '1' } });
+  await flush();
+  assert.doesNotMatch(host.innerHTML, /data-native-dist="settle"/);
+  assert.equal(
+    requests.filter(({ url }) => url.includes('/order/settlement/preview')).length,
+    previewCountBeforeSettledFilter
+  );
 
   const injectedName = { value: ' 华东渠道 ' };
   const injectedWrapper = { querySelector: () => injectedName };
@@ -361,4 +432,15 @@ test('admin order page exposes distributor filters, summary and settlement actio
   assert.match(source, /search: state\.orderSearch \|\| null/);
   assert.match(source, /params\.set\('search', state\.orderSearch\)/);
   assert.match(source, /event\.key !== 'Enter'/);
+});
+
+test('release smoke checks require the monthly settlement asset contract', () => {
+  for (const script of [
+    '.github/scripts/smoke-admin-assets-remote.sh',
+    '.github/scripts/smoke-distributor-remote.sh',
+  ]) {
+    const source = fs.readFileSync(script, 'utf8');
+    assert.match(source, /native-dist-settlement-month/);
+    assert.match(source, /expected_total_amount/);
+  }
 });

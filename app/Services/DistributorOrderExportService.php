@@ -32,7 +32,8 @@ class DistributorOrderExportService
 
     public function __construct(
         private readonly DistributorOrderSearchService $searchService,
-        private readonly DistributorOrderFilterService $filterService
+        private readonly DistributorOrderFilterService $filterService,
+        private readonly DistributorSettlementService $settlementService
     )
     {
     }
@@ -40,7 +41,8 @@ class DistributorOrderExportService
     public function downloadForAdmin(
         ?int $distributorUserId,
         ?int $settlementStatus,
-        ?string $search = null
+        ?string $search = null,
+        ?string $settlementMonth = null
     ): BinaryFileResponse
     {
         $query = $this->baseQuery()
@@ -53,6 +55,7 @@ class DistributorOrderExportService
                     : $query->whereNull('v2_order.paid_at');
             });
         $this->searchService->applyToExportQuery($query, $search, true);
+        $this->settlementService->applyMonth($query, $settlementMonth, 'v2_order');
 
         return $this->download(
             $query,

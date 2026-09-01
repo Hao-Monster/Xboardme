@@ -15,6 +15,7 @@
     total: 0,
     selectedDistributor: '',
     settlementStatus: '',
+    settlementMonth: '',
     orderSearch: '',
     summary: null,
     page: 1,
@@ -26,6 +27,21 @@
     .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
   const money = (cents) => `¥${((Number(cents) || 0) / 100).toFixed(2)}`;
+  const settlementMonthLabel = () => {
+    const match = /^(\d{4})-(\d{2})$/.exec(state.settlementMonth);
+    return match ? `${Number(match[1])}年${Number(match[2])}月` : '';
+  };
+  const selectedDistributor = () => state.distributors
+    .find((user) => String(user.id) === String(state.selectedDistributor));
+  const selectedDistributorName = () => {
+    const distributor = selectedDistributor();
+    return distributor?.distributor_name || distributor?.email || '';
+  };
+  const settlementScopeReady = () => Boolean(
+    state.selectedDistributor
+    && state.settlementMonth
+    && state.settlementStatus === '0'
+  );
   const formatTime = (seconds) => seconds ? new Date(Number(seconds) * 1000).toLocaleString() : '-';
   const GIB = 1024 * 1024 * 1024;
   const formatTraffic = (bytes) => {
@@ -118,6 +134,7 @@
     const params = new URLSearchParams();
     if (state.selectedDistributor) params.set('distributor_user_id', state.selectedDistributor);
     if (state.settlementStatus !== '') params.set('settlement_status', state.settlementStatus);
+    if (state.settlementMonth) params.set('settlement_month', state.settlementMonth);
     if (state.orderSearch) params.set('search', state.orderSearch);
     try {
       await downloadFile(`/order/export${params.size ? `?${params}` : ''}`);
@@ -404,14 +421,19 @@
         distributor_only: true,
         distributor_user_id: state.selectedDistributor || null,
         settlement_status: state.settlementStatus === '' ? null : Number(state.settlementStatus),
+        settlement_month: state.settlementMonth || null,
         search: state.orderSearch || null,
       },
     });
     state.orders = payload?.data || [];
     state.total = Number(payload?.total || 0);
     state.summary = null;
-    if (state.selectedDistributor) {
-      state.summary = dataOf(await api(`/order/settlement/preview?distributor_user_id=${encodeURIComponent(state.selectedDistributor)}`));
+    if (settlementScopeReady()) {
+      const params = new URLSearchParams({
+        distributor_user_id: state.selectedDistributor,
+        settlement_month: state.settlementMonth,
+      });
+      state.summary = dataOf(await api(`/order/settlement/preview?${params}`));
     }
   }
 
@@ -513,12 +535,11 @@
 
   function renderOrders() {
     const rows = orderRows();
-    const summary = state.summary
-      ? `<div class="admin-dist-summary"><span>未结算：<b>${state.summary.count}</b> 个订单，合计 <b>${money(state.summary.total_amount)}</b></span><button data-admin-dist="settle" ${state.summary.count ? '' : 'disabled'}>结算全部未结算订单</button></div>`
-      : '<div class="admin-dist-summary muted">选择一个分销商后可计算并执行结算。</div>';
+    const summary = settlementSummary('data-admin-dist="settle"');
     renderPanel(`<div class="admin-dist-toolbar">
       <label>分销商<select id="admin-dist-distributor">${distributorOptions(true)}</select></label>
       <label>结算状态<select id="admin-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
+      <label>结算月份<input id="admin-dist-settlement-month" type="month" value="${escapeHtml(state.settlementMonth)}"></label>
       <div class="admin-dist-search"><input id="admin-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button data-admin-dist="search-orders">查询</button><button class="secondary" data-admin-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       <button data-admin-dist="refresh">刷新</button><button data-admin-dist="export">导出 Excel</button></div>${summary}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>下单时间</th><th>用户名称</th><th>已绑定设备</th><th>已用流量</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="11" class="empty">暂无分销订单</td></tr>'}</tbody></table></div>
@@ -568,14 +589,29 @@
     renderUsers();
   }
 
-  async function settle(refresh = loadOrders) {
-    if (!state.selectedDistributor || !state.summary?.count) return;
-    const distributor = state.distributors.find((user) => String(user.id) === String(state.selectedDistributor));
-    const distributorName = distributor?.distributor_name || distributor?.email || '';
-    if (!window.confirm(`确认结算 ${distributorName} 的 ${state.summary.count} 个订单，共 ${money(state.summary.total_amount)}？`)) return;
-    const result = dataOf(await api('/order/settlement/settle', { method: 'POST', data: { distributor_user_id: Number(state.selectedDistributor) } }));
-    toast(`已结算 ${result.count} 个订单，共 ${money(result.total_amount)}`);
-    await refresh();
+  async function settle(refresh = loadOrders, button = null) {
+    if (!settlementScopeReady() || !state.summary?.count) return;
+    const distributorName = selectedDistributorName();
+    const monthLabel = settlementMonthLabel();
+    const expectedCount = Number(state.summary.count);
+    const expectedTotalAmount = Number(state.summary.total_amount);
+    if (!window.confirm(`确认结算 ${distributorName} ${monthLabel}的 ${expectedCount} 个未结算订单，共 ${money(expectedTotalAmount)}？`)) return;
+    if (button) button.disabled = true;
+    try {
+      const result = dataOf(await api('/order/settlement/settle', { method: 'POST', data: {
+        distributor_user_id: Number(state.selectedDistributor),
+        settlement_month: state.settlementMonth,
+        expected_count: expectedCount,
+        expected_total_amount: expectedTotalAmount,
+      } }));
+      toast(`已结算 ${result.count} 个订单，共 ${money(result.total_amount)}`);
+      await refresh();
+    } catch (error) {
+      if (error.status === 409) await refresh();
+      throw error;
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
 
   function hwidDeviceRows(devices) {
@@ -681,7 +717,7 @@
     try {
       if (action === 'refresh') await loadOrders();
       else if (action === 'export') await exportOrders(event.target.closest('[data-admin-dist]'));
-      else if (action === 'settle') await settle();
+      else if (action === 'settle') await settle(loadOrders, event.target.closest('[data-admin-dist="settle"]'));
       else if (action === 'search-orders') { state.orderSearch = document.getElementById('admin-dist-order-search')?.value.trim() || ''; state.page = 1; await loadOrders(); }
       else if (action === 'clear-order-search') { state.orderSearch = ''; state.page = 1; await loadOrders(); }
       else if (action === 'search-user') await searchUser();
@@ -708,6 +744,10 @@
       state.settlementStatus = event.target.value;
       state.page = 1;
       try { await loadOrders(); } catch (e) { toast(e.message, 'error'); }
+    } else if (event.target.id === 'admin-dist-settlement-month') {
+      state.settlementMonth = event.target.value;
+      state.page = 1;
+      try { await loadOrders(); } catch (e) { toast(e.message, 'error'); }
     }
   }
 
@@ -723,10 +763,26 @@
     return { page, table };
   }
 
+  function settlementSummary(buttonAttribute) {
+    if (!state.selectedDistributor) {
+      return '<div class="admin-dist-summary muted">请选择一个分销商。</div>';
+    }
+    if (!state.settlementMonth) {
+      return '<div class="admin-dist-summary muted">请选择结算月份；批量结算不支持全部历史月份。</div>';
+    }
+    if (state.settlementStatus !== '0') {
+      return '<div class="admin-dist-summary muted">将结算状态设为“未结算”后可预览并执行结算。</div>';
+    }
+    if (!state.summary) {
+      return '<div class="admin-dist-summary muted">正在计算该结算批次的订单数量与金额…</div>';
+    }
+
+    const buttonLabel = `结算 ${selectedDistributorName()} ${settlementMonthLabel()}未结算订单`;
+    return `<div class="admin-dist-summary"><span>未结算：<b>${state.summary.count}</b> 个订单，合计 <b>${money(state.summary.total_amount)}</b></span><button type="button" ${buttonAttribute} ${state.summary.count ? '' : 'disabled'}>${escapeHtml(buttonLabel)}</button></div>`;
+  }
+
   function nativeSummary() {
-    return state.summary
-      ? `<div class="admin-dist-summary"><span>未结算：<b>${state.summary.count}</b> 个订单，合计 <b>${money(state.summary.total_amount)}</b></span><button type="button" data-native-dist="settle" ${state.summary.count ? '' : 'disabled'}>结算全部未结算订单</button></div>`
-      : '<div class="admin-dist-summary muted">选择一个分销商后，将自动计算全部已完成且未结算的订单数量与金额。</div>';
+    return settlementSummary('data-native-dist="settle"');
   }
 
   function renderNativeOrders() {
@@ -738,6 +794,7 @@
       <div class="admin-dist-toolbar xboard-native-dist-toolbar">
         <label>分销商<select id="native-dist-distributor">${distributorOptions(true)}</select></label>
         <label>结算状态<select id="native-dist-settlement"><option value="">全部</option><option value="0" ${state.settlementStatus === '0' ? 'selected' : ''}>未结算</option><option value="1" ${state.settlementStatus === '1' ? 'selected' : ''}>已结算</option></select></label>
+        <label>结算月份<input id="native-dist-settlement-month" type="month" value="${escapeHtml(state.settlementMonth)}"></label>
         <div class="admin-dist-search"><input id="native-dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="订单号/用户名称/订阅链接"><button type="button" data-native-dist="search-orders">查询</button><button type="button" class="secondary" data-native-dist="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>清空</button></div>
       </div>${nativeSummary()}
       <div class="admin-dist-table"><table><thead><tr><th>订单号</th><th>下单时间</th><th>用户名称</th><th>已绑定设备</th><th>已用流量</th><th>分销商</th><th>套餐</th><th>原价</th><th>结算状态</th><th>备注</th><th>操作</th></tr></thead><tbody>${rows || '<tr><td colspan="11" class="empty">暂无符合条件的分销订单</td></tr>'}</tbody></table></div>
@@ -764,7 +821,7 @@
       const action = event.target.closest('[data-native-dist]')?.dataset.nativeDist;
       if (action === 'refresh') await loadNativeOrders();
       else if (action === 'export') await exportOrders(event.target.closest('[data-native-dist]'));
-      else if (action === 'settle') await settle(loadNativeOrders);
+      else if (action === 'settle') await settle(loadNativeOrders, event.target.closest('[data-native-dist="settle"]'));
       else if (action === 'search-orders') { state.orderSearch = document.getElementById('native-dist-order-search')?.value.trim() || ''; state.page = 1; await loadNativeOrders(); }
       else if (action === 'clear-order-search') { state.orderSearch = ''; state.page = 1; await loadNativeOrders(); }
 
@@ -790,6 +847,8 @@
       state.selectedDistributor = event.target.value;
     } else if (event.target.id === 'native-dist-settlement') {
       state.settlementStatus = event.target.value;
+    } else if (event.target.id === 'native-dist-settlement-month') {
+      state.settlementMonth = event.target.value;
     } else {
       return;
     }
