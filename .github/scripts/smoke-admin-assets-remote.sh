@@ -56,6 +56,8 @@ grep -q 'distributor-message-guard.js' "$work_dir/dashboard.html"
 curl --silent --show-error --fail --output "$work_dir/admin-distributor.js" \
   'http://127.0.0.1:17001/assets/admin-distributor.js'
 grep -q '下单时间' "$work_dir/admin-distributor.js"
+grep -q 'native-dist-settlement-month' "$work_dir/admin-distributor.js"
+grep -q 'expected_total_amount' "$work_dir/admin-distributor.js"
 
 bash .github/scripts/smoke-admin-assets.sh
 

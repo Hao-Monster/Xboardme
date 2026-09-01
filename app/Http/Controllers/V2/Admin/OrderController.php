@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\V2\Admin;
 
+use App\Exceptions\ApiException;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\OrderAssign;
 use App\Http\Requests\Admin\OrderUpdate;
@@ -16,6 +17,7 @@ use App\Services\DistributorOrderEntitlementService;
 use App\Services\DistributorOrderService;
 use App\Services\DistributorOrderExportService;
 use App\Services\DistributorOrderSearchService;
+use App\Services\DistributorSettlementService;
 use App\Services\DistributorHwidService;
 use App\Services\PlanService;
 use App\Services\UserService;
@@ -28,18 +30,24 @@ use Illuminate\Support\Facades\Log;
 class OrderController extends Controller
 {
 
-    public function export(Request $request, DistributorOrderExportService $exportService)
+    public function export(
+        Request $request,
+        DistributorOrderExportService $exportService,
+        DistributorSettlementService $settlementService
+    )
     {
         $validated = $request->validate([
             'distributor_user_id' => 'nullable|integer',
             'settlement_status' => 'nullable|integer|in:0,1',
+            'settlement_month' => $settlementService->monthRules(false),
             'search' => 'nullable|string|max:512',
         ]);
 
         return $exportService->downloadForAdmin(
             isset($validated['distributor_user_id']) ? (int) $validated['distributor_user_id'] : null,
             isset($validated['settlement_status']) ? (int) $validated['settlement_status'] : null,
-            $validated['search'] ?? null
+            $validated['search'] ?? null,
+            $validated['settlement_month'] ?? null
         );
     }
 
@@ -153,7 +161,11 @@ class OrderController extends Controller
         ));
     }
 
-    public function fetch(Request $request, DistributorOrderSearchService $searchService)
+    public function fetch(
+        Request $request,
+        DistributorOrderSearchService $searchService,
+        DistributorSettlementService $settlementService
+    )
     {
         $current = $request->input('current', 1);
         $pageSize = $request->input('pageSize', 10);
@@ -176,6 +188,7 @@ class OrderController extends Controller
         $request->validate([
             'distributor_user_id' => 'nullable|integer',
             'settlement_status' => 'nullable|integer|in:0,1',
+            'settlement_month' => $settlementService->monthRules(false),
             'distributor_only' => 'nullable|boolean',
             'search' => 'nullable|string|max:512',
         ]);
@@ -201,6 +214,11 @@ class OrderController extends Controller
                 ? $orderModel->whereNotNull('paid_at')
                 : $orderModel->whereNull('paid_at');
         }
+        $settlementService->applyMonth(
+            $orderModel,
+            $request->input('settlement_month'),
+            'v2_order'
+        );
 
         if ($request->boolean('is_commission')) {
             $orderModel->whereNotNull('invite_user_id')
@@ -492,36 +510,62 @@ class OrderController extends Controller
         return $this->success($order->trade_no);
     }
 
-    public function settlementPreview(Request $request)
+    public function settlementPreview(
+        Request $request,
+        DistributorSettlementService $settlementService
+    )
     {
+        $validated = $request->validate([
+            'settlement_month' => $settlementService->monthRules(true),
+        ]);
         $distributor = $this->resolveDistributor($request);
         if (!$distributor) {
             return $this->fail([422, '请选择有效的分销商']);
         }
 
-        return $this->success($this->getSettlementSummary($distributor->id));
+        return $this->success($this->getSettlementSummary(
+            $distributor->id,
+            $validated['settlement_month'],
+            $settlementService
+        ));
     }
 
-    public function settle(Request $request)
+    public function settle(Request $request, DistributorSettlementService $settlementService)
     {
+        $validated = $request->validate([
+            'settlement_month' => $settlementService->monthRules(true),
+            'expected_count' => 'required|integer|min:0',
+            'expected_total_amount' => 'required|integer|min:0',
+        ]);
         $distributor = $this->resolveDistributor($request);
         if (!$distributor) {
             return $this->fail([422, '请选择有效的分销商']);
         }
 
-        $result = DB::transaction(function () use ($request, $distributor) {
-            $orders = Order::query()
-                ->where('user_id', $distributor->id)
-                ->whereNotNull('distributor_order_id')
-                ->where('status', Order::STATUS_COMPLETED)
-                ->whereNull('paid_at')
-                ->whereHas('distributorSubscription', fn($query) => $query
-                    ->where('distributor_user_id', $distributor->id))
+        $result = DB::transaction(function () use (
+            $request,
+            $distributor,
+            $settlementService,
+            $validated
+        ) {
+            // Order creation and renewal lock the same distributor row first.
+            // Sharing that lock prevents a new order from entering this batch
+            // between the stale-preview check and the settlement update.
+            User::query()->whereKey($distributor->id)->lockForUpdate()->firstOrFail();
+
+            $orders = $settlementService
+                ->unsettledOrderQuery($distributor->id, $validated['settlement_month'])
                 ->lockForUpdate()
                 ->get(['id', 'distributor_order_id', 'total_amount']);
 
             $orderIds = $orders->pluck('id');
             $amount = (int) $orders->sum('total_amount');
+            if (
+                $orders->count() !== (int) $validated['expected_count']
+                || $amount !== (int) $validated['expected_total_amount']
+            ) {
+                throw new ApiException('结算范围已变化，请刷新后重新确认', 409);
+            }
             $settledAt = time();
 
             if ($orders->isNotEmpty()) {
@@ -564,14 +608,14 @@ class OrderController extends Controller
             ->find((int) $request->input('distributor_user_id'));
     }
 
-    private function getSettlementSummary(int $distributorUserId): array
+    private function getSettlementSummary(
+        int $distributorUserId,
+        string $settlementMonth,
+        DistributorSettlementService $settlementService
+    ): array
     {
-        $summary = Order::query()
-            ->join('v2_distributor_order', 'v2_distributor_order.id', '=', 'v2_order.distributor_order_id')
-            ->where('v2_order.user_id', $distributorUserId)
-            ->where('v2_distributor_order.distributor_user_id', $distributorUserId)
-            ->where('v2_order.status', Order::STATUS_COMPLETED)
-            ->whereNull('v2_order.paid_at')
+        $summary = $settlementService
+            ->unsettledOrderQuery($distributorUserId, $settlementMonth)
             ->selectRaw('COUNT(v2_order.id) as order_count, COALESCE(SUM(v2_order.total_amount), 0) as total_amount')
             ->first();
 

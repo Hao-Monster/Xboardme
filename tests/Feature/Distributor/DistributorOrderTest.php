@@ -1124,6 +1124,13 @@ class DistributorOrderTest extends TestCase
         $secondDistributor = $this->makeUser('other-filter-dealer@example.com', true);
         $plan = $this->makePlan();
         $unsettled = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
+        $unsettled->forceFill([
+            'created_at' => Carbon::create(2026, 8, 10, 12, 0, 0, config('app.timezone'))->timestamp,
+        ])->saveOrFail();
+        $previousMonth = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
+        $previousMonth->forceFill([
+            'created_at' => Carbon::create(2026, 7, 31, 23, 59, 59, config('app.timezone'))->timestamp,
+        ])->saveOrFail();
         $settled = $this->createDistributorOrder($firstDistributor, $plan, Plan::PERIOD_MONTHLY);
         $settled->distributorOrder()->update(['settlement_status' => DistributorOrder::SETTLEMENT_SETTLED]);
         $settled->update(['paid_at' => time()]);
@@ -1134,15 +1141,20 @@ class DistributorOrderTest extends TestCase
         $response = $this->get($uri . '?' . http_build_query([
             'distributor_user_id' => $firstDistributor->id,
             'settlement_status' => DistributorOrder::SETTLEMENT_UNSETTLED,
+            'settlement_month' => '2026-08',
         ]));
 
         $rows = $this->readXlsx($response->assertOk());
         $this->assertCount(2, $rows);
         $this->assertSame($unsettled->trade_no, $rows[1][0]);
+        $this->assertNotContains($previousMonth->trade_no, collect($rows)->pluck(0)->all());
+
+        $this->getJson($uri . '?settlement_month=2026-8')->assertUnprocessable();
 
         $this->getJson($uri . '?' . http_build_query([
             'distributor_user_id' => 999999,
             'settlement_status' => DistributorOrder::SETTLEMENT_SETTLED,
+            'settlement_month' => '2026-08',
         ]))->assertStatus(422)
             ->assertJsonPath('status', 'fail')
             ->assertJsonPath('message', '当前筛选条件下没有可导出的订单');
@@ -1375,6 +1387,10 @@ class DistributorOrderTest extends TestCase
         $previewUri = $this->adminRouteUri('settlementPreview');
         $settleUri = $this->adminRouteUri('settle');
         $detailUri = $this->adminRouteUri('detail');
+        $settlementMonth = Carbon::createFromTimestamp(
+            $order->created_at,
+            config('app.timezone')
+        )->format('Y-m');
 
         $unsettled = $this->postJson('/' . $this->adminRouteUri('fetch'), [
             'current' => 1,
@@ -1384,16 +1400,29 @@ class DistributorOrderTest extends TestCase
         $this->assertCount(2, $unsettled);
         $this->assertNotContains($normalOrder->trade_no, collect($unsettled)->pluck('trade_no')->all());
 
-        $this->getJson('/' . $previewUri . '?distributor_user_id=' . $distributor->id)
+        $this->getJson('/' . $previewUri . '?' . http_build_query([
+            'distributor_user_id' => $distributor->id,
+            'settlement_month' => $settlementMonth,
+        ]))
             ->assertOk()
             ->assertJsonPath('data.count', 2)
             ->assertJsonPath('data.total_amount', 6000);
 
-        $this->postJson('/' . $settleUri, ['distributor_user_id' => $distributor->id])
+        $this->postJson('/' . $settleUri, [
+            'distributor_user_id' => $distributor->id,
+            'settlement_month' => $settlementMonth,
+            'expected_count' => 2,
+            'expected_total_amount' => 6000,
+        ])
             ->assertOk()
             ->assertJsonPath('data.count', 2)
             ->assertJsonPath('data.total_amount', 6000);
-        $this->postJson('/' . $settleUri, ['distributor_user_id' => $distributor->id])
+        $this->postJson('/' . $settleUri, [
+            'distributor_user_id' => $distributor->id,
+            'settlement_month' => $settlementMonth,
+            'expected_count' => 0,
+            'expected_total_amount' => 0,
+        ])
             ->assertOk()
             ->assertJsonPath('data.count', 0);
 
@@ -1423,6 +1452,156 @@ class DistributorOrderTest extends TestCase
                 'data.subscribe_url',
                 app(DistributorOrderService::class)->subscriptionUrl($delivery)
             );
+    }
+
+    public function test_admin_monthly_settlement_uses_order_time_boundaries_and_rejects_stale_preview(): void
+    {
+        $timezone = config('app.timezone');
+        Carbon::setTestNow(Carbon::create(2026, 8, 15, 12, 0, 0, $timezone));
+        try {
+            $distributor = $this->makeUser('monthly-settlement@example.com', true);
+            $otherDistributor = $this->makeUser('other-monthly-settlement@example.com', true);
+            $plan = $this->makePlan();
+            $augustStart = $this->createDistributorOrder(
+                $distributor,
+                $plan,
+                Plan::PERIOD_MONTHLY,
+                '八月首单'
+            );
+            $augustStart->forceFill([
+                'created_at' => Carbon::create(2026, 8, 1, 0, 0, 0, $timezone)->timestamp,
+                'updated_at' => Carbon::create(2026, 8, 1, 0, 0, 0, $timezone)->timestamp,
+            ])->saveOrFail();
+            $deliveryId = (int) $augustStart->distributor_order_id;
+
+            $makeRelatedOrder = function (
+                string $tradeNo,
+                Carbon $createdAt,
+                int $status = Order::STATUS_COMPLETED,
+                ?int $paidAt = null
+            ) use ($distributor, $plan, $deliveryId): Order {
+                return Order::create([
+                    'user_id' => $distributor->id,
+                    'plan_id' => $plan->id,
+                    'period' => Plan::PERIOD_MONTHLY,
+                    'trade_no' => $tradeNo,
+                    'total_amount' => 3000,
+                    'type' => Order::TYPE_RENEWAL,
+                    'status' => $status,
+                    'paid_at' => $paidAt,
+                    'distributor_order_id' => $deliveryId,
+                    'created_at' => $createdAt->timestamp,
+                    'updated_at' => $createdAt->timestamp,
+                ]);
+            };
+
+            $july = $makeRelatedOrder(
+                'MONTHLY-JULY-END',
+                Carbon::create(2026, 7, 31, 23, 59, 59, $timezone)
+            );
+            $augustEnd = $makeRelatedOrder(
+                'MONTHLY-AUGUST-END',
+                Carbon::create(2026, 8, 31, 23, 59, 59, $timezone)
+            );
+            $september = $makeRelatedOrder(
+                'MONTHLY-SEPTEMBER-START',
+                Carbon::create(2026, 9, 1, 0, 0, 0, $timezone)
+            );
+            $pending = $makeRelatedOrder(
+                'MONTHLY-AUGUST-PENDING',
+                Carbon::create(2026, 8, 20, 12, 0, 0, $timezone),
+                Order::STATUS_PENDING
+            );
+            $alreadySettledAt = Carbon::create(2026, 8, 25, 12, 0, 0, $timezone)->timestamp;
+            $alreadySettled = $makeRelatedOrder(
+                'MONTHLY-AUGUST-SETTLED',
+                Carbon::create(2026, 8, 25, 12, 0, 0, $timezone),
+                Order::STATUS_COMPLETED,
+                $alreadySettledAt
+            );
+            $otherOrder = $this->createDistributorOrder(
+                $otherDistributor,
+                $plan,
+                Plan::PERIOD_MONTHLY,
+                '其他分销商'
+            );
+            $otherOrder->forceFill([
+                'created_at' => Carbon::create(2026, 8, 10, 12, 0, 0, $timezone)->timestamp,
+                'updated_at' => Carbon::create(2026, 8, 10, 12, 0, 0, $timezone)->timestamp,
+            ])->saveOrFail();
+
+            Sanctum::actingAs($this->makeUser('monthly-settlement-admin@example.com', false, [
+                'is_admin' => true,
+            ]));
+            $fetchUri = '/' . $this->adminRouteUri('fetch');
+            $previewUri = '/' . $this->adminRouteUri('settlementPreview');
+            $settleUri = '/' . $this->adminRouteUri('settle');
+
+            $this->postJson($fetchUri, [
+                'current' => 1,
+                'pageSize' => 20,
+                'distributor_only' => true,
+                'distributor_user_id' => $distributor->id,
+                'settlement_status' => DistributorOrder::SETTLEMENT_UNSETTLED,
+                'settlement_month' => '2026-08',
+            ])->assertOk()
+                ->assertJsonPath('total', 3)
+                ->assertJsonMissing(['trade_no' => $july->trade_no])
+                ->assertJsonMissing(['trade_no' => $september->trade_no])
+                ->assertJsonMissing(['trade_no' => $alreadySettled->trade_no])
+                ->assertJsonMissing(['trade_no' => $otherOrder->trade_no]);
+
+            $this->getJson($previewUri . '?' . http_build_query([
+                'distributor_user_id' => $distributor->id,
+            ]))->assertUnprocessable();
+            $this->getJson($previewUri . '?' . http_build_query([
+                'distributor_user_id' => $distributor->id,
+                'settlement_month' => '2026-8',
+            ]))->assertUnprocessable();
+            $this->getJson($previewUri . '?' . http_build_query([
+                'distributor_user_id' => $distributor->id,
+                'settlement_month' => '2026-08',
+            ]))->assertOk()
+                ->assertJsonPath('data.count', 2)
+                ->assertJsonPath('data.total_amount', 6000);
+
+            $this->postJson($settleUri, [
+                'distributor_user_id' => $distributor->id,
+                'settlement_month' => '2026-08',
+                'expected_count' => 2,
+                'expected_total_amount' => 5999,
+            ])->assertStatus(409)
+                ->assertJsonPath('status', 'fail')
+                ->assertJsonPath('message', '结算范围已变化，请刷新后重新确认');
+            $this->assertNull($augustStart->refresh()->paid_at);
+            $this->assertNull($augustEnd->refresh()->paid_at);
+
+            $this->postJson($settleUri, [
+                'distributor_user_id' => $distributor->id,
+                'settlement_month' => '2026-08',
+                'expected_count' => 2,
+                'expected_total_amount' => 6000,
+            ])->assertOk()
+                ->assertJsonPath('data.count', 2)
+                ->assertJsonPath('data.total_amount', 6000);
+
+            $this->assertNotNull($augustStart->refresh()->paid_at);
+            $this->assertNotNull($augustEnd->refresh()->paid_at);
+            $this->assertNull($july->refresh()->paid_at);
+            $this->assertNull($september->refresh()->paid_at);
+            $this->assertNull($pending->refresh()->paid_at);
+            $this->assertSame($alreadySettledAt, $alreadySettled->refresh()->paid_at);
+            $this->assertNull($otherOrder->refresh()->paid_at);
+
+            $this->postJson($settleUri, [
+                'distributor_user_id' => $distributor->id,
+                'settlement_month' => '2026-08',
+                'expected_count' => 2,
+                'expected_total_amount' => 6000,
+            ])->assertStatus(409);
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_distributor_role_can_be_added_without_revoking_admin_or_staff_roles(): void

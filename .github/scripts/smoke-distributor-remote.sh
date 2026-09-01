@@ -231,6 +231,8 @@ grep -q '客户端管理' admin-client-catalog.js
 curl --silent --show-error --fail --output admin-distributor.js \
   'http://127.0.0.1:17001/assets/admin-distributor.js'
 grep -q '下单时间' admin-distributor.js
+grep -q 'native-dist-settlement-month' admin-distributor.js
+grep -q 'expected_total_amount' admin-distributor.js
 if [ "$SMOKE_VALIDATION_MODE" = 'release' ]; then
   curl --silent --show-error --fail --output admin-realtime-status.js \
     'http://127.0.0.1:17001/assets/admin-realtime-status.js'
