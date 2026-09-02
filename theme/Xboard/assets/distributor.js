@@ -39,7 +39,7 @@
       checkDelivery: '检查交付', issuing: '二维码已领取，正在等待订阅配置成功下发。',
       qrTitle: '客户订阅二维码', premiumCustomerQrTitle: '高端客户{customer}的订阅码', premiumCustomerQrTitleFallback: '高端客户的订阅码', qrHint: '请让终端客户使用订阅客户端扫描。二维码只能成功领取一次。',
       done: '已添加成功', closePopup: '关闭弹窗', buyAgain: '再次购买该套餐', planUnavailable: '套餐已下架或当前周期不可购买',
-      claimedOk: '订阅已经领取，可以安全关闭。', orderNo: '订单号', orderTime: '下单时间', amount: '订单金额', status: '订单状态',
+      claimedOk: '订阅已经领取，可以安全关闭。', sequence: '序号', orderNo: '订单号', orderTime: '下单时间', amount: '订单金额', status: '订单状态',
       waitingConnection: '等待用户开启代理进入网络', connectedThrough: '客户已经通过 {node} 节点进入网络',
       settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
       remark: '备注', actions: '操作', customerName: '用户名称',
@@ -64,7 +64,7 @@
       income: '收入', orderCount: '订单', customRange: '自定义', apply: '应用', advancedFilters: '高级筛选', hideFilters: '收起筛选',
       startDate: '开始日期', endDate: '结束日期', minimumAmount: '最低金额', maximumAmount: '最高金额', allPeriods: '全部周期',
       trend: '增长趋势', thisWeek: '本周', thisMonth: '本月', lastNinetyDays: '近三个月', dailyOrders: '每日订单量', dailyIncome: '每日收入',
-      previousPage: '上一页', nextPage: '下一页', loadMore: '加载更多', pageSize: '每页', totalOrders: '共 {count} 个订单',
+      firstPage: '首页', previousPage: '上一页', nextPage: '下一页', lastPage: '尾页', jumpTo: '跳至', jump: '跳转', loadMore: '加载更多', pageSize: '每页', totalOrders: '共 {count} 个订单',
       viewAllDevices: '查看全部 {count} 个', collapseDevices: '收起设备', filterReset: '重置筛选',
       knowledgeSubtitle: '查看产品使用方法与常见问题。', knowledgeSearchPlaceholder: '搜索使用文档',
       lastUpdated: '最后更新', noArticles: '暂无使用文档', copyShare: '复制分享', copySuccess: '复制成功', copyFailed: '复制失败，请重试',
@@ -86,7 +86,7 @@
       checkDelivery: 'Check delivery', issuing: 'The QR was claimed. Waiting for the subscription configuration response.',
       qrTitle: 'Customer subscription QR', premiumCustomerQrTitle: 'Premium customer {customer} subscription QR', premiumCustomerQrTitleFallback: 'Premium customer subscription QR', qrHint: 'Scan with the customer subscription client. This QR can only be claimed once.',
       done: 'Added successfully', closePopup: 'Close window', buyAgain: 'Buy this plan again', planUnavailable: 'This plan or billing period is no longer available',
-      claimedOk: 'The subscription was claimed. It is safe to close.', orderNo: 'Order', orderTime: 'Order time', amount: 'Amount', status: 'Status',
+      claimedOk: 'The subscription was claimed. It is safe to close.', sequence: 'No.', orderNo: 'Order', orderTime: 'Order time', amount: 'Amount', status: 'Status',
       waitingConnection: 'Waiting for the customer to enable the proxy', connectedThrough: 'Customer connected through {node}',
       settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
       remark: 'Remark', actions: 'Actions', customerName: 'Customer name',
@@ -112,7 +112,7 @@
       income: 'Income', orderCount: 'orders', customRange: 'Custom', apply: 'Apply', advancedFilters: 'More filters', hideFilters: 'Hide filters',
       startDate: 'Start date', endDate: 'End date', minimumAmount: 'Minimum amount', maximumAmount: 'Maximum amount', allPeriods: 'All periods',
       trend: 'Growth trend', thisWeek: 'This week', thisMonth: 'This month', lastNinetyDays: 'Last 90 days', dailyOrders: 'Daily orders', dailyIncome: 'Daily income',
-      previousPage: 'Previous', nextPage: 'Next', loadMore: 'Load more', pageSize: 'Per page', totalOrders: '{count} orders',
+      firstPage: 'First', previousPage: 'Previous', nextPage: 'Next', lastPage: 'Last', jumpTo: 'Go to', jump: 'Go', loadMore: 'Load more', pageSize: 'Per page', totalOrders: '{count} orders',
       viewAllDevices: 'View all {count}', collapseDevices: 'Collapse devices', filterReset: 'Reset filters',
       knowledgeSubtitle: 'Browse product guides and frequently asked questions.', knowledgeSearchPlaceholder: 'Search documentation',
       lastUpdated: 'Last updated', noArticles: 'No documentation available', copyShare: 'Copy share link', copySuccess: 'Copied', copyFailed: 'Copy failed. Try again.',
@@ -917,7 +917,8 @@
     state.orderPerPage = Number(payload?.per_page || state.orderPerPage);
     state.orderTotal = Number(payload?.total || state.orders.length);
     state.orderLastPage = Number(payload?.last_page || 1);
-    const rows = state.orders.map((order) => {
+    const rows = state.orders.map((order, index) => {
+      const sequence = append ? index + 1 : ((state.orderPage - 1) * state.orderPerPage) + index + 1;
       const isRenewal = Number(order.type) === 2;
       const settlement = order.settlement_status === 1 ? t('settled') : t('unsettled');
       const entitlement = order.subscription_entitlement;
@@ -929,7 +930,7 @@
           ? `<div class="dist-bound-device-list">${boundDevices.map((hwid) => `<code>${escapeHtml(hwid)}</code>`).join('')}</div>`
           : `<span class="dist-device-state">${t('unboundDevice')}</span>`;
       const entitlementTarget = `dist-entitlement-${order.id}`;
-      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr id="${entitlementTarget}" class="dist-entitlement-row" data-entitlement-for="${escapeHtml(order.trade_no)}" hidden><td colspan="11"><div><strong>${t('entitlement')}</strong><dl>
+      const entitlementRow = entitlement && order.is_subscription_origin ? `<tr id="${entitlementTarget}" class="dist-entitlement-row" data-entitlement-for="${escapeHtml(order.trade_no)}" hidden><td colspan="14"><div><strong>${t('entitlement')}</strong><dl>
         <span><dt>${t('plan')}</dt><dd>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</dd></span>
         <span><dt>${t('totalTraffic')}</dt><dd>${formatTraffic(entitlement.transfer_enable)}</dd></span>
         <span><dt>${t('usedTraffic')}</dt><dd>${formatTraffic(entitlement.used_traffic)}</dd></span>
@@ -952,13 +953,15 @@
       const actionCellClass = hasActions ? 'dist-order-action-cell has-actions' : 'dist-order-action-cell';
       const utilityActionCount = Number(order.is_subscription_origin) + Number(Boolean(entitlementAction));
       const orderType = escapeHtml(isRenewal ? t('renew') : t('newPurchase'));
-      const originalOrder = isRenewal && order.subscription_trade_no
-        ? `<small>${t('originalOrder')}：${escapeHtml(order.subscription_trade_no)}</small>`
-        : '';
+      const originalOrder = isRenewal && order.subscription_trade_no ? escapeHtml(order.subscription_trade_no) : '—';
       const rowClass = isRenewal ? 'dist-renewal-order-row' : 'dist-origin-order-row';
       return `<tr class="${rowClass}" data-subscription-trade-no="${escapeHtml(order.subscription_trade_no || order.trade_no)}">
-        <td class="dist-order-identity"><strong>${escapeHtml(order.trade_no)}</strong><small>${orderType}</small>${originalOrder}</td>
+        <td class="dist-order-sequence">${sequence}</td>
+        <td class="${actionCellClass}"><div class="dist-order-actions utility-count-${utilityActionCount}">${order.is_subscription_origin ? qrAction : ''}${entitlementAction}${renewAction}</div></td>
+        <td class="dist-order-identity"><strong>${escapeHtml(order.trade_no)}</strong></td>
         <td class="dist-order-time" data-label="${t('orderTime')}">${formatTime(order.created_at)}</td>
+        <td class="dist-order-type" data-label="${t('orderType')}">${orderType}</td>
+        <td class="dist-order-original" data-label="${t('originalOrder')}">${originalOrder}</td>
         <td class="dist-order-customer" data-label="${t('customerName')}">${escapeHtml(order.customer_name || '-')}</td>
         <td class="dist-order-plan" data-label="${t('plan')}">${escapeHtml(order.plan?.name || '-')}</td><td class="dist-order-period" data-label="${t('period')}">${escapeHtml(periodLabel(order.period))}</td>
         <td class="dist-order-amount" data-label="${t('amount')}">${money(order.total_amount)}<small class="dist-free">${t('free')}</small></td>
@@ -966,17 +969,13 @@
         <td class="dist-order-used-traffic" data-label="${t('usedTraffic')}">${formatTraffic(usedTraffic)}</td>
         <td class="dist-order-settlement"><span class="dist-badge settle-${order.settlement_status}">${settlement}</span></td>
         <td class="dist-order-remark-cell" data-label="${t('remark')}"><div class="dist-order-remark">${order.remark ? escapeHtml(order.remark) : '—'}</div></td>
-        <td class="${actionCellClass}"><div class="dist-order-actions utility-count-${utilityActionCount}">${order.is_subscription_origin ? qrAction : ''}${entitlementAction}${renewAction}</div></td>
       </tr>${entitlementRow}`;
     }).join('');
-    const desktopPagination = `<div class="dist-desktop-pagination"><span>${t('totalOrders').replace('{count}', state.orderTotal)}</span><label>${t('pageSize')}<select id="dist-order-page-size">${[20, 50, 100].map((size) => `<option value="${size}" ${size === state.orderPerPage ? 'selected' : ''}>${size}</option>`).join('')}</select></label><button type="button" data-order-page="${state.orderPage - 1}" ${state.orderPage <= 1 ? 'disabled' : ''}>${t('previousPage')}</button><strong>${state.orderPage} / ${state.orderLastPage}</strong><button type="button" data-order-page="${state.orderPage + 1}" ${state.orderPage >= state.orderLastPage ? 'disabled' : ''}>${t('nextPage')}</button></div>`;
-    const mobilePagination = state.orderPage < state.orderLastPage
-      ? `<button type="button" class="dist-load-more" data-action="load-more-orders">${t('loadMore')}（${state.orders.length}/${state.orderTotal}）</button>`
-      : `<p class="dist-mobile-order-total">${t('totalOrders').replace('{count}', state.orderTotal)}</p>`;
+    const desktopPagination = `<div class="dist-desktop-pagination"><span>${t('totalOrders').replace('{count}', state.orderTotal)}</span><label>${t('pageSize')}<select id="dist-order-page-size" aria-label="${t('pageSize')}">${[20, 50, 100].map((size) => `<option value="${size}" ${size === state.orderPerPage ? 'selected' : ''}>${size}</option>`).join('')}</select></label><button type="button" data-order-page="1" ${state.orderPage <= 1 ? 'disabled' : ''}>${t('firstPage')}</button><button type="button" data-order-page="${state.orderPage - 1}" ${state.orderPage <= 1 ? 'disabled' : ''}>${t('previousPage')}</button><strong>${state.orderPage} / ${state.orderLastPage}</strong><button type="button" data-order-page="${state.orderPage + 1}" ${state.orderPage >= state.orderLastPage ? 'disabled' : ''}>${t('nextPage')}</button><button type="button" data-order-page="${state.orderLastPage}" ${state.orderPage >= state.orderLastPage ? 'disabled' : ''}>${t('lastPage')}</button><label class="dist-page-jump">${t('jumpTo')} <input id="dist-order-page-input" type="number" min="1" max="${state.orderLastPage}" inputmode="numeric" aria-label="${t('jumpTo')}"><span>${state.locale === 'zh-CN' ? '页' : ''}</span></label><button type="button" data-action="jump-order-page">${t('jump')}</button></div>`;
     setContent(`<div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button type="button" class="secondary dist-filter-toggle" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button data-action="export-orders">${t('exportExcel')}</button></div>
       ${renderOrderFilters()}
-      <div class="dist-table-wrap dist-order-list"><table class="dist-orders-table"><thead><tr><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th><th>${t('actions')}</th></tr></thead>
-      <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="11" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>${desktopPagination}${mobilePagination}`);
+      <div class="dist-table-wrap dist-order-list"><table class="dist-orders-table"><colgroup><col class="dist-col-sequence"><col class="dist-col-actions"><col class="dist-col-order-no"><col class="dist-col-order-time"><col class="dist-col-order-type"><col class="dist-col-original"><col class="dist-col-customer"><col class="dist-col-plan"><col class="dist-col-period"><col class="dist-col-amount"><col class="dist-col-devices"><col class="dist-col-traffic"><col class="dist-col-settlement"><col class="dist-col-remark"></colgroup><thead><tr><th>${t('sequence')}</th><th>${t('actions')}</th><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('orderType')}</th><th>${t('originalOrder')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th></tr></thead>
+      <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="14" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>${desktopPagination}`);
     if (append) window.scrollTo({ top: oldScrollY, behavior: 'instant' });
   }
 
@@ -1282,6 +1281,15 @@
     const pageButton = target.closest('[data-order-page]');
     if (pageButton && !pageButton.disabled) {
       state.orderPage = Number(pageButton.dataset.orderPage);
+      try { await renderOrders(); window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { toast(e.message, 'error'); }
+      return;
+    }
+    const jumpPageButton = target.closest('[data-action="jump-order-page"]');
+    if (jumpPageButton) {
+      const pageInput = document.getElementById('dist-order-page-input');
+      const requestedPage = Number.parseInt(pageInput?.value || '', 10);
+      if (!Number.isInteger(requestedPage)) { pageInput?.focus(); return; }
+      state.orderPage = Math.min(Math.max(requestedPage, 1), state.orderLastPage);
       try { await renderOrders(); window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { toast(e.message, 'error'); }
       return;
     }

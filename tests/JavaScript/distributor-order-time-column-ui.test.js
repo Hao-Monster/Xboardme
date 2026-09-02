@@ -10,10 +10,10 @@ const adminStyles = fs.readFileSync('public/assets/admin-distributor.css', 'utf8
 test('distributor order table places order time beside the order number', () => {
   const renderer = distributor.match(/async function renderOrders\(options = \{\}\)[\s\S]*?function periodLabel/);
   assert.ok(renderer, 'distributor order renderer should exist');
-  assert.match(renderer[0], /<th>\$\{t\('orderNo'\)\}<\/th><th>\$\{t\('orderTime'\)\}<\/th><th>\$\{t\('customerName'\)\}<\/th>/);
-  assert.match(renderer[0], /<td class="dist-order-identity"><strong>\$\{escapeHtml\(order\.trade_no\)\}<\/strong><small>\$\{orderType\}<\/small>\$\{originalOrder\}<\/td>\s*<td class="dist-order-time" data-label="\$\{t\('orderTime'\)\}">\$\{formatTime\(order\.created_at\)\}<\/td>/);
+  assert.match(renderer[0], /<th>\$\{t\('sequence'\)\}<\/th><th>\$\{t\('actions'\)\}<\/th><th>\$\{t\('orderNo'\)\}<\/th><th>\$\{t\('orderTime'\)\}<\/th><th>\$\{t\('orderType'\)\}<\/th><th>\$\{t\('originalOrder'\)\}<\/th>/);
+  assert.match(renderer[0], /<td class="dist-order-identity"><strong>\$\{escapeHtml\(order\.trade_no\)\}<\/strong><\/td>\s*<td class="dist-order-time" data-label="\$\{t\('orderTime'\)\}">\$\{formatTime\(order\.created_at\)\}<\/td>/);
   assert.doesNotMatch(renderer[0], /\$\{orderType\} · \$\{formatTime\(order\.created_at\)\}/);
-  assert.match(renderer[0], /colspan="11"/);
+  assert.match(renderer[0], /colspan="14"/);
   assert.match(distributorStyles, /\.dist-order-time \{[^}]*white-space:nowrap/);
 });
 

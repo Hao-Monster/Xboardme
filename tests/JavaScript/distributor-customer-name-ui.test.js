@@ -23,5 +23,9 @@ test('distributor order list shows the customer name and preserves historical bl
   assert.ok(ordersBlock, 'order list renderer should exist');
   assert.match(ordersBlock[0], /t\('customerName'\)/);
   assert.match(ordersBlock[0], /escapeHtml\(order\.customer_name \|\| '-'\)/);
-  assert.match(ordersBlock[0], /colspan="11"/);
+  assert.match(ordersBlock[0], /colspan="14"/);
+  assert.match(ordersBlock[0], /<th>\$\{t\('sequence'\)\}<\/th><th>\$\{t\('actions'\)\}<\/th><th>\$\{t\('orderNo'\)\}<\/th>/);
+  assert.match(ordersBlock[0], /<td class="dist-order-sequence">\$\{sequence\}<\/td>/);
+  assert.match(ordersBlock[0], /class="dist-order-type"/);
+  assert.match(ordersBlock[0], /class="dist-order-original"/);
 });
