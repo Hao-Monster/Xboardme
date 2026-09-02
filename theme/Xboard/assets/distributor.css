@@ -291,7 +291,7 @@ html.distributor-mode.dist-modal-open,html.distributor-mode.dist-modal-open body
   .dist-order-toolbar .dist-order-search { grid-column:1/-1; gap:6px; }
   .dist-order-toolbar>.dist-filter-toggle,.dist-order-toolbar>[data-action="export-orders"] { grid-column:auto; width:100%; height:32px; min-height:32px; }
   .dist-filter-grid input,.dist-filter-grid select { width:100%; min-height:42px; }
-  .dist-order-list { max-height:calc(100vh - 250px); border-radius:0; }
+  .dist-order-list { max-height:calc(100vh - 250px); overflow:auto; border-radius:0; }
   .dist-order-list .dist-orders-table { display:table!important; width:100%; min-width:1517px!important; }
   .dist-order-list .dist-orders-table thead { position:sticky; width:auto; height:auto; margin:0; padding:0; overflow:visible; clip:auto; white-space:nowrap; border:0; }
   .dist-order-list .dist-orders-table tbody { display:table-row-group; width:auto; }

@@ -158,6 +158,7 @@ cat > "$fixture" <<HTML
       if (!table) failures.push('orders_table');
       if (mobile && (!heading || getComputedStyle(heading).position !== 'sticky')) failures.push('sticky_heading');
       if (mobile && (!row || getComputedStyle(row).display !== 'table-row')) failures.push('compact_table_row');
+      if (mobile && (!wrapper || getComputedStyle(wrapper).overflowY === 'visible')) failures.push('mobile_order_overflow_container');
       if (mobile && (!wrapper || table.scrollWidth <= wrapper.clientWidth)) failures.push('horizontal_order_scroll');
       if (mobile && wrapper && orderIdentity) {
         const orderLeftBeforeScroll = orderIdentity.getBoundingClientRect().left;

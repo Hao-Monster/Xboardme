@@ -81,6 +81,7 @@ class ThemeAssetReleaseIntegrityTest extends TestCase
         $this->assertStringContainsString('data-renew', $browserSmoke);
         $this->assertStringContainsString('horizontal_order_scroll', $browserSmoke);
         $this->assertStringContainsString('horizontal_scroll_movement', $browserSmoke);
+        $this->assertStringContainsString('mobile_order_overflow_container', $browserSmoke);
         $this->assertStringContainsString('hidden_entitlement_visible', $browserSmoke);
         $this->assertStringContainsString('settlement_not_in_advanced_filters', $browserSmoke);
         $this->assertStringContainsString('MOBILE_ASSET_SMOKE=PASS', $browserSmoke);
