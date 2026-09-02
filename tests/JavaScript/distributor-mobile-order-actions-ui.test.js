@@ -10,6 +10,7 @@ test('distributor orders use a compact horizontally scrollable table on desktop 
   assert.ok(renderer, 'the distributor order renderer should exist');
 
   assert.match(renderer[0], /class="dist-table-wrap dist-order-list"/);
+  assert.match(renderer[0], /class="dist-table-wrap dist-order-list" tabindex="0" aria-label="\$\{t\('orders'\)\}"/);
   assert.match(renderer[0], /class="dist-orders-table"/);
   assert.match(renderer[0], /class="dist-order-identity"/);
   assert.match(renderer[0], /class="dist-order-settlement"/);
@@ -27,11 +28,15 @@ test('distributor orders use a compact horizontally scrollable table on desktop 
   assert.match(renderer[0], /data-label="\$\{t\('remark'\)\}"/);
   assert.match(renderer[0], /<thead><tr><th>\$\{t\('sequence'\)\}<\/th><th>\$\{t\('actions'\)\}<\/th><th>\$\{t\('orderNo'\)\}<\/th><th>\$\{t\('orderTime'\)\}<\/th>/);
 
-  assert.match(styles, /\.dist-order-list \.dist-orders-table \{[^}]*min-width:1569px[^}]*table-layout:fixed/);
+  assert.match(styles, /\.dist-order-list \.dist-orders-table \{[^}]*min-width:1517px[^}]*table-layout:fixed/);
   assert.match(styles, /@media \(max-width:900px\)/);
-  assert.match(styles, /\.dist-order-list \.dist-orders-table \{ display:table!important; width:100%; min-width:1569px!important; \}/);
-  assert.match(styles, /nth-child\(2\)[^}]*position:sticky; left:36px[^}]*width:180px/);
+  assert.match(styles, /\.dist-order-list \.dist-orders-table \{ display:table!important; width:100%; min-width:1517px!important; \}/);
+  assert.match(styles, /nth-child\(2\)[^}]*position:sticky; left:36px[^}]*width:128px/);
   assert.match(styles, /\.dist-order-list \.dist-orders-table th[^}]*position:sticky; top:0/);
+  assert.match(styles, /\.dist-order-list \.dist-orders-table \.dist-entitlement-row\[hidden\] \{ display:none!important; \}/);
+  assert.match(styles, /\.dist-order-list \.dist-orders-table \.dist-orders-empty \{ display:table-row; \}/);
+  assert.match(styles, /\.dist-order-list \.dist-orders-table \.dist-order-time:before[\s\S]*content:none/);
+  assert.match(styles, /\.dist-order-list \.dist-orders-table \.dist-bound-device-list \{[^}]*white-space:nowrap/);
   assert.match(styles, /border-radius:0/);
 });
 

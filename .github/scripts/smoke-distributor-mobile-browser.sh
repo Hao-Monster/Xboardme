@@ -139,8 +139,13 @@ cat > "$fixture" <<HTML
       window.clearInterval(verifier);
 
       const result = document.getElementById('mobile-smoke-result');
+      const wrapper = document.querySelector('.dist-order-list');
       const table = document.querySelector('.dist-orders-table');
       const heading = document.querySelector('.dist-orders-table thead');
+      const sequenceCell = row?.querySelector('.dist-order-sequence');
+      const actionCell = row?.querySelector('.dist-order-action-cell');
+      const orderIdentity = row?.querySelector('.dist-order-identity');
+      const hiddenEntitlement = document.querySelector('.dist-entitlement-row[hidden]');
       const settlement = document.querySelector('.dist-order-settlement');
       const boundDevices = document.querySelector('.dist-order-bound-devices');
       const usedTraffic = document.querySelector('.dist-order-used-traffic');
@@ -149,11 +154,26 @@ cat > "$fixture" <<HTML
       const mobile = window.innerWidth <= 640;
       if (mobile && !window.matchMedia('(max-width:640px), (max-width:900px) and (hover:none) and (pointer:coarse)').matches) failures.push('mobile_media_query');
       if (!row) failures.push('mobile_order_row');
+      if (!wrapper) failures.push('order_table_wrapper');
       if (!table) failures.push('orders_table');
-      if (mobile && (!heading || getComputedStyle(heading).position !== 'absolute')) failures.push('desktop_heading_visible');
-      if (mobile && (!row || getComputedStyle(row).display !== 'grid')) failures.push('card_grid');
+      if (mobile && (!heading || getComputedStyle(heading).position !== 'sticky')) failures.push('sticky_heading');
+      if (mobile && (!row || getComputedStyle(row).display !== 'table-row')) failures.push('compact_table_row');
+      if (mobile && (!wrapper || table.scrollWidth <= wrapper.clientWidth)) failures.push('horizontal_order_scroll');
+      if (mobile && wrapper && orderIdentity) {
+        const orderLeftBeforeScroll = orderIdentity.getBoundingClientRect().left;
+        wrapper.scrollLeft = 240;
+        if (wrapper.scrollLeft < 1 || orderIdentity.getBoundingClientRect().left >= orderLeftBeforeScroll) failures.push('horizontal_scroll_movement');
+        wrapper.scrollLeft = 0;
+      }
       if (!mobile && (!heading || getComputedStyle(heading).position === 'absolute')) failures.push('desktop_heading_hidden');
       if (!mobile && row && getComputedStyle(row).display === 'grid') failures.push('desktop_row_layout');
+      if (!sequenceCell || getComputedStyle(sequenceCell).position !== 'sticky') failures.push('sticky_sequence');
+      if (!actionCell || getComputedStyle(actionCell).position !== 'sticky') failures.push('sticky_actions');
+      if (!orderIdentity || getComputedStyle(orderIdentity).position === 'sticky') failures.push('order_number_not_scrollable');
+      if (!hiddenEntitlement || getComputedStyle(hiddenEntitlement).display !== 'none') failures.push('hidden_entitlement_visible');
+      const settlementFilter = document.querySelector('#dist-order-filters #dist-order-settlement');
+      if (!settlementFilter) failures.push('settlement_not_in_advanced_filters');
+      if (document.querySelector('.dist-order-toolbar > label #dist-order-settlement')) failures.push('settlement_still_in_toolbar');
       if (!settlement || settlement.getBoundingClientRect().width < 1) failures.push('settlement_status');
       if (!boundDevices || boundDevices.getBoundingClientRect().width < 1 || !boundDevices.textContent.includes('vivo V2227A ntqwnji2mzky')) failures.push('bound_device_hwid');
       if (!document.querySelector('[data-device-toggle]')) failures.push('bound_device_expand');
@@ -162,14 +182,10 @@ cat > "$fixture" <<HTML
       if (!document.querySelector('[data-subscription-qr]')) failures.push('data-subscription-qr');
       if (!document.querySelector('[data-entitlement-toggle]')) failures.push('data-entitlement-toggle');
       if (!document.querySelector('[data-renew]')) failures.push('data-renew');
-      if (mobile && actions.some((button) => button.getBoundingClientRect().height < 44)) failures.push('touch_target');
-      if (mobile && row && row.scrollWidth > row.clientWidth + 1) failures.push('card_overflow');
+      if (actions.some((button) => button.getBoundingClientRect().height < 27)) failures.push('compact_action_height');
       if (document.querySelector('.dist-page-head')) failures.push('removed_order_heading');
       if (document.querySelector('.dist-order-insights')) failures.push('analytics_still_on_orders');
       if (!mobile) {
-        const wrapper = document.querySelector('.dist-order-list');
-        const actionCell = row?.querySelector('.dist-order-action-cell');
-        if (!actionCell || getComputedStyle(actionCell).position !== 'sticky') failures.push('sticky_actions');
         if (wrapper && actionCell && actionCell.getBoundingClientRect().right > wrapper.getBoundingClientRect().right + 1) failures.push('actions_clipped');
       }
       if (document.documentElement.scrollWidth > window.innerWidth + 1) failures.push('order_page_overflow');

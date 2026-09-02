@@ -65,7 +65,7 @@ foreach (['dist-orders-table', 'dist-order-identity', 'data-subscription-qr', 'd
         throw new RuntimeException("Distributor mobile order marker is missing: {$marker}");
     }
 }
-foreach (['grid-template-areas:', '.dist-order-actions>*', 'min-height:44px'] as $marker) {
+foreach (['min-width:1517px', 'touch-action:pan-x pan-y', '.dist-entitlement-row[hidden] { display:none!important; }'] as $marker) {
     if (!str_contains($distributorCss, $marker)) {
         throw new RuntimeException("Distributor mobile CSS marker is missing: {$marker}");
     }

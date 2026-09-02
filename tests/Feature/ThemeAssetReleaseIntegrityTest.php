@@ -54,6 +54,7 @@ class ThemeAssetReleaseIntegrityTest extends TestCase
         $action = file_get_contents(base_path('.github/actions/distributor-smoke/action.yml'));
         $smoke = file_get_contents(base_path('.github/scripts/smoke-distributor-remote.sh'));
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
+        $assetVerifier = file_get_contents(base_path('.github/scripts/verify-theme-assets.php'));
 
         $this->assertStringContainsString('EXPECTED_ASSET_VERSION: ${{ github.sha }}', $action);
         $this->assertStringContainsString('verify_public_assets:', $action);
@@ -61,6 +62,9 @@ class ThemeAssetReleaseIntegrityTest extends TestCase
         $this->assertStringContainsString('sha256sum', $smoke);
         $this->assertStringContainsString('smoke-distributor-mobile-browser.sh', $smoke);
         $this->assertStringContainsString('verify_public_assets: true', $workflow);
+        $this->assertStringContainsString('min-width:1517px', $assetVerifier);
+        $this->assertStringContainsString('touch-action:pan-x pan-y', $assetVerifier);
+        $this->assertStringContainsString('.dist-entitlement-row[hidden] { display:none!important; }', $assetVerifier);
 
         $browserSmokePath = base_path('.github/scripts/smoke-distributor-mobile-browser.sh');
         $this->assertFileExists($browserSmokePath);
@@ -75,6 +79,10 @@ class ThemeAssetReleaseIntegrityTest extends TestCase
         $this->assertStringContainsString('data-subscription-qr', $browserSmoke);
         $this->assertStringContainsString('data-entitlement-toggle', $browserSmoke);
         $this->assertStringContainsString('data-renew', $browserSmoke);
+        $this->assertStringContainsString('horizontal_order_scroll', $browserSmoke);
+        $this->assertStringContainsString('horizontal_scroll_movement', $browserSmoke);
+        $this->assertStringContainsString('hidden_entitlement_visible', $browserSmoke);
+        $this->assertStringContainsString('settlement_not_in_advanced_filters', $browserSmoke);
         $this->assertStringContainsString('MOBILE_ASSET_SMOKE=PASS', $browserSmoke);
     }
 }

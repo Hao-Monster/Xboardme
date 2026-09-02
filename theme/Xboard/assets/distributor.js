@@ -44,11 +44,11 @@
       settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
       remark: '备注', actions: '操作', customerName: '用户名称',
       boundDevices: '已绑定设备', unboundDevice: '尚未绑定设备', hwidDisabled: '未启用设备绑定',
-      viewSubscriptionQr: '查看订阅二维码', subscriptionPending: '订阅尚未生成',
+      viewSubscriptionQr: '查看订阅二维码', subscriptionQrAction: '二维码', subscriptionPending: '订阅尚未生成',
       subscriptionBoundDevice: '订阅已绑定设备', subscriptionUnboundDevice: '订阅尚未绑定设备',
       subscriptionHwidDisabled: '该订阅未启用设备绑定', copyImage: '复制图片', downloadImage: '下载图片',
       copyImageUnsupported: '当前浏览器不支持复制图片，请使用下载图片',
-      entitlement: '订阅权益', viewEntitlement: '查看订阅权益', hideEntitlement: '收起订阅权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
+      entitlement: '订阅权益', viewEntitlement: '查看订阅权益', hideEntitlement: '收起订阅权益', entitlementAction: '权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
       expiresAt: '到期时间', speedLimit: '限速', deviceLimit: '设备限制', permanent: '长期有效', unlimited: '不限',
       renew: '续费', renewTitle: '续费现有订阅', renewHint: '续费后订阅链接、二维码、UUID 和已绑定设备保持不变。',
       renewPeriod: '续费周期', renewCurrentExpiry: '当前到期时间', renewConfirm: '确认续费', renewSuccess: '续费成功',
@@ -91,11 +91,11 @@
       settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
       remark: 'Remark', actions: 'Actions', customerName: 'Customer name',
       boundDevices: 'Bound devices', unboundDevice: 'No device bound', hwidDisabled: 'Device binding disabled',
-      viewSubscriptionQr: 'View subscription QR', subscriptionPending: 'Subscription not generated',
+      viewSubscriptionQr: 'View subscription QR', subscriptionQrAction: 'QR', subscriptionPending: 'Subscription not generated',
       subscriptionBoundDevice: 'Subscription bound to device', subscriptionUnboundDevice: 'Subscription has no bound device',
       subscriptionHwidDisabled: 'Device binding is disabled for this subscription', copyImage: 'Copy image', downloadImage: 'Download image',
       copyImageUnsupported: 'This browser cannot copy images. Use Download image instead.',
-      entitlement: 'Subscription entitlement', viewEntitlement: 'View subscription entitlement', hideEntitlement: 'Hide subscription entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
+      entitlement: 'Subscription entitlement', viewEntitlement: 'View subscription entitlement', hideEntitlement: 'Hide subscription entitlement', entitlementAction: 'Entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
       expiresAt: 'Expires at', speedLimit: 'Speed limit', deviceLimit: 'Device limit', permanent: 'Never expires', unlimited: 'Unlimited',
       renew: 'Renew', renewTitle: 'Renew subscription', renewHint: 'The subscription URL, QR code, UUID, and bound devices will stay unchanged.',
       renewPeriod: 'Renewal period', renewCurrentExpiry: 'Current expiry', renewConfirm: 'Confirm renewal', renewSuccess: 'Renewed',
@@ -747,7 +747,8 @@
   function toggleEntitlement(entitlementToggle, entitlementRow) {
     const willExpand = entitlementToggle.getAttribute('aria-expanded') !== 'true';
     entitlementToggle.setAttribute('aria-expanded', String(willExpand));
-    entitlementToggle.textContent = t(willExpand ? 'hideEntitlement' : 'viewEntitlement');
+    entitlementToggle.setAttribute('aria-label', t(willExpand ? 'hideEntitlement' : 'viewEntitlement'));
+    entitlementToggle.textContent = t('entitlementAction');
     entitlementRow.hidden = !willExpand;
     entitlementToggle.closest?.('tr')?.classList.toggle('is-entitlement-open', willExpand);
   }
@@ -882,6 +883,7 @@
   function collectOrderFilters() {
     const periods = Array.from(document.querySelectorAll('input[name="dist-order-period"]:checked')).map((input) => input.value);
     return {
+      settlementStatus: document.getElementById('dist-order-settlement')?.value || '',
       startDate: document.getElementById('dist-order-start')?.value || '',
       endDate: document.getElementById('dist-order-end')?.value || '',
       periods,
@@ -894,7 +896,7 @@
     const filters = state.orderFilters;
     const periods = PERIODS.map(([key, zh, en]) => `<label><input type="checkbox" name="dist-order-period" value="${key}" ${filters.periods.includes(key) ? 'checked' : ''}><span>${state.locale === 'zh-CN' ? zh : en}</span></label>`).join('');
     return `<section id="dist-order-filters" class="dist-order-filters" ${state.orderFiltersOpen ? '' : 'hidden'} aria-label="${t('advancedFilters')}">
-      <div class="dist-filter-grid"><label>${t('startDate')}<input id="dist-order-start" type="date" value="${filters.startDate}"></label><label>${t('endDate')}<input id="dist-order-end" type="date" value="${filters.endDate}"></label><label>${t('minimumAmount')}<input id="dist-order-min-amount" inputmode="decimal" value="${escapeHtml(filters.minAmount)}" placeholder="0.00"></label><label>${t('maximumAmount')}<input id="dist-order-max-amount" inputmode="decimal" value="${escapeHtml(filters.maxAmount)}" placeholder="0.00"></label></div>
+      <div class="dist-filter-grid"><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><label>${t('startDate')}<input id="dist-order-start" type="date" value="${filters.startDate}"></label><label>${t('endDate')}<input id="dist-order-end" type="date" value="${filters.endDate}"></label><label>${t('minimumAmount')}<input id="dist-order-min-amount" inputmode="decimal" value="${escapeHtml(filters.minAmount)}" placeholder="0.00"></label><label>${t('maximumAmount')}<input id="dist-order-max-amount" inputmode="decimal" value="${escapeHtml(filters.maxAmount)}" placeholder="0.00"></label></div>
       <fieldset><legend>${t('period')}</legend><div class="dist-period-filter-options">${periods}</div></fieldset>
       <div class="dist-filter-actions"><button type="button" class="secondary" data-action="reset-order-filters">${t('filterReset')}</button><button type="button" data-action="apply-order-filters">${t('apply')}</button></div>
     </section>`;
@@ -941,13 +943,13 @@
         <span><dt>${t('boundDevices')}</dt><dd>${boundDeviceContent}</dd></span>
       </dl></div></td></tr>` : '';
       const qrAction = order.can_view_subscription_qr
-        ? `<button type="button" class="dist-link-btn" data-subscription-qr="${escapeHtml(order.trade_no)}">${t('viewSubscriptionQr')}</button>`
+        ? `<button type="button" class="dist-link-btn" data-subscription-qr="${escapeHtml(order.trade_no)}" aria-label="${t('viewSubscriptionQr')}">${t('subscriptionQrAction')}</button>`
         : `<span class="dist-action-disabled" role="status" aria-disabled="true">${t('subscriptionPending')}</span>`;
       const renewAction = order.can_renew
         ? `<button type="button" class="dist-link-btn dist-renew-btn" data-renew="${escapeHtml(order.trade_no)}">${t('renew')}</button>`
         : '';
       const entitlementAction = entitlement && order.is_subscription_origin
-        ? `<button type="button" class="dist-link-btn dist-entitlement-toggle" data-entitlement-toggle="${entitlementTarget}" aria-expanded="false" aria-controls="${entitlementTarget}">${t('viewEntitlement')}</button>`
+        ? `<button type="button" class="dist-link-btn dist-entitlement-toggle" data-entitlement-toggle="${entitlementTarget}" aria-expanded="false" aria-controls="${entitlementTarget}" aria-label="${t('viewEntitlement')}">${t('entitlementAction')}</button>`
         : '';
       const hasActions = Boolean(order.is_subscription_origin || entitlementAction || renewAction);
       const actionCellClass = hasActions ? 'dist-order-action-cell has-actions' : 'dist-order-action-cell';
@@ -972,9 +974,9 @@
       </tr>${entitlementRow}`;
     }).join('');
     const desktopPagination = `<div class="dist-desktop-pagination"><span>${t('totalOrders').replace('{count}', state.orderTotal)}</span><label>${t('pageSize')}<select id="dist-order-page-size" aria-label="${t('pageSize')}">${[20, 50, 100].map((size) => `<option value="${size}" ${size === state.orderPerPage ? 'selected' : ''}>${size}</option>`).join('')}</select></label><button type="button" data-order-page="1" ${state.orderPage <= 1 ? 'disabled' : ''}>${t('firstPage')}</button><button type="button" data-order-page="${state.orderPage - 1}" ${state.orderPage <= 1 ? 'disabled' : ''}>${t('previousPage')}</button><strong>${state.orderPage} / ${state.orderLastPage}</strong><button type="button" data-order-page="${state.orderPage + 1}" ${state.orderPage >= state.orderLastPage ? 'disabled' : ''}>${t('nextPage')}</button><button type="button" data-order-page="${state.orderLastPage}" ${state.orderPage >= state.orderLastPage ? 'disabled' : ''}>${t('lastPage')}</button><label class="dist-page-jump">${t('jumpTo')} <input id="dist-order-page-input" type="number" min="1" max="${state.orderLastPage}" inputmode="numeric" aria-label="${t('jumpTo')}"><span>${state.locale === 'zh-CN' ? '页' : ''}</span></label><button type="button" data-action="jump-order-page">${t('jump')}</button></div>`;
-    setContent(`<div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><label>${t('settlementFilter')}<select id="dist-order-settlement"><option value="">${t('allSettlements')}</option><option value="0" ${state.orderSettlementStatus === '0' ? 'selected' : ''}>${t('unsettled')}</option><option value="1" ${state.orderSettlementStatus === '1' ? 'selected' : ''}>${t('settled')}</option></select></label><button type="button" class="secondary dist-filter-toggle" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button data-action="export-orders">${t('exportExcel')}</button></div>
+    setContent(`<div class="dist-order-toolbar"><div class="dist-order-search"><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><button type="button" class="secondary dist-filter-toggle" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button data-action="export-orders">${t('exportExcel')}</button></div>
       ${renderOrderFilters()}
-      <div class="dist-table-wrap dist-order-list"><table class="dist-orders-table"><colgroup><col class="dist-col-sequence"><col class="dist-col-actions"><col class="dist-col-order-no"><col class="dist-col-order-time"><col class="dist-col-order-type"><col class="dist-col-original"><col class="dist-col-customer"><col class="dist-col-plan"><col class="dist-col-period"><col class="dist-col-amount"><col class="dist-col-devices"><col class="dist-col-traffic"><col class="dist-col-settlement"><col class="dist-col-remark"></colgroup><thead><tr><th>${t('sequence')}</th><th>${t('actions')}</th><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('orderType')}</th><th>${t('originalOrder')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th></tr></thead>
+      <div class="dist-table-wrap dist-order-list" tabindex="0" aria-label="${t('orders')}"><table class="dist-orders-table"><colgroup><col class="dist-col-sequence"><col class="dist-col-actions"><col class="dist-col-order-no"><col class="dist-col-order-time"><col class="dist-col-order-type"><col class="dist-col-original"><col class="dist-col-customer"><col class="dist-col-plan"><col class="dist-col-period"><col class="dist-col-amount"><col class="dist-col-devices"><col class="dist-col-traffic"><col class="dist-col-settlement"><col class="dist-col-remark"></colgroup><thead><tr><th>${t('sequence')}</th><th>${t('actions')}</th><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('orderType')}</th><th>${t('originalOrder')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th></tr></thead>
       <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="14" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>${desktopPagination}`);
     if (append) window.scrollTo({ top: oldScrollY, behavior: 'instant' });
   }
@@ -1416,10 +1418,13 @@
       button?.setAttribute('aria-expanded', String(state.orderFiltersOpen));
       if (button) button.textContent = t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters');
     } else if (action === 'apply-order-filters') {
-      state.orderFilters = collectOrderFilters();
+      const { settlementStatus, ...filters } = collectOrderFilters();
+      state.orderSettlementStatus = settlementStatus;
+      state.orderFilters = filters;
       state.orderPage = 1;
       try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
     } else if (action === 'reset-order-filters') {
+      state.orderSettlementStatus = '';
       state.orderFilters = { startDate: '', endDate: '', periods: [], minAmount: '', maxAmount: '' };
       state.orderPage = 1;
       try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
@@ -1545,11 +1550,7 @@
   });
   document.addEventListener('change', (event) => {
     if (!state.active) return;
-    if (event.target.id === 'dist-order-settlement') {
-      state.orderSettlementStatus = event.target.value;
-      state.orderPage = 1;
-      renderOrders().catch((error) => toast(error.message, 'error'));
-    } else if (event.target.id === 'dist-order-page-size') {
+    if (event.target.id === 'dist-order-page-size') {
       state.orderPerPage = Number(event.target.value) || 20;
       state.orderPage = 1;
       renderOrders().catch((error) => toast(error.message, 'error'));
