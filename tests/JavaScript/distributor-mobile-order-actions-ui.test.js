@@ -31,6 +31,10 @@ test('distributor orders use a compact horizontally scrollable table on desktop 
   assert.match(styles, /\.dist-order-list \.dist-orders-table \{[^}]*min-width:1517px[^}]*table-layout:fixed/);
   assert.match(styles, /@media \(max-width:900px\)/);
   assert.match(styles, /\.dist-order-list \.dist-orders-table \{ display:table!important; width:100%; min-width:1517px!important; \}/);
+  assert.match(styles, /@media \(max-width:900px\)[\s\S]*?\.dist-order-list \{[^}]*overflow:auto/);
+  assert.match(styles, /\.dist-desktop-pagination \{ display:flex; justify-content:flex-start; margin-bottom:12px; \}/);
+  assert.match(styles, /\.dist-main \{ margin-left:0; padding-bottom:calc\(64px \+ env\(safe-area-inset-bottom\) \+ 12px\); \}/);
+  assert.match(styles, /@media \(max-width:560px\)[\s\S]*?\.dist-order-list \{ max-height:calc\(100vh - 270px\); \}/);
   assert.match(styles, /nth-child\(2\)[^}]*position:sticky; left:36px[^}]*width:128px/);
   assert.match(styles, /\.dist-order-list \.dist-orders-table th[^}]*position:sticky; top:0/);
   assert.match(styles, /\.dist-order-list \.dist-orders-table \.dist-entitlement-row\[hidden\] \{ display:none!important; \}/);
