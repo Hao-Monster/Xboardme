@@ -15,7 +15,7 @@ function loadEntitlementToggle() {
 }
 
 test('server-paginated orders retain newest-first API order without client regrouping', () => {
-  assert.match(source, /const rows = state\.orders\.map\(\(order\) =>/);
+  assert.match(source, /const rows = state\.orders\.map\(\(order, index\) =>/);
   assert.doesNotMatch(source, /groupSubscriptionOrders/);
   assert.match(source, /state\.orders = append \? \[\.\.\.state\.orders, \.\.\.fetchedOrders\] : fetchedOrders/);
 });
@@ -49,9 +49,10 @@ test('entitlement is collapsed by default and has an accessible view-hide toggle
   assert.match(styles, /\.dist-entitlement-row\[hidden\] \{ display:none; \}/);
 });
 
-test('renewal rows share one aligned child indentation style', () => {
+test('renewal rows use the explicit order type and original-order columns', () => {
   assert.match(source, /dist-renewal-order-row/);
   assert.match(source, /data-subscription-trade-no/);
-  assert.match(styles, /\.dist-renewal-order-row td:first-child \{[^}]*padding-left:48px/);
-  assert.match(styles, /\.dist-renewal-order-row td:first-child:before \{ content:'↳'/);
+  assert.match(source, /class="dist-order-type"/);
+  assert.match(source, /class="dist-order-original"/);
+  assert.match(styles, /dist-renewal-order-row>td:first-child:before \{ content:none!important; \}/);
 });

@@ -257,3 +257,46 @@ html.distributor-mode.dist-modal-open,html.distributor-mode.dist-modal-open body
   .dist-subscription-qr-modal,.dist-renewal-modal { animation:none; }
   .dist-entitlement-toggle:after { transition:none; }
 }
+
+/* Compact distributor order table: the sequence and actions columns stay visible while the data columns scroll. */
+.dist-order-toolbar { align-items:center; gap:8px; margin:0; }
+.dist-order-toolbar select,.dist-order-search input { height:32px; min-height:32px; padding:0 10px; border-radius:0; font-size:12px; }
+.dist-order-toolbar button { height:32px; min-height:32px; padding:0 10px; border-radius:0; font-size:12px; }
+.dist-order-list { max-height:calc(100vh - 210px); border-radius:0; }
+.dist-order-list .dist-orders-table { width:100%; min-width:1569px; table-layout:fixed; border-collapse:separate; border-spacing:0; }
+.dist-orders-table .dist-col-sequence { width:36px; }.dist-orders-table .dist-col-actions { width:180px; }.dist-orders-table .dist-col-order-no { width:190px; }.dist-orders-table .dist-col-order-time { width:132px; }.dist-orders-table .dist-col-order-type { width:60px; }.dist-orders-table .dist-col-original { width:170px; }.dist-orders-table .dist-col-customer { width:96px; }.dist-orders-table .dist-col-plan { width:108px; }.dist-orders-table .dist-col-period { width:62px; }.dist-orders-table .dist-col-amount { width:78px; }.dist-orders-table .dist-col-devices { width:190px; }.dist-orders-table .dist-col-traffic { width:82px; }.dist-orders-table .dist-col-settlement { width:80px; }.dist-orders-table .dist-col-remark { width:105px; }
+.dist-order-list .dist-orders-table th,.dist-order-list .dist-orders-table td { height:44px; min-width:0; padding:0 6px; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dist-order-list .dist-orders-table th { position:sticky; top:0; z-index:3; height:36px; padding-top:0; padding-bottom:0; background:var(--dist-panel); font-size:10px; }
+.dist-order-list .dist-orders-table>thead>tr>th:first-child,.dist-order-list .dist-orders-table>tbody>tr:not(.dist-entitlement-row)>td:first-child { position:sticky; left:0; z-index:4; width:36px; min-width:36px; background:var(--dist-panel); box-shadow:1px 0 0 var(--dist-border),12px 0 18px -18px #000; }
+.dist-order-list .dist-orders-table>thead>tr>th:nth-child(2),.dist-order-list .dist-orders-table>tbody>tr:not(.dist-entitlement-row)>td:nth-child(2) { position:sticky; left:36px; z-index:4; width:180px; min-width:180px; background:var(--dist-panel); box-shadow:1px 0 0 var(--dist-border),12px 0 18px -18px #000; }
+.dist-order-list .dist-orders-table>thead>tr>th:last-child,.dist-order-list .dist-orders-table>tbody>tr:not(.dist-entitlement-row)>td:last-child { position:static; right:auto; min-width:0; box-shadow:none; }
+.dist-order-list .dist-orders-table>tbody>tr>td:first-child,.dist-order-list .dist-orders-table>tbody>tr>td:nth-child(2) { background:var(--dist-panel); }
+.dist-order-list .dist-orders-table>tbody>tr.dist-renewal-order-row>td:first-child,.dist-order-list .dist-orders-table>tbody>tr.dist-renewal-order-row>td:nth-child(2) { background:color-mix(in srgb,var(--dist-primary-soft) 26%,var(--dist-panel)); }
+.dist-order-list .dist-orders-table .dist-order-sequence { color:var(--dist-muted); font-weight:700; text-align:center; font-variant-numeric:tabular-nums; }
+.dist-order-list .dist-orders-table .dist-order-identity,.dist-order-list .dist-orders-table .dist-order-time,.dist-order-list .dist-orders-table .dist-order-customer,.dist-order-list .dist-orders-table .dist-order-plan,.dist-order-list .dist-orders-table .dist-order-period,.dist-order-list .dist-orders-table .dist-order-amount,.dist-order-list .dist-orders-table .dist-order-bound-devices,.dist-order-list .dist-orders-table .dist-order-used-traffic,.dist-order-list .dist-orders-table .dist-order-settlement,.dist-order-list .dist-orders-table .dist-order-remark-cell { min-width:0; max-width:none; }
+.dist-order-list .dist-orders-table .dist-order-actions { display:flex; align-items:center; gap:2px; min-width:0; }
+.dist-order-list .dist-orders-table .dist-order-actions>* { display:inline-flex; align-items:center; justify-content:center; min-width:0; min-height:27px; height:27px; padding:0 4px; border:1px solid var(--dist-primary); border-radius:0; color:var(--dist-primary); background:var(--dist-panel); font-size:11px; line-height:1; white-space:nowrap; }
+.dist-order-list .dist-orders-table .dist-order-actions>.dist-renew-btn { color:#fff!important; background:var(--dist-primary)!important; border-radius:0!important; padding:0 4px!important; }
+.dist-renewal-order-row>td:first-child { padding-left:6px!important; }.dist-renewal-order-row>td:first-child:before { content:none!important; }
+.dist-desktop-pagination { align-items:center; gap:6px; flex-wrap:wrap; padding:0; margin-top:0; font-size:12px; }
+.dist-desktop-pagination select,.dist-desktop-pagination button,.dist-page-jump input { height:32px; min-height:32px; border-radius:0; }
+.dist-desktop-pagination select { padding:0 8px; }.dist-desktop-pagination button { padding:0 10px; }.dist-page-jump { align-items:center; }.dist-page-jump input { width:64px; box-sizing:border-box; padding:0 7px; border:1px solid var(--dist-border); color:var(--dist-text); background:var(--dist-panel); }
+
+@media (max-width:900px) {
+  .dist-order-toolbar select,.dist-order-search input,.dist-order-toolbar button,.dist-order-search button { height:32px; min-height:32px; padding-top:0; padding-bottom:0; border-radius:0; font-size:12px; }
+  .dist-order-toolbar>.dist-filter-toggle,.dist-order-toolbar>[data-action="export-orders"] { height:32px; min-height:32px; }
+  .dist-order-list { max-height:calc(100vh - 250px); border-radius:0; }
+  .dist-order-list .dist-orders-table { display:table!important; width:100%; min-width:1569px!important; }
+  .dist-order-list .dist-orders-table thead { position:sticky; width:auto; height:auto; margin:0; padding:0; overflow:visible; clip:auto; white-space:nowrap; border:0; }
+  .dist-order-list .dist-orders-table tbody { display:table-row-group; width:auto; }
+  .dist-order-list .dist-orders-table .dist-origin-order-row,.dist-order-list .dist-orders-table .dist-renewal-order-row { display:table-row; min-width:0; overflow:visible; border:0; border-radius:0; box-shadow:none; }
+  .dist-order-list .dist-orders-table .dist-origin-order-row>td,.dist-order-list .dist-orders-table .dist-renewal-order-row>td { display:table-cell!important; min-width:0; height:42px; padding:0 5px!important; border-bottom:1px solid var(--dist-border); background:var(--dist-panel); white-space:nowrap; }
+  .dist-order-list .dist-orders-table .dist-renewal-order-row>td { background:color-mix(in srgb,var(--dist-primary-soft) 26%,var(--dist-panel)); }
+  .dist-order-list .dist-orders-table .dist-order-identity strong { font-size:11px; }
+  .dist-order-list .dist-orders-table .dist-order-time { white-space:nowrap; }
+  .dist-order-list .dist-orders-table .dist-order-actions>* { min-height:27px; height:27px; padding-inline:4px; font-size:11px; }
+  .dist-order-list .dist-orders-table .dist-entitlement-row { display:table-row!important; margin:0; border:0; border-radius:0; }
+  .dist-order-list .dist-orders-table .dist-entitlement-row>td { display:table-cell!important; padding:0!important; }
+  .dist-desktop-pagination { display:flex; justify-content:flex-start; }
+  .dist-load-more,.dist-mobile-order-total { display:none!important; }
+}
