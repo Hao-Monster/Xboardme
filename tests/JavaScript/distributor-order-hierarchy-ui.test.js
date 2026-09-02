@@ -32,16 +32,20 @@ test('entitlement is collapsed by default and has an accessible view-hide toggle
 
   toggleEntitlement(button, row);
   assert.equal(attributes.get('aria-expanded'), 'true');
-  assert.equal(button.textContent, 'hideEntitlement');
+  assert.equal(attributes.get('aria-label'), 'hideEntitlement');
+  assert.equal(button.textContent, 'entitlementAction');
   assert.equal(row.hidden, false);
 
   toggleEntitlement(button, row);
   assert.equal(attributes.get('aria-expanded'), 'false');
-  assert.equal(button.textContent, 'viewEntitlement');
+  assert.equal(attributes.get('aria-label'), 'viewEntitlement');
+  assert.equal(button.textContent, 'entitlementAction');
   assert.equal(row.hidden, true);
 
   assert.match(source, /viewEntitlement: '查看订阅权益'/);
   assert.match(source, /hideEntitlement: '收起订阅权益'/);
+  assert.match(source, /subscriptionQrAction: '二维码'/);
+  assert.match(source, /entitlementAction: '权益'/);
   assert.match(source, /class="dist-entitlement-row"[^>]* hidden/);
   assert.match(source, /data-entitlement-toggle="\$\{entitlementTarget\}"/);
   assert.match(source, /aria-expanded="false"/);

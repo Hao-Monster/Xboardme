@@ -24,6 +24,23 @@ test('distributor orders share one settlement filter between list and xlsx expor
   assert.doesNotMatch(exportBlock[0], /user_id|distributor_user_id|current|pageSize/);
 });
 
+test('settlement status is part of the existing advanced filters and applies with them', () => {
+  const filtersBlock = source.match(/function renderOrderFilters\(\)[\s\S]*?\n  }/);
+  const renderer = source.match(/async function renderOrders\(options = \{\}\)[\s\S]*?function periodLabel/);
+  assert.ok(filtersBlock, 'advanced order filters renderer should exist');
+  assert.ok(renderer, 'order list renderer should exist');
+
+  assert.match(filtersBlock[0], /id="dist-order-settlement"/);
+  assert.match(filtersBlock[0], /id="dist-order-start"/);
+  assert.match(filtersBlock[0], /id="dist-order-end"/);
+  assert.match(filtersBlock[0], /id="dist-order-min-amount"/);
+  assert.match(filtersBlock[0], /id="dist-order-max-amount"/);
+  assert.doesNotMatch(renderer[0], /<div class="dist-order-toolbar"[^\n]*id="dist-order-settlement"/);
+  assert.match(source, /state\.orderSettlementStatus = settlementStatus/);
+  assert.match(source, /state\.orderSettlementStatus = ''/);
+  assert.doesNotMatch(source, /event\.target\.id === 'dist-order-settlement'/);
+});
+
 test('distributor order search supports enter, trims input and searches on the server', () => {
   const renderBlock = source.match(/async function renderOrders\(options = \{\}\)[\s\S]*?\n  }/);
   assert.ok(renderBlock, 'order list renderer should exist');
