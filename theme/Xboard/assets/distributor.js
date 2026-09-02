@@ -15,6 +15,12 @@
     ['three_year_price', '三年付', 'Three-year', 36],
     ['onetime_price', '一次性', 'One-time', 0],
   ];
+  const PURCHASE_PERIOD_PRESENTATION = {
+    month_price: ['一个月', '31天'],
+    quarter_price: ['3个月', '93天'],
+    half_year_price: ['半年', '185天'],
+    year_price: ['1年', '366天'],
+  };
   const COPY = {
     'zh-CN': {
       buy: '购买订阅', overview: '经营概览', orders: '我的订单', invite: '我的邀请', knowledge: '使用文档', clients: '客户端下载', logout: '退出登录',
@@ -25,7 +31,7 @@
       followSystem: '跟随系统', firstDayMonth: '每月1日', monthlyReset: '按月重置', neverReset: '不重置', firstDayYear: '每年1月1日', yearlyReset: '按年重置',
       perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次性交付',
       saved: '已省', orderAction: '已确认，直接下单', soldOut: '已售罄',
-      showPrices: '显示价格', hidePrices: '隐藏价格', pricesAutoHide: '价格将在 10 秒后自动隐藏', retry: '重试',
+      showPrices: '显示价格', hidePrices: '隐藏价格', retry: '重试',
       promoStable: '稳定', promoFast: '高速', promoCompensation: '慢必赔',
       deliveryStepOne: '选择套餐并下单', deliveryStepTwo: '客户扫描二维码', deliveryStepThree: '确认节点可用',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
@@ -72,7 +78,7 @@
       followSystem: 'System default', firstDayMonth: '1st of each month', monthlyReset: 'Monthly', neverReset: 'Never', firstDayYear: 'January 1st', yearlyReset: 'Yearly',
       perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time delivery',
       saved: 'Saved', orderAction: 'Confirmed — place order', soldOut: 'Sold out',
-      showPrices: 'Show prices', hidePrices: 'Hide prices', pricesAutoHide: 'Prices will hide automatically in 10 seconds', retry: 'Retry',
+      showPrices: 'Show prices', hidePrices: 'Hide prices', retry: 'Retry',
       promoStable: 'Stable', promoFast: 'Fast', promoCompensation: 'Performance guaranteed',
       deliveryStepOne: 'Choose and order', deliveryStepTwo: 'Customer scans QR', deliveryStepThree: 'Verify service',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
@@ -463,7 +469,15 @@
 
   function navigate(path) {
     if (path !== '/plan') closePlanPrices(false);
-    window.location.hash = path === '/clients' ? '#/knowledge?client-center=1' : `#${path}`;
+    const targetHash = path === '/clients' ? '#/knowledge?client-center=1' : `#${path}`;
+    if (path === '/overview') {
+      if (window.location.hash !== targetHash) {
+        window.history.pushState({ ...(window.history.state || {}), distributorRoute: path }, '', targetHash);
+      }
+      renderPage();
+      return;
+    }
+    window.location.hash = targetHash;
   }
 
   function beginRouteRender(route) {
@@ -498,13 +512,14 @@
         <aside class="dist-sidebar">
           <div class="dist-brand"><img class="dist-brand-mark" src="https://cloud.thinderbox.com/assets/branding/thinderbox-logo.png?v=39e70a98" alt="${escapeHtml(window.settings?.title || 'XBoard')} logo"><span>${escapeHtml(window.settings?.title || 'XBoard')}</span></div>
           <nav>
-            <button data-nav="/plan" class="${page === '/plan' ? 'active' : ''}"><span>▣</span>${t('buy')}</button>
-            <button data-nav="/overview" class="${page === '/overview' ? 'active' : ''}"><span>⌁</span>${t('overview')}</button>
-            <button data-nav="/order" class="${page === '/order' ? 'active' : ''}"><span>☷</span>${t('orders')}</button>
-            <button data-nav="/invite" class="${page === '/invite' ? 'active' : ''}"><span>♧</span>${t('invite')}</button>
-            <button data-nav="/knowledge" class="${page === '/knowledge' ? 'active' : ''}"><span>▤</span>${t('knowledge')}</button>
-            <button data-nav="/clients" class="${page === '/clients' ? 'active' : ''}"><span>▦</span>${t('clients')}</button>
+            <button type="button" data-nav="/plan" class="${page === '/plan' ? 'active' : ''}"><span>▣</span>${t('buy')}</button>
+            <button type="button" data-nav="/overview" class="${page === '/overview' ? 'active' : ''}"><span>⌁</span>${t('overview')}</button>
+            <button type="button" data-nav="/order" class="${page === '/order' ? 'active' : ''}"><span>☷</span>${t('orders')}</button>
+            <button type="button" data-nav="/invite" class="${page === '/invite' ? 'active' : ''}"><span>♧</span>${t('invite')}</button>
+            <button type="button" data-nav="/knowledge" class="${page === '/knowledge' ? 'active' : ''}"><span>▤</span>${t('knowledge')}</button>
+            <button type="button" data-nav="/clients" class="${page === '/clients' ? 'active' : ''}"><span>▦</span>${t('clients')}</button>
           </nav>
+          <button type="button" class="dist-mobile-nav-next" data-action="scroll-mobile-nav" aria-label="向右查看更多菜单">》</button>
         </aside>
         <section class="dist-main">
           <header class="dist-topbar ${page === '/plan' ? 'has-promo' : ''}">
@@ -529,12 +544,31 @@
     window.requestAnimationFrame(() => {
       const nav = root.querySelector('.dist-sidebar nav');
       const active = nav?.querySelector('button.active');
-      if (!nav || !active || nav.scrollWidth <= nav.clientWidth) return;
-      const left = active.offsetLeft;
-      const right = left + active.offsetWidth;
-      if (left < nav.scrollLeft) nav.scrollLeft = left;
-      else if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth;
+      if (!nav) return;
+      const updateNextState = () => updateMobileNavNextState(nav);
+      nav.addEventListener('scroll', updateNextState, { passive: true });
+      if (active && nav.scrollWidth > nav.clientWidth) {
+        const left = active.offsetLeft;
+        const right = left + active.offsetWidth;
+        if (left < nav.scrollLeft) nav.scrollLeft = left;
+        else if (right > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = right - nav.clientWidth;
+      }
+      updateNextState();
     });
+  }
+
+  function updateMobileNavNextState(nav = document.querySelector('.dist-sidebar nav')) {
+    const next = document.querySelector('.dist-mobile-nav-next');
+    if (!nav || !next) return;
+    next.disabled = nav.scrollLeft + nav.clientWidth >= nav.scrollWidth - 1;
+  }
+
+  function scrollMobileNav() {
+    const nav = document.querySelector('.dist-sidebar nav');
+    const buttons = nav ? Array.from(nav.querySelectorAll('[data-nav]')) : [];
+    if (!nav || !buttons.length) return;
+    const step = buttons.length > 1 ? buttons[1].offsetLeft - buttons[0].offsetLeft : buttons[0].offsetWidth;
+    nav.scrollBy({ left: step, behavior: 'smooth' });
   }
 
   function loadingView() {
@@ -609,10 +643,11 @@
         planHasUnlimitedDevices(plan) ? t('unlimitedDevices') : '',
       ].filter(Boolean).slice(0, 3).map((tag, index) => `<span class="${index === 0 && isFeatured ? 'primary' : ''}">${tag}</span>`).join('');
       const periodButtons = prices.map(([key]) => {
+        const [purchasePeriodName, purchasePeriodDays] = PURCHASE_PERIOD_PRESENTATION[key] || [periodName(key), ''];
         const periodPriceDetails = state.planPricesVisible
           ? `<strong>${money(plan[key])}</strong><small>${periodInsight(plan, key)}</small>`
           : '';
-        return `<button type="button" role="radio" aria-checked="${selectedPeriod === key}" class="${selectedPeriod === key ? 'active' : ''}" data-plan-period="${key}" data-plan-id="${plan.id}"><span>${periodName(key)}</span>${periodPriceDetails}</button>`;
+        return `<button type="button" role="radio" aria-checked="${selectedPeriod === key}" class="${selectedPeriod === key ? 'active' : ''}" data-plan-period="${key}" data-plan-id="${plan.id}"><span>${purchasePeriodName}</span>${purchasePeriodDays ? `<span class="dist-period-days">${purchasePeriodDays}</span>` : ''}${periodPriceDetails}</button>`;
       }).join('');
       const currentPriceDetails = state.planPricesVisible
         ? `<div class="dist-plan-current-price"><small>${periodName(selectedPeriod)}</small><strong>${money(selectedPrice)}</strong></div>`
@@ -644,7 +679,7 @@
     const priceToggleIcon = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"></path><circle cx="12" cy="12" r="2.5"></circle>${state.planPricesVisible ? '' : '<path d="m4 4 16 16"></path>'}</svg>`;
     setContent(`<section class="dist-catalog-topbar">
         <div class="dist-plan-filters">${filterButtons}</div>
-        <button type="button" class="dist-price-privacy-toggle" data-action="toggle-plan-prices" aria-pressed="${state.planPricesVisible}" aria-label="${t(state.planPricesVisible ? 'hidePrices' : 'showPrices')}" title="${t(state.planPricesVisible ? 'hidePrices' : 'showPrices')}">${priceToggleIcon}<span>${t(state.planPricesVisible ? 'hidePrices' : 'showPrices')}</span></button>
+        <button type="button" class="dist-price-privacy-toggle" data-action="toggle-plan-prices" aria-pressed="${state.planPricesVisible}" aria-label="${t(state.planPricesVisible ? 'hidePrices' : 'showPrices')}">${priceToggleIcon}</button>
       </section>
       <div class="dist-plan-grid">${cards || `<div class="dist-empty">${t('empty')}</div>`}</div>
     `);
@@ -670,7 +705,6 @@
     clearPlanPriceTimer();
     state.planPricesVisible = true;
     renderPlanCatalog();
-    toast(t('pricesAutoHide'));
     state.planPricesTimer = window.setTimeout(() => closePlanPrices(), 10000);
   }
 
@@ -1341,6 +1375,8 @@
       window.location.href = '/#/login';
     } else if (action === 'toggle-plan-prices') {
       togglePlanPrices();
+    } else if (action === 'scroll-mobile-nav') {
+      scrollMobileNav();
     } else if (action === 'language') {
       state.locale = state.locale === 'zh-CN' ? 'en-US' : 'zh-CN';
       localStorage.setItem('xboard_distributor_locale', state.locale);
@@ -1548,11 +1584,20 @@
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) closePlanPrices();
   });
-  window.addEventListener('hashchange', () => {
+  let routeRenderQueued = false;
+  function queueRouteRender() {
     if (!state.active) return;
-    if (currentPage() !== '/plan') closePlanPrices(false);
-    renderPage();
-  });
+    if (routeRenderQueued) return;
+    routeRenderQueued = true;
+    window.queueMicrotask(() => {
+      routeRenderQueued = false;
+      if (!state.active) return;
+      if (currentPage() !== '/plan') closePlanPrices(false);
+      renderPage();
+    });
+  }
+  window.addEventListener('hashchange', queueRouteRender);
+  window.addEventListener('popstate', queueRouteRender);
   const detector = setInterval(() => {
     if (state.active) clearInterval(detector);
     else detectDistributor();

@@ -46,9 +46,20 @@ test('price privacy is closed by default and restores every structured price for
   assert.match(source, /orderAction: '已确认，直接下单'/);
   assert.match(source, /showPrices: '显示价格'/);
   assert.match(source, /hidePrices: '隐藏价格'/);
-  assert.match(source, /pricesAutoHide: '价格将在 10 秒后自动隐藏'/);
+  assert.doesNotMatch(source, /pricesAutoHide|价格将在 10 秒后自动隐藏|Prices will hide automatically in 10 seconds/);
+  assert.doesNotMatch(source, /class="dist-price-privacy-toggle"[^>]*>[\s\S]*?<span>\$\{t\(state\.planPricesVisible/);
   assert.match(styles, /\.dist-plan-actions button strong \{[^}]*font-size:18px/);
   assert.match(styles, /\.dist-price-privacy-toggle \{[^}]*min-width:44px[^}]*min-height:44px/);
+});
+
+test('the four requested purchase periods always render fixed two-line labels independent of locale and price visibility', () => {
+  assert.match(source, /month_price:\s*\['一个月', '31天'\]/);
+  assert.match(source, /quarter_price:\s*\['3个月', '93天'\]/);
+  assert.match(source, /half_year_price:\s*\['半年', '185天'\]/);
+  assert.match(source, /year_price:\s*\['1年', '366天'\]/);
+  assert.match(source, /const \[purchasePeriodName, purchasePeriodDays\] = PURCHASE_PERIOD_PRESENTATION\[key\] \|\| \[periodName\(key\), ''\]/);
+  assert.match(source, /<span>\$\{purchasePeriodName\}<\/span>\$\{purchasePeriodDays \? `<span class="dist-period-days">\$\{purchasePeriodDays\}<\/span>` : ''\}/);
+  assert.match(styles, /\.dist-period-options button \.dist-period-days \{[^}]*display:block/);
 });
 
 test('plan route renders the slogan and compact delivery steps inside dist-topbar', () => {
