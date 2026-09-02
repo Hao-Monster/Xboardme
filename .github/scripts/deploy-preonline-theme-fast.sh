@@ -21,6 +21,10 @@ short_sha=${ASSET_SHA:0:12}
 candidate="/www/theme/.Xboard-candidate-$short_sha"
 backup="/www/theme/.Xboard-before-$short_sha"
 failed="/www/theme/.Xboard-failed-$short_sha"
+public_current="/www/public/theme/Xboard"
+public_candidate="/www/public/theme/.Xboard-candidate-$short_sha"
+public_backup="/www/public/theme/.Xboard-before-$short_sha"
+public_failed="/www/public/theme/.Xboard-failed-$short_sha"
 
 test -f "$deploy_root/release-state.env"
 # shellcheck disable=SC1090
@@ -100,26 +104,33 @@ while IFS=$'\t' read -r asset expected_hash expected_bytes; do
 done < <(jq -r '.assets | to_entries[] | [.key, .value.sha256, .value.bytes] | @tsv' "$manifest")
 [[ "$(grep -oF "?v=$ASSET_SHA" "$theme/dashboard.blade.php" | wc -l)" == 7 ]]
 
-for path in "$candidate" "$backup" "$failed"; do
+for path in "$candidate" "$backup" "$failed" "$public_candidate" "$public_backup" "$public_failed"; do
   if docker exec "$active" test -e "$path"; then
     echo "PREONLINE_THEME_FAST_FAIL=container_path_exists path=$path"
     exit 1
   fi
 done
-docker exec -u 0 "$active" mkdir -p "$candidate"
+docker exec -u 0 "$active" test -d "$public_current"
+docker exec -u 0 "$active" mkdir -p "$candidate" "$public_candidate"
 docker cp "$theme/." "$active:$candidate/"
+docker cp "$theme/." "$active:$public_candidate/"
 docker exec -u 0 "$active" sh -eu -c '
   candidate=$1
+  public_candidate=$2
   find "$candidate" -type d -exec chmod 0755 {} +
   find "$candidate" -type f -exec chmod 0644 {} +
-  chown -R www:www "$candidate"
-' sh "$candidate"
+  find "$public_candidate" -type d -exec chmod 0755 {} +
+  find "$public_candidate" -type f -exec chmod 0644 {} +
+  chown -R www:www "$candidate" "$public_candidate"
+' sh "$candidate" "$public_candidate"
 
-while IFS=$'\t' read -r asset expected_hash expected_bytes; do
-  actual_hash=$(docker exec "$active" sha256sum "$candidate/assets/$asset" | cut -d' ' -f1)
-  actual_bytes=$(docker exec "$active" stat -c %s "$candidate/assets/$asset")
-  [[ "$actual_hash" == "$expected_hash" ]] && [[ "$actual_bytes" == "$expected_bytes" ]]
-done < <(jq -r '.assets | to_entries[] | [.key, .value.sha256, .value.bytes] | @tsv' "$manifest")
+for root in "$candidate" "$public_candidate"; do
+  while IFS=$'\t' read -r asset expected_hash expected_bytes; do
+    actual_hash=$(docker exec "$active" sha256sum "$root/assets/$asset" | cut -d' ' -f1)
+    actual_bytes=$(docker exec "$active" stat -c %s "$root/assets/$asset")
+    [[ "$actual_hash" == "$expected_hash" ]] && [[ "$actual_bytes" == "$expected_bytes" ]]
+  done < <(jq -r '.assets | to_entries[] | [.key, .value.sha256, .value.bytes] | @tsv' "$manifest")
+done
 
 switched=0
 restore_on_error() {
@@ -127,37 +138,61 @@ restore_on_error() {
   trap - ERR
   if ((switched == 1)); then
     docker exec -u 0 "$active" sh -eu -c '
-      current=$1
-      backup=$2
-      failed=$3
-      [ ! -e "$failed" ]
-      [ -e "$current" ] && mv "$current" "$failed"
-      mv "$backup" "$current"
-    ' sh /www/theme/Xboard "$backup" "$failed" || true
+      restore_pair() {
+        current=$1
+        backup=$2
+        failed=$3
+        [ ! -e "$failed" ]
+        if [ -e "$backup" ]; then
+          [ -e "$current" ] && mv "$current" "$failed"
+          mv "$backup" "$current"
+        fi
+      }
+      restore_pair "$1" "$2" "$3"
+      restore_pair "$4" "$5" "$6"
+    ' sh /www/theme/Xboard "$backup" "$failed" "$public_current" "$public_backup" "$public_failed" || true
     docker exec "$active" php /www/artisan view:clear >/dev/null 2>&1 || true
+    docker exec -u 0 "$active" rm -rf -- "$candidate" "$public_candidate" >/dev/null 2>&1 || true
   else
-    docker exec -u 0 "$active" rm -rf -- "$candidate" >/dev/null 2>&1 || true
+    docker exec -u 0 "$active" rm -rf -- "$candidate" "$public_candidate" >/dev/null 2>&1 || true
   fi
   exit "$status"
 }
 trap restore_on_error ERR
 
+switched=1
 docker exec -u 0 "$active" sh -eu -c '
   current=$1
   candidate=$2
   backup=$3
+  public_current=$4
+  public_candidate=$5
+  public_backup=$6
   mv "$current" "$backup"
   if ! mv "$candidate" "$current"; then
     mv "$backup" "$current"
     exit 1
   fi
-' sh /www/theme/Xboard "$candidate" "$backup"
-switched=1
+  if ! mv "$public_current" "$public_backup"; then
+    mv "$current" "$candidate"
+    mv "$backup" "$current"
+    exit 1
+  fi
+  if ! mv "$public_candidate" "$public_current"; then
+    mv "$public_backup" "$public_current"
+    mv "$current" "$candidate"
+    mv "$backup" "$current"
+    exit 1
+  fi
+' sh /www/theme/Xboard "$candidate" "$backup" "$public_current" "$public_candidate" "$public_backup"
 
 docker exec "$active" php /www/artisan view:clear >/dev/null
 dashboard=$(docker exec "$active" wget -q -O - http://127.0.0.1:7001/)
 [[ "$(grep -oF "?v=$ASSET_SHA" <<<"$dashboard" | wc -l)" == 7 ]]
-docker exec "$active" wget -q -O /dev/null "http://127.0.0.1:7001/theme/Xboard/assets/distributor.css?v=$ASSET_SHA"
+served_css=$(docker exec "$active" wget -q -O - "http://127.0.0.1:7001/theme/Xboard/assets/distributor.css?v=$ASSET_SHA")
+served_css_hash=$(printf '%s' "$served_css" | sha256sum | cut -d' ' -f1)
+public_css_hash=$(docker exec "$active" sha256sum "$public_current/assets/distributor.css" | cut -d' ' -f1)
+[[ "$served_css_hash" == "$public_css_hash" ]]
 
 container_id=$(docker inspect -f '{{.Id}}' "$active")
 previous_asset_sha=$BASE_RELEASE_SHA
@@ -174,6 +209,7 @@ docker commit --pause=false \
   printf 'BASE_RELEASE_SHA=%q\n' "$BASE_RELEASE_SHA"
   printf 'ACTIVE_CONTAINER_ID=%q\n' "$container_id"
   printf 'BACKUP_PATH=%q\n' "$backup"
+  printf 'PUBLIC_BACKUP_PATH=%q\n' "$public_backup"
   printf 'PREVIOUS_ASSET_SHA=%q\n' "$previous_asset_sha"
   printf 'DEPLOYED_AT=%q\n' "$(date -u +%FT%TZ)"
 } > "$state_file"

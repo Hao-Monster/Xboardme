@@ -22,25 +22,41 @@ actual_container_id=$(docker inspect -f '{{.Id}}' "$active")
 actual_asset_label=$(docker inspect -f '{{index .Config.Labels "codex.preonline.asset-revision"}}' "$active")
 if [[ "$CURRENT_ASSET_SHA" != "$ASSET_SHA" ]] ||
    { [[ "$ACTIVE_CONTAINER_ID" != "$actual_container_id" ]] && [[ "$actual_asset_label" != "$ASSET_SHA" ]]; } ||
-   [[ "$BACKUP_PATH" != "/www/theme/.Xboard-before-${ASSET_SHA:0:12}" ]]; then
+   [[ "$BACKUP_PATH" != "/www/theme/.Xboard-before-${ASSET_SHA:0:12}" ]] ||
+   [[ "${PUBLIC_BACKUP_PATH:-}" != "/www/public/theme/.Xboard-before-${ASSET_SHA:0:12}" ]]; then
   echo 'PREONLINE_THEME_ROLLBACK_FAIL=state_mismatch'
   exit 1
 fi
 
 failed="/www/theme/.Xboard-rolled-back-${ASSET_SHA:0:12}"
+public_current="/www/public/theme/Xboard"
+public_failed="/www/public/theme/.Xboard-rolled-back-${ASSET_SHA:0:12}"
 docker exec -u 0 "$active" sh -eu -c '
   current=$1
   backup=$2
   failed=$3
+  public_current=$4
+  public_backup=$5
+  public_failed=$6
   [ -e "$current" ]
   [ -e "$backup" ]
   [ ! -e "$failed" ]
+  [ -e "$public_current" ]
+  [ -e "$public_backup" ]
+  [ ! -e "$public_failed" ]
   mv "$current" "$failed"
   if ! mv "$backup" "$current"; then
     mv "$failed" "$current"
     exit 1
   fi
-' sh /www/theme/Xboard "$BACKUP_PATH" "$failed"
+  mv "$public_current" "$public_failed"
+  if ! mv "$public_backup" "$public_current"; then
+    mv "$public_failed" "$public_current"
+    mv "$current" "$backup"
+    mv "$failed" "$current"
+    exit 1
+  fi
+' sh /www/theme/Xboard "$BACKUP_PATH" "$failed" "$public_current" "$PUBLIC_BACKUP_PATH" "$public_failed"
 
 docker exec "$active" php /www/artisan view:clear >/dev/null
 dashboard=$(docker exec "$active" wget -q -O - http://127.0.0.1:7001/)
@@ -49,6 +65,10 @@ if [[ "$PREVIOUS_ASSET_SHA" != "$BASE_RELEASE_SHA" ]]; then
 else
   grep -Fq "?v=$BASE_RELEASE_SHA" <<<"$dashboard"
 fi
+served_css=$(docker exec "$active" wget -q -O - "http://127.0.0.1:7001/theme/Xboard/assets/distributor.css?v=$PREVIOUS_ASSET_SHA")
+served_css_hash=$(printf '%s' "$served_css" | sha256sum | cut -d' ' -f1)
+public_css_hash=$(docker exec "$active" sha256sum "$public_current/assets/distributor.css" | cut -d' ' -f1)
+[[ "$served_css_hash" == "$public_css_hash" ]]
 
 {
   printf 'CURRENT_ASSET_SHA=%q\n' "$PREVIOUS_ASSET_SHA"

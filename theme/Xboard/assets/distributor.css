@@ -310,3 +310,7 @@ html.distributor-mode.dist-modal-open,html.distributor-mode.dist-modal-open body
   .dist-desktop-pagination { display:flex; justify-content:flex-start; margin-bottom:12px; }
   .dist-load-more,.dist-mobile-order-total { display:none!important; }
 }
+
+@media (max-width:560px) {
+  .dist-order-list { max-height:calc(100vh - 270px); }
+}

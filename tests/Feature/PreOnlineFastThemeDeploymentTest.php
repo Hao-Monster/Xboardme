@@ -29,6 +29,10 @@ class PreOnlineFastThemeDeploymentTest extends TestCase
         $this->assertStringContainsString('manifest_identity_mismatch', $deploy);
         $this->assertStringContainsString('mv "$current" "$backup"', $deploy);
         $this->assertStringContainsString('restore_on_error', $deploy);
+        $this->assertStringContainsString('public_current="/www/public/theme/Xboard"', $deploy);
+        $this->assertStringContainsString('public_candidate', $deploy);
+        $this->assertStringContainsString('served_css_hash', $deploy);
+        $this->assertStringContainsString('PUBLIC_BACKUP_PATH', $deploy);
         $this->assertStringContainsString('php /www/artisan view:clear', $deploy);
         $this->assertStringContainsString('docker commit --pause=false', $deploy);
         $this->assertStringNotContainsString('artisan migrate', $deploy);
@@ -36,6 +40,9 @@ class PreOnlineFastThemeDeploymentTest extends TestCase
         $this->assertStringNotContainsString('docker stop', $deploy);
 
         $this->assertStringContainsString('state_mismatch', $rollback);
+        $this->assertStringContainsString('public_current="/www/public/theme/Xboard"', $rollback);
+        $this->assertStringContainsString('PUBLIC_BACKUP_PATH', $rollback);
+        $this->assertStringContainsString('served_css_hash', $rollback);
         $this->assertStringContainsString('mv "$backup" "$current"', $rollback);
         $this->assertStringContainsString('PREONLINE_THEME_ROLLBACK=PASS', $rollback);
     }
