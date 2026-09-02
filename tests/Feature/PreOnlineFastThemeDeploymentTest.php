@@ -32,6 +32,7 @@ class PreOnlineFastThemeDeploymentTest extends TestCase
         $this->assertStringContainsString('public_current="/www/public/theme/Xboard"', $deploy);
         $this->assertStringContainsString('public_candidate', $deploy);
         $this->assertStringContainsString('served_css_hash', $deploy);
+        $this->assertStringContainsString("wget -q -O - \"\$1\" | sha256sum", $deploy);
         $this->assertStringContainsString('PUBLIC_BACKUP_PATH', $deploy);
         $this->assertStringContainsString('php /www/artisan view:clear', $deploy);
         $this->assertStringContainsString('docker commit --pause=false', $deploy);
@@ -43,6 +44,7 @@ class PreOnlineFastThemeDeploymentTest extends TestCase
         $this->assertStringContainsString('public_current="/www/public/theme/Xboard"', $rollback);
         $this->assertStringContainsString('PUBLIC_BACKUP_PATH', $rollback);
         $this->assertStringContainsString('served_css_hash', $rollback);
+        $this->assertStringContainsString("wget -q -O - \"\$1\" | sha256sum", $rollback);
         $this->assertStringContainsString('mv "$backup" "$current"', $rollback);
         $this->assertStringContainsString('PREONLINE_THEME_ROLLBACK=PASS', $rollback);
     }

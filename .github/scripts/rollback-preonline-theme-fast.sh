@@ -65,8 +65,7 @@ if [[ "$PREVIOUS_ASSET_SHA" != "$BASE_RELEASE_SHA" ]]; then
 else
   grep -Fq "?v=$BASE_RELEASE_SHA" <<<"$dashboard"
 fi
-served_css=$(docker exec "$active" wget -q -O - "http://127.0.0.1:7001/theme/Xboard/assets/distributor.css?v=$PREVIOUS_ASSET_SHA")
-served_css_hash=$(printf '%s' "$served_css" | sha256sum | cut -d' ' -f1)
+served_css_hash=$(docker exec "$active" sh -eu -c 'wget -q -O - "$1" | sha256sum | cut -d" " -f1' sh "http://127.0.0.1:7001/theme/Xboard/assets/distributor.css?v=$PREVIOUS_ASSET_SHA")
 public_css_hash=$(docker exec "$active" sha256sum "$public_current/assets/distributor.css" | cut -d' ' -f1)
 [[ "$served_css_hash" == "$public_css_hash" ]]
 

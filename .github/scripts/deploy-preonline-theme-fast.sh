@@ -189,8 +189,7 @@ docker exec -u 0 "$active" sh -eu -c '
 docker exec "$active" php /www/artisan view:clear >/dev/null
 dashboard=$(docker exec "$active" wget -q -O - http://127.0.0.1:7001/)
 [[ "$(grep -oF "?v=$ASSET_SHA" <<<"$dashboard" | wc -l)" == 7 ]]
-served_css=$(docker exec "$active" wget -q -O - "http://127.0.0.1:7001/theme/Xboard/assets/distributor.css?v=$ASSET_SHA")
-served_css_hash=$(printf '%s' "$served_css" | sha256sum | cut -d' ' -f1)
+served_css_hash=$(docker exec "$active" sh -eu -c 'wget -q -O - "$1" | sha256sum | cut -d" " -f1' sh "http://127.0.0.1:7001/theme/Xboard/assets/distributor.css?v=$ASSET_SHA")
 public_css_hash=$(docker exec "$active" sha256sum "$public_current/assets/distributor.css" | cut -d' ' -f1)
 [[ "$served_css_hash" == "$public_css_hash" ]]
 
