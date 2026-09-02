@@ -2,7 +2,6 @@
 param(
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
     [string] $SshTarget = 'bingo-dev',
-    [switch] $SkipTests,
     [switch] $Force
 )
 
@@ -12,6 +11,7 @@ if ($LASTEXITCODE -ne 0 -or -not $repoRoot) { throw 'Not inside a Git repository
 Push-Location $repoRoot
 
 $temporaryRoot = $null
+$totalTimer = [Diagnostics.Stopwatch]::StartNew()
 try {
     $assetSha = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $assetSha -notmatch '^[a-f0-9]{40}$') { throw 'HEAD must be a full commit SHA.' }
@@ -26,6 +26,12 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Base release $baseReleaseSha is not present locally." }
     & git merge-base --is-ancestor $baseReleaseSha $assetSha
     if ($LASTEXITCODE -ne 0) { throw 'HEAD is not descended from the deployed bingo-dev release; use a full image deployment.' }
+    $currentAssetSha = (& ssh $SshTarget "if test -f /home/bingo/apps/xboardme-pre-online/fast-theme-releases/current.env; then source /home/bingo/apps/xboardme-pre-online/fast-theme-releases/current.env; printf '%s' `"`$CURRENT_ASSET_SHA`"; else printf '%s' '$baseReleaseSha'; fi").Trim()
+    if ($LASTEXITCODE -ne 0 -or $currentAssetSha -notmatch '^[a-f0-9]{40}$') { throw 'Unable to resolve the current bingo-dev asset revision.' }
+    if ($currentAssetSha -eq $assetSha) {
+        Write-Output "PREONLINE_THEME_FAST=NOOP asset_sha=$assetSha"
+        exit 0
+    }
 
     $allowedPatterns = @(
         '^theme/Xboard/',
@@ -46,19 +52,19 @@ try {
         exit 0
     }
 
-    if (-not $SkipTests) {
-        $javascriptTests = @(Get-ChildItem 'tests/JavaScript/distributor*.test.js' | ForEach-Object { $_.FullName })
-        & node --test @javascriptTests
-        if ($LASTEXITCODE -ne 0) { throw 'Distributor JavaScript tests failed.' }
-        & php vendor/bin/phpunit tests/Feature/ThemeAssetReleaseIntegrityTest.php tests/Feature/PreOnlineFastThemeDeploymentTest.php
-        if ($LASTEXITCODE -ne 0) { throw 'Fast theme deployment tests failed.' }
-        Get-ChildItem 'theme/Xboard/assets/*.js' | ForEach-Object {
-            & node --check $_.FullName
-            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $($_.Name)" }
-        }
-        & git diff --check $baseReleaseSha $assetSha
-        if ($LASTEXITCODE -ne 0) { throw 'Git whitespace validation failed.' }
+    $testTimer = [Diagnostics.Stopwatch]::StartNew()
+    $javascriptTests = @(Get-ChildItem 'tests/JavaScript/distributor*.test.js' | ForEach-Object { $_.FullName })
+    & node --test @javascriptTests
+    if ($LASTEXITCODE -ne 0) { throw 'Distributor JavaScript tests failed.' }
+    & php vendor/bin/phpunit tests/Feature/ThemeAssetReleaseIntegrityTest.php tests/Feature/PreOnlineFastThemeDeploymentTest.php
+    if ($LASTEXITCODE -ne 0) { throw 'Fast theme deployment tests failed.' }
+    Get-ChildItem 'theme/Xboard/assets/*.js' | ForEach-Object {
+        & node --check $_.FullName
+        if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $($_.Name)" }
     }
+    & git diff --check $baseReleaseSha $assetSha
+    if ($LASTEXITCODE -ne 0) { throw 'Git whitespace validation failed.' }
+    $testTimer.Stop()
 
     $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "xboardme-theme-$assetSha"
     $resolvedTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -95,11 +101,19 @@ try {
     & scp '.github/scripts/rollback-preonline-theme-fast.sh' "${SshTarget}:$incomingRoot/rollback-theme-$assetSha.sh"
     if ($LASTEXITCODE -ne 0) { throw 'Unable to upload the rollback script.' }
 
+    $deployTimer = [Diagnostics.Stopwatch]::StartNew()
     $remote = "chmod 700 $incomingRoot/deploy-theme-$assetSha.sh; ASSET_SHA='$assetSha' BASE_RELEASE_SHA='$baseReleaseSha' bash $incomingRoot/deploy-theme-$assetSha.sh"
     & ssh $SshTarget $remote
     if ($LASTEXITCODE -ne 0) { throw 'bingo-dev fast theme deployment failed.' }
     & ssh $SshTarget '/home/bingo/apps/xboardme-pre-online/smoke.sh'
     if ($LASTEXITCODE -ne 0) { throw 'Post-deployment smoke test failed.' }
+    & ssh $SshTarget "curl -sS --fail --max-time 20 https://pre-online.openal.uk/ | grep -Fq '?v=$assetSha'"
+    if ($LASTEXITCODE -ne 0) { throw 'Public asset revision verification failed.' }
+    $deployTimer.Stop()
+    $totalTimer.Stop()
+    Write-Output "PREONLINE_THEME_FAST_TEST_SECONDS=$([Math]::Round($testTimer.Elapsed.TotalSeconds, 2))"
+    Write-Output "PREONLINE_THEME_FAST_DEPLOY_SECONDS=$([Math]::Round($deployTimer.Elapsed.TotalSeconds, 2))"
+    Write-Output "PREONLINE_THEME_FAST_TOTAL_SECONDS=$([Math]::Round($totalTimer.Elapsed.TotalSeconds, 2))"
     Write-Output "PREONLINE_THEME_FAST_WRAPPER=PASS asset_sha=$assetSha"
 }
 finally {

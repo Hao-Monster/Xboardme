@@ -61,6 +61,10 @@ if tar -tzf "$release_dir/payload.tar.gz" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
   echo 'PREONLINE_THEME_FAST_FAIL=unsafe_archive_path'
   exit 1
 fi
+if tar -tzf "$release_dir/payload.tar.gz" | grep -Ev '^theme/Xboard(/|$)' | grep -q .; then
+  echo 'PREONLINE_THEME_FAST_FAIL=archive_outside_theme_scope'
+  exit 1
+fi
 tar -xzf "$release_dir/payload.tar.gz" -C "$release_dir/payload"
 theme="$release_dir/payload/theme/Xboard"
 manifest="$theme/assets/release-manifest.json"
@@ -69,6 +73,10 @@ for required in dashboard.blade.php assets/distributor.css assets/distributor.js
 done
 if find "$release_dir/payload" -type l -print -quit | grep -q .; then
   echo 'PREONLINE_THEME_FAST_FAIL=payload_contains_symlink'
+  exit 1
+fi
+if find "$release_dir/payload" ! -type f ! -type d -print -quit | grep -q .; then
+  echo 'PREONLINE_THEME_FAST_FAIL=unsupported_payload_entry'
   exit 1
 fi
 if find "$release_dir/payload" -type f ! -path "$theme/*" -print -quit | grep -q .; then
@@ -178,6 +186,7 @@ install -m 750 "$incoming_rollback" "$release_dir/rollback.sh"
 chmod 600 "$current_state.tmp"
 mv "$current_state.tmp" "$current_state"
 rm -f -- "$incoming_rollback"
+rm -f -- "$deploy_root/incoming/deploy-theme-$ASSET_SHA.sh"
 
 switched=0
 trap - ERR

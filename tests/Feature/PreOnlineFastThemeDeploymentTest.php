@@ -19,9 +19,13 @@ class PreOnlineFastThemeDeploymentTest extends TestCase
         $this->assertStringContainsString('node --test', $wrapper);
         $this->assertStringContainsString('ThemeAssetReleaseIntegrityTest.php', $wrapper);
         $this->assertStringContainsString('git diff --check', $wrapper);
+        $this->assertStringNotContainsString('SkipTests', $wrapper);
+        $this->assertStringContainsString('PREONLINE_THEME_FAST_DEPLOY_SECONDS', $wrapper);
 
         $this->assertStringContainsString('base_release_mismatch', $deploy);
         $this->assertStringContainsString('payload_contains_symlink', $deploy);
+        $this->assertStringContainsString('archive_outside_theme_scope', $deploy);
+        $this->assertStringContainsString('unsupported_payload_entry', $deploy);
         $this->assertStringContainsString('manifest_identity_mismatch', $deploy);
         $this->assertStringContainsString('mv "$current" "$backup"', $deploy);
         $this->assertStringContainsString('restore_on_error', $deploy);
