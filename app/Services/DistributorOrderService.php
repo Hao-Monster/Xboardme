@@ -31,7 +31,7 @@ class DistributorOrderService
             throw new ApiException('当前账号不是可用的分销商账号', 403);
         }
 
-        (new PlanService($plan))->validateDistributorPurchase($period);
+        (new PlanService($plan))->validateDistributorPurchase($distributor, $period);
         HookManager::call('order.create.before', [$distributor, $plan, $period, null]);
 
         $order = DB::transaction(function () use ($distributor, $plan, $period, $customerName) {
@@ -41,7 +41,7 @@ class DistributorOrderService
             }
 
             $lockedPlan = Plan::findOrFail($plan->id);
-            (new PlanService($lockedPlan))->validateDistributorPurchase($period);
+            (new PlanService($lockedPlan))->validateDistributorPurchase($lockedDistributor, $period);
 
             $periodKey = PlanService::getPeriodKey($period);
             $order = Order::create([

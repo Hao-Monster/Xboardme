@@ -22,10 +22,12 @@ class PlanService
      *
      * @return Collection
      */
-    public function getAvailablePlans(): Collection
+    public function getAvailablePlans(?User $user = null): Collection
     {
-        return Plan::where('show', true)
-            ->where('sell', true)
+        $query = Plan::where('show', true)->where('sell', true);
+        app(PlanVisibilityService::class)->applyTo($query, $user);
+
+        return $query
             ->orderBy('sort')
             ->get()
             ->filter(function ($plan) {
@@ -57,13 +59,20 @@ class PlanService
      */
     public function isPlanAvailableForUser(Plan $plan, User $user): bool
     {
+        $visibility = app(PlanVisibilityService::class);
+        if ($user->is_distributor) {
+            return $visibility->allows($plan, $user)
+                && $plan->show && $plan->sell && $this->hasCapacity($plan);
+        }
+
         // 如果是续费
         if ($user->plan_id === $plan->id) {
             return $plan->renew;
         }
 
         // 如果是新购
-        return $plan->show && $plan->sell && $this->hasCapacity($plan);
+        return $visibility->allows($plan, $user)
+            && $plan->show && $plan->sell && $this->hasCapacity($plan);
     }
 
     public function validatePurchase(User $user, string $period): void
@@ -85,6 +94,11 @@ class PlanService
             return;
         }
 
+        if ((int) $user->plan_id !== (int) $this->plan->id
+            && !app(PlanVisibilityService::class)->allows($this->plan, $user)) {
+            throw new ApiException(__('Subscription plan does not exist'));
+        }
+
         if ($user->plan_id !== $this->plan->id && !$this->hasCapacity($this->plan)) {
             throw new ApiException(__('Current product is sold out'));
         }
@@ -92,7 +106,7 @@ class PlanService
         $this->validatePlanAvailability($user);
     }
 
-    public function validateDistributorPurchase(string $period): void
+    public function validateDistributorPurchase(User $distributor, string $period): void
     {
         $periodKey = self::getPeriodKey($period);
         if ($periodKey === Plan::PERIOD_RESET_TRAFFIC) {
@@ -104,7 +118,8 @@ class PlanService
             throw new ApiException(__('This payment period cannot be purchased, please choose another period'));
         }
 
-        if (!$this->plan->show || !$this->plan->sell) {
+        if (!app(PlanVisibilityService::class)->allows($this->plan, $distributor)
+            || !$this->plan->show || !$this->plan->sell) {
             throw new ApiException(__('Subscription plan does not exist'));
         }
 

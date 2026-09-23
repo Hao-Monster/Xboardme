@@ -65,6 +65,9 @@ class AdminRoute
                 $router->post('/drop', [PlanController::class, 'drop']);
                 $router->post('/update', [PlanController::class, 'update']);
                 $router->post('/sort', [PlanController::class, 'sort']);
+                $router->get('/visibility', [PlanController::class, 'visibility']);
+                $router->get('/visibility/users', [PlanController::class, 'visibilityUsers']);
+                $router->post('/visibility', [PlanController::class, 'saveVisibility']);
             });
 
             // Server
