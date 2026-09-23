@@ -27,6 +27,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int|null $reset_traffic_method 流量重置方式
  * @property int|null $capacity_limit 订阅人数限制
  * @property int|null $device_limit 设备数量限制
+ * @property int $distributor_hwid_limit 分销订单默认 HWID 数量
  * @property int $created_at
  * @property int $updated_at
  * 
@@ -93,6 +94,7 @@ class Plan extends Model
         'customer_visibility',
         'distributor_visibility',
         'device_limit',
+        'distributor_hwid_limit',
         'tags'
     ];
 
@@ -107,6 +109,7 @@ class Plan extends Model
         'customer_visibility' => 'string',
         'distributor_visibility' => 'string',
         'reset_traffic_method' => 'integer',
+        'distributor_hwid_limit' => 'integer',
     ];
 
     /**

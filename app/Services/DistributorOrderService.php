@@ -88,7 +88,7 @@ class DistributorOrderService
                 'delivery_status' => DistributorOrder::DELIVERY_PENDING,
                 'settlement_status' => DistributorOrder::SETTLEMENT_UNSETTLED,
                 'hwid_enabled' => true,
-                'hwid_limit' => 1,
+                'hwid_limit' => $lockedPlan->distributor_hwid_limit,
             ]);
 
             $order->fill([
