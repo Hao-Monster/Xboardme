@@ -303,6 +303,9 @@ class UserController extends Controller
         }
 
         $params = HookManager::filter('admin.user.update.params', $params, $request, $user);
+        $willBeDistributor = array_key_exists('is_distributor', $params)
+            ? (bool) $params['is_distributor']
+            : (bool) $user->is_distributor;
 
         HookManager::call('admin.user.update.before', [
             'user' => $user,
@@ -311,7 +314,16 @@ class UserController extends Controller
         ]);
 
         try {
-            $user->update($params);
+            DB::transaction(function () use ($user, $params, $willBeDistributor) {
+                $wasDistributor = (bool) $user->is_distributor;
+                $user->update($params);
+                if ($wasDistributor !== $willBeDistributor) {
+                    DB::table('v2_plan_visibility_user')
+                        ->where('user_id', $user->id)
+                        ->where('audience', $wasDistributor ? 'distributor' : 'customer')
+                        ->delete();
+                }
+            });
         } catch (\Exception $e) {
             Log::error($e);
             return $this->fail([500, '保存失败']);
@@ -755,6 +767,7 @@ class UserController extends Controller
             $user->codes()->delete();
             $user->stat()->delete();
             $user->tickets()->delete();
+            DB::table('v2_plan_visibility_user')->where('user_id', $user->id)->delete();
             $user->delete();
             DB::commit();
 

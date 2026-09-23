@@ -39,6 +39,10 @@ class Plan extends Model
 
     protected $table = 'v2_plan';
     protected $dateFormat = 'U';
+    protected $attributes = [
+        'customer_visibility' => 'all',
+        'distributor_visibility' => 'all',
+    ];
 
     // 定义流量重置方式
     public const RESET_TRAFFIC_FOLLOW_SYSTEM = null;    // 跟随系统设置
@@ -86,6 +90,8 @@ class Plan extends Model
         'reset_traffic_method',
         'capacity_limit',
         'sell',
+        'customer_visibility',
+        'distributor_visibility',
         'device_limit',
         'tags'
     ];
@@ -98,6 +104,8 @@ class Plan extends Model
         'group_id' => 'integer',
         'prices' => 'array',
         'tags' => 'array',
+        'customer_visibility' => 'string',
+        'distributor_visibility' => 'string',
         'reset_traffic_method' => 'integer',
     ];
 

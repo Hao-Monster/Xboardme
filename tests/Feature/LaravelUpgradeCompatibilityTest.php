@@ -31,7 +31,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->values();
 
         $this->assertSame(
-            'ec6fafffd93ff2b42df2f9fbec6f7b7c48a2cebc99c511d59d651f19187fdd14',
+            'aa0216bda564e553b2897e8dd806a433fe41562374c9e02217721ef8b20087c1',
             hash('sha256', $routes->implode("\n")),
             sprintf('The normalized public route contract contains %d routes.', $routes->count())
         );
@@ -68,9 +68,9 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->sort()
             ->values();
 
-        $this->assertSame(56, $migrations->count());
+        $this->assertSame(57, $migrations->count());
         $this->assertSame(
-            'b4be0128f11cbe07ad3fdf1c7085ba8adc1dad5fa3e5a9b9c5db880144fa6bae',
+            'e846c05b33900e72e48f3178cc04a51169ac16b8a57a3ccb96eee78c8699fc5c',
             hash('sha256', $migrations->implode("\n"))
         );
     }
@@ -253,6 +253,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             '2026_08_20_000002_add_daily_fields_to_server_activation_schedules_table',
             '2026_08_21_000001_create_server_report_receipts_table',
             '2026_08_21_000002_create_server_machine_credentials_tables',
+            '2026_09_24_000001_add_plan_audience_visibility',
         ], $approved);
 
         $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));

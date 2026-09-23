@@ -259,7 +259,19 @@ test('admin order page exposes distributor filters, summary and settlement actio
   };
   sandbox.globalThis = sandbox;
 
-  const source = fs.readFileSync('public/assets/admin-distributor.js', 'utf8');
+const source = fs.readFileSync('public/assets/admin-distributor.js', 'utf8');
+
+test('admin exposes the package audience controls separately from permission groups', () => {
+  assert.match(source, /data-tab="visibility"/);
+  assert.match(source, /admin-dist-customer-mode/);
+  assert.match(source, /admin-dist-distributor-mode/);
+  assert.match(source, /\/plan\/visibility\/users\?audience=/);
+  assert.match(source, /data-visibility-add/);
+  assert.match(source, /data-visibility-remove/);
+  assert.match(source, /customer_user_ids:/);
+  assert.match(source, /distributor_user_ids:/);
+  assert.match(source, /不改变套餐的服务权限组/);
+});
   vm.runInNewContext(source, sandbox, { filename: 'admin-distributor.js' });
   await flush();
 

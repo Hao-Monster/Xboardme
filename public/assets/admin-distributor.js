@@ -23,6 +23,10 @@
     page: 1,
     pageSize: 20,
     expandedDeviceOrders: {},
+    visibilityPlans: [],
+    visibilityPlan: null,
+    visibilitySearchAudience: 'customer',
+    visibilitySearchResults: [],
   };
 
   const escapeHtml = (value) => String(value ?? '')
@@ -457,7 +461,7 @@
   function panelShell(content) {
     return `<div class="admin-dist-backdrop"><section class="admin-dist-panel">
       <header><div><h1>分销管理</h1><p>分销商账号、独立订阅订单与线下结算</p></div><button data-admin-dist="close">×</button></header>
-      <nav><button data-tab="orders" class="${state.tab === 'orders' ? 'active' : ''}">分销订单</button><button data-tab="users" class="${state.tab === 'users' ? 'active' : ''}">分销商账号</button></nav>
+      <nav><button data-tab="orders" class="${state.tab === 'orders' ? 'active' : ''}">分销订单</button><button data-tab="users" class="${state.tab === 'users' ? 'active' : ''}">分销商账号</button><button data-tab="visibility" class="${state.tab === 'visibility' ? 'active' : ''}">套餐可见范围</button></nav>
       <main>${content}</main>
     </section></div>`;
   }
@@ -474,9 +478,9 @@
     state.tab = tab;
     renderPanel('<div class="admin-dist-loading">加载中…</div>');
     try {
-      await loadDistributors();
-      if (tab === 'orders') await loadOrders();
-      else renderUsers();
+      if (tab === 'orders') { await loadDistributors(); await loadOrders(); }
+      else if (tab === 'users') { await loadDistributors(); renderUsers(); }
+      else await loadVisibilityPlans();
     } catch (error) {
       renderPanel(`<div class="admin-dist-error">${escapeHtml(error.message)}</div>`);
     }
@@ -484,6 +488,70 @@
 
   async function loadDistributors() {
     state.distributors = dataOf(await api('/user/distributor/options')) || [];
+  }
+
+  async function loadVisibilityPlans() {
+    const payload = await api('/plan/visibility');
+    state.visibilityPlans = dataOf(payload)?.plans || [];
+    const selectedId = state.visibilityPlan?.id || state.visibilityPlans[0]?.id;
+    if (selectedId) await loadVisibilityPlan(selectedId);
+    else { state.visibilityPlan = null; renderVisibility(); }
+  }
+
+  async function loadVisibilityPlan(id) {
+    const payload = await api(`/plan/visibility?id=${encodeURIComponent(id)}`);
+    state.visibilityPlan = dataOf(payload)?.plan || null;
+    state.visibilitySearchResults = [];
+    renderVisibility();
+  }
+
+  function renderVisibility() {
+    const plan = state.visibilityPlan;
+    if (!plan) {
+      renderPanel('<div class="admin-dist-empty">暂无套餐</div>');
+      return;
+    }
+    const customers = plan.customer_users || [];
+    const dealers = plan.distributor_users || [];
+    const recipientRows = (users, audience) => users.map((user) => `<div class="admin-dist-visibility-user"><span><strong>${escapeHtml(user.distributor_name || user.email)}</strong><small>${escapeHtml(user.email)} · ID ${user.id}</small></span><button type="button" data-visibility-remove="${audience}" data-user-id="${user.id}">移除</button></div>`).join('') || '<p class="admin-dist-empty">名单为空</p>';
+    const results = state.visibilitySearchResults.map((user) => {
+      const audience = state.visibilitySearchAudience;
+      const selected = (audience === 'customer' ? customers : dealers).some((item) => Number(item.id) === Number(user.id));
+      const name = user.distributor_name || user.email;
+      return `<div class="admin-dist-visibility-user"><span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(user.email)} · ID ${user.id}</small></span><button type="button" data-visibility-add="${audience}" data-user-id="${user.id}" ${selected ? 'disabled' : ''}>${selected ? '已添加' : '添加'}</button></div>`;
+    }).join('');
+    renderPanel(`<div class="admin-dist-visibility">
+      <p>可见范围只控制套餐目录和新购资格，不改变套餐的服务权限组。旧套餐已保留原受众范围。</p>
+      <label>套餐<select id="admin-dist-visibility-plan">${state.visibilityPlans.map((item) => `<option value="${item.id}" ${Number(item.id) === Number(plan.id) ? 'selected' : ''}>${escapeHtml(item.name)}（#${item.id}）</option>`).join('')}</select></label>
+      <section><h2>普通用户</h2><label>谁能看到并新购<select id="admin-dist-customer-mode"><option value="all" ${plan.customer_visibility === 'all' ? 'selected' : ''}>所有普通用户</option><option value="selected" ${plan.customer_visibility === 'selected' ? 'selected' : ''}>仅名单中的普通用户</option></select></label>${plan.customer_visibility === 'selected' ? `<div class="admin-dist-visibility-list">${recipientRows(customers, 'customer')}</div><div class="admin-dist-visibility-search"><input id="admin-dist-customer-search" type="search" minlength="2" placeholder="按邮箱搜索普通用户"><button type="button" data-admin-dist="search-visibility-customer">搜索</button></div>${state.visibilitySearchAudience === 'customer' ? results : ''}` : ''}</section>
+      <section><h2>分销商</h2><label>谁能看到并新购<select id="admin-dist-distributor-mode">${plan.distributor_visibility === 'all' ? '<option value="all" selected>旧套餐兼容：当前所有分销商可见</option>' : ''}<option value="none" ${plan.distributor_visibility === 'none' ? 'selected' : ''}>不向分销商开放</option><option value="selected" ${plan.distributor_visibility === 'selected' ? 'selected' : ''}>仅名单中的分销商</option></select></label>${plan.distributor_visibility === 'selected' ? `<div class="admin-dist-visibility-list">${recipientRows(dealers, 'distributor')}</div><div class="admin-dist-visibility-search"><input id="admin-dist-dealer-search" type="search" minlength="2" placeholder="按邮箱或分销商名称搜索"><button type="button" data-admin-dist="search-visibility-distributor">搜索</button></div>${state.visibilitySearchAudience === 'distributor' ? results : ''}` : ''}</section>
+      <footer><button type="button" data-admin-dist="save-visibility">保存套餐可见范围</button></footer>
+    </div>`);
+  }
+
+  async function searchVisibilityUsers(audience) {
+    const inputId = audience === 'customer' ? 'admin-dist-customer-search' : 'admin-dist-dealer-search';
+    const q = document.getElementById(inputId)?.value.trim() || '';
+    if (q.length < 2) throw new Error('请输入至少两个字符');
+    state.visibilitySearchAudience = audience;
+    const payload = await api(`/plan/visibility/users?audience=${audience}&q=${encodeURIComponent(q)}`);
+    state.visibilitySearchResults = dataOf(payload) || [];
+    renderVisibility();
+  }
+
+  async function saveVisibility() {
+    const plan = state.visibilityPlan;
+    if (!plan) return;
+    const response = await api('/plan/visibility', { method: 'POST', data: {
+      plan_id: Number(plan.id),
+      customer_visibility: document.getElementById('admin-dist-customer-mode')?.value || plan.customer_visibility,
+      distributor_visibility: document.getElementById('admin-dist-distributor-mode')?.value || plan.distributor_visibility,
+      customer_user_ids: (plan.customer_users || []).map((user) => Number(user.id)),
+      distributor_user_ids: (plan.distributor_users || []).map((user) => Number(user.id)),
+    } });
+    void response;
+    toast('套餐可见范围已保存');
+    await loadVisibilityPlan(plan.id);
   }
 
   async function fetchOrders() {
@@ -797,6 +865,24 @@
       else if (action === 'clear-order-search') { state.orderSearch = ''; state.page = 1; await loadOrders(); }
       else if (action === 'search-user') await searchUser();
       else if (action === 'create-user') await createUser();
+      else if (action === 'search-visibility-customer') await searchVisibilityUsers('customer');
+      else if (action === 'search-visibility-distributor') await searchVisibilityUsers('distributor');
+      else if (action === 'save-visibility') await saveVisibility();
+      const addRecipient = event.target.closest('[data-visibility-add]');
+      if (addRecipient) {
+        const user = state.visibilitySearchResults.find((item) => Number(item.id) === Number(addRecipient.dataset.userId));
+        const key = addRecipient.dataset.visibilityAdd === 'customer' ? 'customer_users' : 'distributor_users';
+        if (user && state.visibilityPlan && !(state.visibilityPlan[key] || []).some((item) => Number(item.id) === Number(user.id))) {
+          state.visibilityPlan[key] = [...(state.visibilityPlan[key] || []), user];
+          renderVisibility();
+        }
+      }
+      const removeRecipient = event.target.closest('[data-visibility-remove]');
+      if (removeRecipient && state.visibilityPlan) {
+        const key = removeRecipient.dataset.visibilityRemove === 'customer' ? 'customer_users' : 'distributor_users';
+        state.visibilityPlan[key] = (state.visibilityPlan[key] || []).filter((item) => Number(item.id) !== Number(removeRecipient.dataset.userId));
+        renderVisibility();
+      }
       const toggle = event.target.closest('[data-user-toggle]');
       if (toggle) await toggleUser(toggle.dataset.userToggle, toggle.dataset.current === '1');
       const detail = event.target.closest('[data-order-detail]');
@@ -811,7 +897,15 @@
   }
 
   async function handleChange(event) {
-    if (event.target.id === 'admin-dist-distributor') {
+    if (event.target.id === 'admin-dist-visibility-plan') {
+      await loadVisibilityPlan(event.target.value);
+    } else if (event.target.id === 'admin-dist-customer-mode') {
+      if (state.visibilityPlan) state.visibilityPlan.customer_visibility = event.target.value;
+      renderVisibility();
+    } else if (event.target.id === 'admin-dist-distributor-mode') {
+      if (state.visibilityPlan) state.visibilityPlan.distributor_visibility = event.target.value;
+      renderVisibility();
+    } else if (event.target.id === 'admin-dist-distributor') {
       state.selectedDistributor = event.target.value;
       state.page = 1;
       try { await loadOrders(); } catch (e) { toast(e.message, 'error'); }
