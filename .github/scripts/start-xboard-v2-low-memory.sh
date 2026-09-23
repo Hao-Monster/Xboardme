@@ -58,7 +58,10 @@ done
 v2_wait_loopback_http "$ACTIVE_PORT" 30
 
 web_id=$(v2_service_id web)
+docker exec "$web_id" php /www/.github/scripts/validate-approved-migrations.php
+docker exec "$web_id" php /www/artisan migrate --force --no-interaction
 docker exec "$web_id" php /www/.github/scripts/validate-approved-migrations.php --require-clean
+v2_wait_loopback_http "$ACTIVE_PORT" 30
 database_integrity=$(docker exec "$web_id" php -r '
 require "/www/vendor/autoload.php";
 $app = require "/www/bootstrap/app.php";
