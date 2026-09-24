@@ -68,9 +68,9 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->sort()
             ->values();
 
-        $this->assertSame(57, $migrations->count());
+        $this->assertSame(58, $migrations->count());
         $this->assertSame(
-            'e846c05b33900e72e48f3178cc04a51169ac16b8a57a3ccb96eee78c8699fc5c',
+            '672d1acf908a6b086623350d46c6f59776b0f20c043fc73acd4bd9fadf050bdf',
             hash('sha256', $migrations->implode("\n"))
         );
     }
@@ -254,6 +254,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             '2026_08_21_000001_create_server_report_receipts_table',
             '2026_08_21_000002_create_server_machine_credentials_tables',
             '2026_09_24_000001_add_plan_audience_visibility',
+            '2026_09_24_000002_add_distributor_hwid_limit_to_v2_plan',
         ], $approved);
 
         $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));

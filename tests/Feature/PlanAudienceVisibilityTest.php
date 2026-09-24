@@ -149,6 +149,33 @@ class PlanAudienceVisibilityTest extends TestCase
         $this->assertSame(4, $plan->group_id);
     }
 
+    public function test_admin_can_save_a_plan_distributor_hwid_default_within_supported_bounds(): void
+    {
+        $admin = $this->user('plan-hwid-admin@example.com');
+        $admin->is_admin = true;
+        $admin->save();
+        Sanctum::actingAs($admin);
+
+        $plan = $this->plan('Plan HWID default');
+        $this->postJson($this->visibilityUri('save'), [
+            'id' => $plan->id,
+            'name' => $plan->name,
+            'transfer_enable' => $plan->transfer_enable,
+            'prices' => [Plan::PERIOD_MONTHLY => 30],
+            'distributor_hwid_limit' => 5,
+        ])->assertOk();
+
+        $this->assertSame(5, $plan->fresh()->distributor_hwid_limit);
+
+        $this->postJson($this->visibilityUri('save'), [
+            'id' => $plan->id,
+            'name' => $plan->name,
+            'transfer_enable' => $plan->transfer_enable,
+            'prices' => [Plan::PERIOD_MONTHLY => 30],
+            'distributor_hwid_limit' => 101,
+        ])->assertUnprocessable();
+    }
+
     private function visibilityUri(string $method): string
     {
         $route = collect(Route::getRoutes()->getRoutes())->first(

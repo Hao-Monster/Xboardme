@@ -37,9 +37,11 @@ class DistributorOrderTest extends TestCase
             'invite_user_id' => $this->makeUser('inviter@example.com')->id,
         ]);
         $plan = $this->makePlan();
+        $plan->update(['distributor_hwid_limit' => 3]);
         $originalExpiredAt = $distributor->expired_at;
 
         $first = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '客户甲');
+        $plan->update(['distributor_hwid_limit' => 2]);
         $second = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '客户乙');
 
         $firstDelivery = $first->distributorOrder()->with('subscriber')->firstOrFail();
@@ -57,7 +59,8 @@ class DistributorOrderTest extends TestCase
         $this->assertSame(DistributorOrder::DELIVERY_PENDING, $firstDelivery->delivery_status);
         $this->assertSame(DistributorOrder::SETTLEMENT_UNSETTLED, $firstDelivery->settlement_status);
         $this->assertTrue($firstDelivery->hwid_enabled);
-        $this->assertSame(1, $firstDelivery->hwid_limit);
+        $this->assertSame(3, $firstDelivery->hwid_limit);
+        $this->assertSame(2, $secondDelivery->hwid_limit);
         $this->assertSame('客户甲', $firstDelivery->customer_name);
         $this->assertSame('客户乙', $secondDelivery->customer_name);
 
@@ -66,6 +69,22 @@ class DistributorOrderTest extends TestCase
         $this->assertSame(3000, $distributor->commission_balance);
         $this->assertNull($distributor->plan_id);
         $this->assertSame($originalExpiredAt, $distributor->expired_at);
+    }
+
+    public function test_order_hwid_limit_can_be_changed_above_its_plan_default(): void
+    {
+        $distributor = $this->makeUser('dealer-hwid-override@example.com', true);
+        $plan = $this->makePlan();
+        $plan->update(['distributor_hwid_limit' => 2]);
+
+        $order = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY);
+        $delivery = $order->distributorOrder()->firstOrFail();
+
+        $settings = app(DistributorHwidService::class)->updateSettings($order->id, true, 5);
+
+        $this->assertSame(5, $settings['limit']);
+        $this->assertSame(5, $delivery->fresh()->hwid_limit);
+        $this->assertSame(2, $plan->fresh()->distributor_hwid_limit);
     }
 
     public function test_distributor_checkout_allows_an_omitted_or_blank_customer_name_and_trims_an_optional_name(): void
