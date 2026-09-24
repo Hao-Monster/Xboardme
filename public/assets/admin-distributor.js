@@ -491,6 +491,7 @@
   }
 
   async function loadVisibilityPlans() {
+    await loadDistributors();
     const payload = await api('/plan/visibility');
     state.visibilityPlans = dataOf(payload)?.plans || [];
     const selectedId = state.visibilityPlan?.id || state.visibilityPlans[0]?.id;
@@ -520,11 +521,14 @@
       const name = user.distributor_name || user.email;
       return `<div class="admin-dist-visibility-user"><span><strong>${escapeHtml(name)}</strong><small>${escapeHtml(user.email)} · ID ${user.id}</small></span><button type="button" data-visibility-add="${audience}" data-user-id="${user.id}" ${selected ? 'disabled' : ''}>${selected ? '已添加' : '添加'}</button></div>`;
     }).join('');
+    const selectedDealerIds = new Set(dealers.map((user) => Number(user.id)));
+    const availableDealers = (state.distributors || []).filter((user) => !selectedDealerIds.has(Number(user.id)));
+    const dealerPicker = `<label>添加分销商<select id="admin-dist-distributor-picker"><option value="">请选择未加入名单的分销商</option>${availableDealers.map((user) => `<option value="${user.id}">${escapeHtml(user.distributor_name || user.email)}（${escapeHtml(user.email)}）</option>`).join('')}</select></label>`;
     renderPanel(`<div class="admin-dist-visibility">
       <p>可见范围只控制套餐目录和新购资格，不改变套餐的服务权限组。旧套餐已保留原受众范围。</p>
       <label>套餐<select id="admin-dist-visibility-plan">${state.visibilityPlans.map((item) => `<option value="${item.id}" ${Number(item.id) === Number(plan.id) ? 'selected' : ''}>${escapeHtml(item.name)}（#${item.id}）</option>`).join('')}</select></label>
       <section><h2>普通用户</h2><label>谁能看到并新购<select id="admin-dist-customer-mode"><option value="all" ${plan.customer_visibility === 'all' ? 'selected' : ''}>所有普通用户</option><option value="selected" ${plan.customer_visibility === 'selected' ? 'selected' : ''}>仅名单中的普通用户</option></select></label>${plan.customer_visibility === 'selected' ? `<div class="admin-dist-visibility-list">${recipientRows(customers, 'customer')}</div><div class="admin-dist-visibility-search"><input id="admin-dist-customer-search" type="search" minlength="2" placeholder="按邮箱搜索普通用户"><button type="button" data-admin-dist="search-visibility-customer">搜索</button></div>${state.visibilitySearchAudience === 'customer' ? results : ''}` : ''}</section>
-      <section><h2>分销商</h2><label>谁能看到并新购<select id="admin-dist-distributor-mode">${plan.distributor_visibility === 'all' ? '<option value="all" selected>旧套餐兼容：当前所有分销商可见</option>' : ''}<option value="none" ${plan.distributor_visibility === 'none' ? 'selected' : ''}>不向分销商开放</option><option value="selected" ${plan.distributor_visibility === 'selected' ? 'selected' : ''}>仅名单中的分销商</option></select></label>${plan.distributor_visibility === 'selected' ? `<div class="admin-dist-visibility-list">${recipientRows(dealers, 'distributor')}</div><div class="admin-dist-visibility-search"><input id="admin-dist-dealer-search" type="search" minlength="2" placeholder="按邮箱或分销商名称搜索"><button type="button" data-admin-dist="search-visibility-distributor">搜索</button></div>${state.visibilitySearchAudience === 'distributor' ? results : ''}` : ''}</section>
+      <section><h2>分销商</h2><label>谁能看到并新购<select id="admin-dist-distributor-mode">${plan.distributor_visibility === 'all' ? '<option value="all" selected>旧套餐兼容：当前所有分销商可见</option>' : ''}<option value="none" ${plan.distributor_visibility === 'none' ? 'selected' : ''}>不向分销商开放</option><option value="selected" ${plan.distributor_visibility === 'selected' ? 'selected' : ''}>仅名单中的分销商</option></select></label>${plan.distributor_visibility === 'selected' ? `${dealerPicker}<div class="admin-dist-visibility-list">${recipientRows(dealers, 'distributor')}</div>` : ''}</section>
       <footer><button type="button" data-admin-dist="save-visibility">保存套餐可见范围</button></footer>
     </div>`);
   }
@@ -904,6 +908,13 @@
       renderVisibility();
     } else if (event.target.id === 'admin-dist-distributor-mode') {
       if (state.visibilityPlan) state.visibilityPlan.distributor_visibility = event.target.value;
+      renderVisibility();
+    } else if (event.target.id === 'admin-dist-distributor-picker') {
+      const userId = Number(event.target.value);
+      const user = (state.distributors || []).find((item) => Number(item.id) === userId);
+      if (user && state.visibilityPlan && !(state.visibilityPlan.distributor_users || []).some((item) => Number(item.id) === userId)) {
+        state.visibilityPlan.distributor_users = [...(state.visibilityPlan.distributor_users || []), user];
+      }
       renderVisibility();
     } else if (event.target.id === 'admin-dist-distributor') {
       state.selectedDistributor = event.target.value;
