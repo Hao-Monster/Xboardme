@@ -361,6 +361,7 @@ jobs:
           bash -n .github/scripts/test-verify-xboard-v2-prepared-release.sh
           bash -n .github/scripts/test-cleanup-xboard-retention.sh
           bash -n .github/scripts/test-v2-low-memory-common.sh
+          bash -n .github/scripts/test-v2-rollback-network-cleanup.sh
           bash -n .github/scripts/test-v2-redis-owner-restore.sh
           sh -n .docker/redis/run-v2-redis.sh
           sh -n .docker/redis/healthcheck-v2-redis.sh
@@ -368,6 +369,7 @@ jobs:
           bash .github/scripts/validate-v2-compose.sh
           bash .github/scripts/test-v2-redis.sh
           bash .github/scripts/test-v2-low-memory-common.sh
+          bash .github/scripts/test-v2-rollback-network-cleanup.sh
           bash .github/scripts/test-finalize-xboard-v2-low-memory.sh
           bash .github/scripts/test-plan-xboard-release-slot.sh
           bash .github/scripts/test-verify-xboard-v2-prepared-release.sh
