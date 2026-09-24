@@ -268,6 +268,9 @@ test('admin exposes the package audience controls separately from permission gro
   assert.match(source, /\/plan\/visibility\/users\?audience=/);
   assert.match(source, /data-visibility-add/);
   assert.match(source, /data-visibility-remove/);
+  assert.match(source, /admin-dist-distributor-picker/);
+  assert.match(source, /availableDealers = \(state\.distributors \|\| \[\]\)\.filter/);
+  assert.match(source, /event\.target\.id === 'admin-dist-distributor-picker'/);
   assert.match(source, /customer_user_ids:/);
   assert.match(source, /distributor_user_ids:/);
   assert.match(source, /不改变套餐的服务权限组/);
