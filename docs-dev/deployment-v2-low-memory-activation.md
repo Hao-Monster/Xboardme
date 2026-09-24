@@ -54,6 +54,12 @@ schema, or retire the legacy rollback runtime.
 9. The Redis password remains inside the root-only release directory. Its
    file is read-only to group 1000, and preparation proves that the candidate
    application's UID 1000 can read the real bind-mounted secret.
+10. A failed V2 start or switch removes only the candidate Compose project
+    containers and networks after they stop. Rollback never passes
+    `--volumes`; if candidate cleanup cannot be verified, legacy traffic and
+    state are restored first and the cleanup failure is reported for manual
+    follow-up. A later protected rollback retries a cleanup marked as pending
+    before reporting the release as already rolled back.
 
 ## State machine
 

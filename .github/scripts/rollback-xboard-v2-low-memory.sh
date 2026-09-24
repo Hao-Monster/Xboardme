@@ -32,6 +32,10 @@ case "$TRAFFIC_STATE" in
     while IFS= read -r id; do
       v2_container_running "$id" || v2_fail rolled_back_runtime_not_running
     done < <(v2_legacy_ids)
+    if [[ "$(release_state_get_optional "$V2_STATE_FILE" candidate_cleanup_required)" == true ]]; then
+      v2_cleanup_candidate_runtime || v2_fail candidate_runtime_cleanup_retry_failed
+      release_state_set "$V2_STATE_FILE" candidate_cleanup_required false
+    fi
     echo "V2_ROLLBACK=PASS id=$RELEASE_ID state=already_rolled_back external_smoke_required"
     exit 0
     ;;

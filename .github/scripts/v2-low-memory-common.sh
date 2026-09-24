@@ -874,9 +874,46 @@ v2_scheduler_zombie_count() {
   '
 }
 
+v2_cleanup_candidate_runtime() {
+  local candidate_container_ids candidate_network_ids
+
+  # The project name comes from the signed release-state file. Keep this
+  # guard close to the destructive compose operation so a malformed state
+  # file cannot make rollback target an unrelated Compose project.
+  [[ "$PROJECT_NAME" =~ ^xboard-v2-[0-9]+-[0-9]+$ ]] || {
+    v2_fail invalid_candidate_project_name
+    return 1
+  }
+
+  # Do not pass --volumes: the production Redis volume is external and must
+  # remain available to the legacy runtime during rollback.
+  if ! v2_compose down --remove-orphans --timeout 60 >/dev/null 2>&1; then
+    v2_fail candidate_compose_down_failed
+    return 1
+  fi
+
+  if ! candidate_container_ids=$(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT_NAME"); then
+    v2_fail candidate_container_inventory_failed
+    return 1
+  fi
+  [[ -z "$candidate_container_ids" ]] || {
+    v2_fail "candidate_containers_remain:$candidate_container_ids"
+    return 1
+  }
+
+  if ! candidate_network_ids=$(docker network ls -q --filter "label=com.docker.compose.project=$PROJECT_NAME"); then
+    v2_fail candidate_network_inventory_failed
+    return 1
+  fi
+  [[ -z "$candidate_network_ids" ]] || {
+    v2_fail "candidate_networks_remain:$candidate_network_ids"
+    return 1
+  }
+}
+
 v2_rollback_runtime() {
   local active_references maintenance_references redis_id service service_id horizon_id attempt
-  local reserved_jobs=''
+  local reserved_jobs='' candidate_cleanup_status=0
 
   active_references=$(v2_caddy_reference_count "$CADDY_CONFIG" "$ACTIVE_PORT")
   maintenance_references=$(v2_caddy_reference_count "$CADDY_CONFIG" "$MAINTENANCE_PORT")
@@ -930,12 +967,25 @@ v2_rollback_runtime() {
     }
   fi
 
+  if v2_cleanup_candidate_runtime; then
+    :
+  else
+    candidate_cleanup_status=$?
+    echo 'V2_WARN=candidate_runtime_cleanup_failed' >&2
+  fi
+
   v2_restore_legacy_redis_owner || return 1
   v2_start_legacy_runtime || return 1
   v2_restore_caddy_backup || return 1
   docker rm -f "$MAINTENANCE_CONTAINER" >/dev/null 2>&1 || true
   release_state_set "$V2_STATE_FILE" traffic_state rolled_back || return 1
   release_state_set "$V2_STATE_FILE" rolled_back_at "$(date -u +%FT%TZ)" || return 1
+  if ((candidate_cleanup_status != 0)); then
+    release_state_set "$V2_STATE_FILE" candidate_cleanup_required true || return 1
+    v2_fail candidate_runtime_cleanup_failed
+    return 1
+  fi
+  release_state_set "$V2_STATE_FILE" candidate_cleanup_required false || return 1
   # Consumed by the calling phase.
   # shellcheck disable=SC2034
   TRAFFIC_STATE=rolled_back
