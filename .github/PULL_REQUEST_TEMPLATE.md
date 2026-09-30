@@ -1,7 +1,8 @@
 ## Scope
 
 - [ ] The PR has one clearly stated product or engineering objective.
-- [ ] The base branch is `codex/distributor`.
+- [ ] The base branch is `main`.
+- [ ] The head branch is this repository's permanent `develop` branch; do not delete it after merging.
 - [ ] The head contains the current production baseline without history rewriting.
 
 ## Verification

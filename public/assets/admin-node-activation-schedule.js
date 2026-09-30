@@ -117,7 +117,8 @@
   }
 
   function parseServerId(value) {
-    const match = String(value || '').match(/^\s*#(\d+)\b/);
+    // The rendered id and name can be adjacent (e.g. "#38HJY"), with no word boundary.
+    const match = String(value || '').match(/^\s*#(\d+)/);
     if (!match) return null;
     const serverId = Number(match[1]);
     return Number.isSafeInteger(serverId) && serverId > 0 ? serverId : null;

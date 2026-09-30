@@ -24,6 +24,20 @@ test('node activation schedule is scoped to machine management and extracts exac
   assert.equal(app.parseServerId('#0 invalid'), null);
 });
 
+test('node activation schedule recognizes ids adjacent to rendered node names', () => {
+  const app = createNodeActivationSchedule({});
+
+  // React renders the id and name as adjacent text nodes without a space.
+  assert.equal(app.parseServerId('#38HJY-45-美国超高速'), 38);
+  assert.equal(app.parseServerId('#39HJY-45-vless美国超高速'), 39);
+  assert.equal(app.parseServerId('#42Singapore'), 42);
+  assert.equal(app.parseServerId('#42_备用'), 42);
+  assert.equal(app.parseServerId('#42新加坡'), 42);
+  assert.equal(app.parseServerId('#9007199254740992Node'), null);
+  assert.equal(app.parseServerId('#0Node'), null);
+  assert.equal(app.parseServerId('Node#42'), null);
+});
+
 test('node activation schedule validates recurring daily API data and time boundaries', () => {
   const app = createNodeActivationSchedule({});
   const schedule = {

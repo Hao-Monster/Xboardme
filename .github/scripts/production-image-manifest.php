@@ -5,7 +5,7 @@ declare(strict_types=1);
 const PRODUCTION_IMAGE_MANIFEST_SCHEMA = 1;
 const PRODUCTION_IMAGE_PLATFORM = 'linux/amd64';
 const PRODUCTION_IMAGE_WORKFLOW = '.github/workflows/docker-publish.yml';
-const PRODUCTION_REF = 'refs/heads/codex/distributor';
+const PRODUCTION_REF = 'refs/heads/main';
 
 function fail(string $message): never
 {

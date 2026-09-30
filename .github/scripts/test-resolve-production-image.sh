@@ -30,12 +30,12 @@ case "$request" in
   */actions/workflows/docker-publish.yml/runs\?*)
     if [[ "${MOCK_DUPLICATE_BUILD:-false}" == true ]]; then
       printf '%s\n' "{\"workflow_runs\":[
-        {\"id\":12345,\"head_sha\":\"$MOCK_SHA\",\"head_branch\":\"codex/distributor\",\"event\":\"push\",\"status\":\"completed\",\"conclusion\":\"success\"},
-        {\"id\":12346,\"head_sha\":\"$MOCK_SHA\",\"head_branch\":\"codex/distributor\",\"event\":\"push\",\"status\":\"completed\",\"conclusion\":\"success\"}
+        {\"id\":12345,\"head_sha\":\"$MOCK_SHA\",\"head_branch\":\"main\",\"event\":\"push\",\"status\":\"completed\",\"conclusion\":\"success\"},
+        {\"id\":12346,\"head_sha\":\"$MOCK_SHA\",\"head_branch\":\"main\",\"event\":\"push\",\"status\":\"completed\",\"conclusion\":\"success\"}
       ]}"
     else
       printf '%s\n' "{\"workflow_runs\":[
-        {\"id\":12345,\"head_sha\":\"$MOCK_SHA\",\"head_branch\":\"codex/distributor\",\"event\":\"push\",\"status\":\"completed\",\"conclusion\":\"success\"}
+        {\"id\":12345,\"head_sha\":\"$MOCK_SHA\",\"head_branch\":\"main\",\"event\":\"push\",\"status\":\"completed\",\"conclusion\":\"success\"}
       ]}"
     fi
     ;;

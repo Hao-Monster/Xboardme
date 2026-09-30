@@ -2,9 +2,9 @@ name: Docker Build and Publish
 
 on:
   push:
-    branches: ["codex/distributor"]
+    branches: ["main", "develop"]
   pull_request:
-    branches: ["codex/distributor"]
+    branches: ["main"]
   workflow_dispatch:
     inputs:
       deploy_production:
@@ -104,7 +104,7 @@ jobs:
   production-preflight:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_preflight == true }}
     uses: ./.github/workflows/distributor-preflight.yml
     secrets: inherit
@@ -112,7 +112,7 @@ jobs:
   cleanup-requested-stage:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.cleanup_stage_run_id != '' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -197,6 +197,12 @@ jobs:
         uses: actions/checkout@v7
         with:
           submodules: recursive
+
+      - name: Reject pull requests from any branch except develop
+        if: ${{ github.event_name == 'pull_request' && (github.head_ref != 'develop' || github.event.pull_request.head.repo.full_name != github.repository) }}
+        run: |
+          echo 'Only this repository develop branch may target main.' >&2
+          exit 1
 
       - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
@@ -485,7 +491,7 @@ jobs:
           IMAGE="$IMAGE" bash .github/scripts/test-v2-redis-owner-restore.sh
 
   build:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/distributor' }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     needs: verify
     runs-on: ubuntu-latest
     outputs:
@@ -553,7 +559,7 @@ jobs:
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/docker-publish.yml" \
             --signer-digest "$GITHUB_SHA" \
             --source-digest "$GITHUB_SHA" \
-            --source-ref refs/heads/codex/distributor \
+            --source-ref refs/heads/main \
             --deny-self-hosted-runners >/dev/null
           echo 'found=true' >> "$GITHUB_OUTPUT"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
@@ -570,9 +576,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=sha,format=short,prefix=,enable=true
-            type=raw,value=new,enable=${{ github.ref == 'refs/heads/master' }}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/master' }}
-            type=raw,value=distributor,enable=${{ github.ref == 'refs/heads/codex/distributor' }}
+            type=raw,value=distributor,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=${{ steps.get_version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
@@ -664,7 +668,7 @@ jobs:
   deploy-admin-assets-hotfix:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'admin_assets' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -751,7 +755,7 @@ jobs:
   rollback-admin-assets-hotfix:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'admin_assets_rollback' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -798,7 +802,7 @@ jobs:
   deploy-distributor:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_preflight == true &&
           inputs.deploy_production == true &&
           inputs.production_release_action == 'none' }}
@@ -876,7 +880,7 @@ jobs:
   stage-distributor-green:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           (inputs.stage_production_green == true || inputs.stage_production_dry_run == true) &&
           inputs.deploy_production == false &&
           inputs.production_release_action == 'none' }}
@@ -1027,7 +1031,7 @@ jobs:
   prepare-live-green:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'prepare' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -1167,7 +1171,7 @@ jobs:
   pre-switch-smoke:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'switch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1190,7 +1194,7 @@ jobs:
   switch-live-green:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'switch' &&
           inputs.deploy_production == false }}
     needs: pre-switch-smoke
@@ -1322,7 +1326,7 @@ jobs:
   activate-green-roles:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           (inputs.production_release_action == 'activate_roles' ||
            inputs.production_release_action == 'repair_roles') &&
           inputs.deploy_production == false }}
@@ -1369,7 +1373,7 @@ jobs:
   retire-previous-release:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'retire_previous' &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
@@ -1413,7 +1417,7 @@ jobs:
   rollback-live-release:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'rollback' &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
@@ -1472,7 +1476,7 @@ jobs:
   cleanup-live-release:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'cleanup' &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
@@ -1506,7 +1510,7 @@ jobs:
   prepare-v2-low-memory:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_prepare' &&
           inputs.deploy_production == false &&
           inputs.stage_production_green == false &&
@@ -1595,7 +1599,7 @@ jobs:
   start-v2-low-memory:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_start' &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
@@ -1642,7 +1646,7 @@ jobs:
   smoke-started-v2:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_start' }}
     needs: start-v2-low-memory
     runs-on: ubuntu-latest
@@ -1673,7 +1677,7 @@ jobs:
     if: >-
       ${{ always() &&
           github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_start' &&
           inputs.deploy_production == false &&
           (needs.start-v2-low-memory.result != 'success' ||
@@ -1716,7 +1720,7 @@ jobs:
   pre-switch-v2-smoke:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_switch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1745,7 +1749,7 @@ jobs:
   switch-v2-low-memory:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_switch' &&
           inputs.deploy_production == false }}
     needs: pre-switch-v2-smoke
@@ -1793,7 +1797,7 @@ jobs:
   smoke-switched-v2:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_switch' }}
     needs: switch-v2-low-memory
     runs-on: ubuntu-latest
@@ -1824,7 +1828,7 @@ jobs:
     if: >-
       ${{ always() &&
           github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_switch' &&
           inputs.deploy_production == false &&
           (needs.switch-v2-low-memory.result != 'success' ||
@@ -1867,7 +1871,7 @@ jobs:
   smoke-auto-rolled-back-v2:
     if: >-
       ${{ always() &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           (needs.auto-rollback-failed-v2-start.result == 'success' ||
            needs.auto-rollback-failed-v2-switch.result == 'success') }}
     needs:
@@ -1896,7 +1900,7 @@ jobs:
   rollback-v2-low-memory:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_rollback' &&
           inputs.deploy_production == false }}
     runs-on: ubuntu-latest
@@ -1943,7 +1947,7 @@ jobs:
   smoke-manual-v2-rollback:
     if: >-
       ${{ github.event_name == 'workflow_dispatch' &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.production_release_action == 'v2_rollback' }}
     needs: rollback-v2-low-memory
     runs-on: ubuntu-latest
@@ -1967,7 +1971,7 @@ jobs:
           TARGET_PORT: ${{ inputs.rollback_target_port }}
 
   smoke-distributor:
-    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     needs: deploy-distributor
     runs-on: ubuntu-latest
     timeout-minutes: 10

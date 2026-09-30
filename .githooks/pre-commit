@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+branch=$(git symbolic-ref --quiet --short HEAD) || {
+  echo 'Commit on develop in the primary checkout; detached commits are disabled.' >&2
+  exit 1
+}
+if [ "$branch" != develop ]; then
+  echo 'Commit only on develop. main is updated through reviewed pull requests.' >&2
+  exit 1
+fi
