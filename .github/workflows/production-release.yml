@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       expected_sha:
-        description: Exact full workflow SHA currently at codex/distributor
+        description: Exact full workflow SHA currently at main
         required: true
         type: string
       maintenance_action:
@@ -62,7 +62,7 @@ concurrency:
 jobs:
   retention-audit:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'retention_audit' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -79,7 +79,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
-          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$GITHUB_REF" = refs/heads/main
           test "$EXPECTED_SHA" = "$(printf '%s' "$EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
@@ -120,7 +120,7 @@ jobs:
 
   network-debt-audit:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'network_audit' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -137,7 +137,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
-          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$GITHUB_REF" = refs/heads/main
           test "$EXPECTED_SHA" = "$(printf '%s' "$EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
@@ -179,7 +179,7 @@ jobs:
 
   pre-network-debt-cleanup-smoke:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'network_cleanup' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -199,7 +199,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
           NETWORK_FINGERPRINT: ${{ inputs.network_cleanup_expected_fingerprint }}
         run: |
-          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$GITHUB_REF" = refs/heads/main
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
@@ -232,7 +232,7 @@ jobs:
 
   cleanup-orphan-production-networks:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'network_cleanup' }}
     needs: pre-network-debt-cleanup-smoke
     runs-on: ubuntu-latest
@@ -287,7 +287,7 @@ jobs:
 
   verify-network-debt-cleanup:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'network_cleanup' }}
     needs: cleanup-orphan-production-networks
     runs-on: ubuntu-latest
@@ -368,7 +368,7 @@ jobs:
 
   pre-finalize-v2-smoke:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'v2_finalize' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -387,7 +387,7 @@ jobs:
           RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
-          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$GITHUB_REF" = refs/heads/main
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
@@ -419,7 +419,7 @@ jobs:
 
   finalize-v2-release:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'v2_finalize' }}
     needs: pre-finalize-v2-smoke
     runs-on: ubuntu-latest
@@ -461,7 +461,7 @@ jobs:
 
   verify-finalized-production:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'v2_finalize' }}
     needs: finalize-v2-release
     runs-on: ubuntu-latest
@@ -540,7 +540,7 @@ jobs:
 
   pre-retention-cleanup-smoke:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'retention_cleanup' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -561,7 +561,7 @@ jobs:
           RESOURCE_FINGERPRINT: ${{ inputs.cleanup_expected_resource_fingerprint }}
           IMAGE_MIN_AGE_SECONDS: ${{ inputs.cleanup_image_min_age_seconds }}
         run: |
-          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$GITHUB_REF" = refs/heads/main
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
@@ -596,7 +596,7 @@ jobs:
 
   cleanup-retired-production-assets:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'retention_cleanup' }}
     needs: pre-retention-cleanup-smoke
     runs-on: ubuntu-latest
@@ -651,7 +651,7 @@ jobs:
 
   verify-retention-cleanup:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'retention_cleanup' }}
     needs: cleanup-retired-production-assets
     runs-on: ubuntu-latest
@@ -730,7 +730,7 @@ jobs:
 
   resolve-signed-image:
     if: >-
-      ${{ github.ref == 'refs/heads/codex/distributor' &&
+      ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'none' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -755,7 +755,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
-          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$GITHUB_REF" = refs/heads/main
           test "$EXPECTED_SHA" = "$(printf '%s' "$EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
@@ -786,7 +786,7 @@ jobs:
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/docker-publish.yml" \
             --signer-digest "$EXPECTED_SHA" \
             --source-digest "$EXPECTED_SHA" \
-            --source-ref refs/heads/codex/distributor \
+            --source-ref refs/heads/main \
             --deny-self-hosted-runners >/dev/null
           echo "PRODUCTION_IMAGE_PROVENANCE=PASS sha=$EXPECTED_SHA image=$IMAGE_REF"
 
@@ -1099,7 +1099,7 @@ jobs:
           ACTIVE_REVISION: ${{ needs.plan-release-slot.outputs.active_revision }}
           ROTATION_REQUIRED: ${{ needs.plan-release-slot.outputs.rotation_required }}
         run: |
-          test "$GITHUB_REF" = refs/heads/codex/distributor
+          test "$GITHUB_REF" = refs/heads/main
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$ACTIVE_RELEASE_ID" = "$(printf '%s' "$ACTIVE_RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
           test "$ACTIVE_REVISION" = "$(printf '%s' "$ACTIVE_REVISION" | grep -E '^[0-9a-f]{40}$')"
@@ -1356,7 +1356,7 @@ jobs:
     name: Automatically restore the previous release after a failed cutover
     if: >-
       ${{ always() &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'none' &&
           needs.prepare-approved-release.result == 'success' &&
           needs.switch-approved-release.result != 'success' }}
@@ -1429,7 +1429,7 @@ jobs:
     name: Verify the automatically restored previous release
     if: >-
       ${{ always() &&
-          github.ref == 'refs/heads/codex/distributor' &&
+          github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'none' &&
           needs.auto-rollback-failed-approved-release.result == 'success' }}
     needs:

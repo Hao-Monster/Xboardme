@@ -26,11 +26,11 @@ cleanup() {
 trap cleanup EXIT
 
 runs_json="$work_dir/runs.json"
-gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/docker-publish.yml/runs?branch=codex%2Fdistributor&head_sha=$EXPECTED_SHA&event=push&status=success&per_page=100" > "$runs_json"
+gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/docker-publish.yml/runs?branch=main&head_sha=$EXPECTED_SHA&event=push&status=success&per_page=100" > "$runs_json"
 run_count=$(jq --arg sha "$EXPECTED_SHA" '
   [.workflow_runs[] |
     select(.head_sha == $sha and
-           .head_branch == "codex/distributor" and
+           .head_branch == "main" and
            .event == "push" and
            .status == "completed" and
            .conclusion == "success")]
@@ -43,7 +43,7 @@ run_count=$(jq --arg sha "$EXPECTED_SHA" '
 build_run_id=$(jq -r --arg sha "$EXPECTED_SHA" '
   .workflow_runs[] |
   select(.head_sha == $sha and
-         .head_branch == "codex/distributor" and
+         .head_branch == "main" and
          .event == "push" and
          .status == "completed" and
          .conclusion == "success") |

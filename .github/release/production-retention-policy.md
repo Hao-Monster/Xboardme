@@ -71,7 +71,7 @@ tags and container age alone are forbidden deletion selectors.
 
 Historical debt predating this policy is handled separately from `finalize`:
 
-1. Run `retention_audit` from the exact `codex/distributor` workflow SHA and
+1. Run `retention_audit` from the exact `main` workflow SHA and
    retain its log/artifact, full audit fingerprint and stable resource-identity
    fingerprint.
 2. Classify every object as `anchor`, `active`, `direct_rollback`, a recognized

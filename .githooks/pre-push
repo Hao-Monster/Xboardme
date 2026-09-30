@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+if [ "$1" != origin ]; then
+  echo 'Only origin is writable; upstream is read-only.' >&2
+  exit 1
+fi
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$local_ref" != refs/heads/develop ] || [ "$remote_ref" != refs/heads/develop ]; then
+    echo 'Push only develop to origin/develop. main changes require a pull request.' >&2
+    exit 1
+  fi
+done

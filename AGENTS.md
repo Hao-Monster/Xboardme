@@ -5,14 +5,22 @@
 - The writable GitHub repository is `Hao-Monster/Xboardme`. Always pass
   `-R Hao-Monster/Xboardme` to `gh` commands that can read or mutate
   repository state.
-- `origin/codex/distributor` is the default and production branch.
-- `origin/master` is an upstream-tracking baseline, not a production branch.
-  Never infer production state from `master` or deploy it.
-- Start feature branches from the current `origin/codex/distributor`. Before a
-  PR or release, verify `git merge-base --is-ancestor origin/codex/distributor
-  HEAD`. Bring the production branch into the feature branch with a normal
-  merge; do not rewrite shared history.
-- Production changes reach `codex/distributor` through a PR. Do not force-push
+- `origin/main` is the default and production branch.
+- `develop` is the only development branch. Local and origin branch heads must
+  contain only `main` and `develop`; do not create per-task feature branches.
+- Follow upstream through the read-only `upstream` remote, not a local or origin
+  `master` branch. Do not deploy an upstream tracking ref.
+- Work in the primary checkout on `develop`. Do not run concurrent writers in
+  multiple worktrees. Preserve existing uncommitted work.
+- Before a PR or release, verify `git merge-base --is-ancestor origin/main HEAD`.
+  Merge `main` into `develop` normally when required; never rewrite shared history.
+- PRs must be `develop` to `main` from this repository. Keep automatic head-branch
+  deletion disabled because `develop` is permanent. After a merge, fast-forward
+  `develop` to `main` when possible, otherwise merge `main` into `develop`.
+- Install repository safety hooks with `git config core.hooksPath .githooks`.
+  Hooks prevent accidental main commits and pushes, but remote protection is the
+  enforcement boundary. Do not bypass hooks or remote checks.
+- Production changes reach `main` through a PR. Do not force-push
   or push directly to the production branch.
 
 ## Production truth and release safety
@@ -23,7 +31,7 @@
   and may not be the active web runtime.
 - Never identify production solely from Compose labels, container age, a
   mutable image tag, or a historical fixed port.
-- Only a workflow running the exact `codex/distributor` commit may receive
+- Only a workflow running the exact `main` commit may receive
   production-host credentials or execute production preflight, isolated
   staging, cleanup, `prepare`, `switch`, role activation, rollback or admin
   asset hotfix tasks. Feature branches must not access production secrets.

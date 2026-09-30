@@ -253,7 +253,7 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         ] as $job) {
             $condition = $parsedWorkflow['jobs'][$job]['if'] ?? '';
             $this->assertStringContainsString(
-                "github.ref == 'refs/heads/codex/distributor'",
+                "github.ref == 'refs/heads/main'",
                 $condition,
                 $job
             );

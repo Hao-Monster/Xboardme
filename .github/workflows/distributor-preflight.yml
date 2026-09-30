@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   preflight:
-    if: ${{ github.ref == 'refs/heads/codex/distributor' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: distributor-staging

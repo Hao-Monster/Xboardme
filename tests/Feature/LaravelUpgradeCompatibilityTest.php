@@ -107,10 +107,10 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $workflow = file_get_contents(base_path('.github/workflows/docker-publish.yml'));
         $this->assertIsString($workflow);
         $workflow = str_replace("\r\n", "\n", $workflow);
-        $this->assertStringContainsString('branches: ["codex/distributor"]', $workflow);
-        $this->assertStringContainsString("pull_request:\n    branches: [\"codex/distributor\"]", $workflow);
+        $this->assertStringContainsString('branches: ["main"]', $workflow);
+        $this->assertStringContainsString("pull_request:\n    branches: [\"main\"]", $workflow);
         $this->assertStringNotContainsString('branches: ["master", "new-dev"', $workflow);
-        $this->assertStringContainsString('github.ref == \'refs/heads/codex/distributor\'', $workflow);
+        $this->assertStringContainsString('github.ref == \'refs/heads/main\'', $workflow);
         $this->assertStringContainsString('github_token=${{ secrets.GITHUB_TOKEN }}', $workflow);
         $this->assertStringNotContainsString('"github_token=${{ secrets.GITHUB_TOKEN }}"', $workflow);
 
@@ -143,7 +143,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             );
             $this->assertArrayHasKey('body', $matches, "Workflow job {$job} must exist.");
             $this->assertStringContainsString(
-                "github.ref == 'refs/heads/codex/distributor'",
+                "github.ref == 'refs/heads/main'",
                 $matches['body'],
                 "Workflow job {$job} must reject non-production branches."
             );
@@ -236,7 +236,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             $standaloneWorkflow = file_get_contents(base_path('.github/workflows/' . $workflowName));
             $this->assertIsString($standaloneWorkflow);
             $this->assertStringContainsString(
-                "if: \${{ github.ref == 'refs/heads/codex/distributor' }}",
+                "if: \${{ github.ref == 'refs/heads/main' }}",
                 $standaloneWorkflow,
                 "Standalone workflow {$workflowName} must reject non-production branches."
             );

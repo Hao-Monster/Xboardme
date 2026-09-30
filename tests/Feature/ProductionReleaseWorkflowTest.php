@@ -18,7 +18,7 @@ class ProductionReleaseWorkflowTest extends TestCase
             str_replace("\r\n", "\n", $workflow)
         );
         $this->assertStringContainsString(
-            "if: \${{ github.event_name == 'push' && github.ref == 'refs/heads/codex/distributor' }}",
+            "if: \${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}",
             $workflow
         );
         $this->assertStringContainsString('platforms: linux/amd64', $workflow);
@@ -97,7 +97,7 @@ class ProductionReleaseWorkflowTest extends TestCase
             '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/docker-publish.yml"',
             '--signer-digest "$EXPECTED_SHA"',
             '--source-digest "$EXPECTED_SHA"',
-            '--source-ref refs/heads/codex/distributor',
+            '--source-ref refs/heads/main',
             '--deny-self-hosted-runners',
         ] as $identityControl) {
             $this->assertStringContainsString(
@@ -154,7 +154,7 @@ class ProductionReleaseWorkflowTest extends TestCase
         ] as $job) {
             $this->assertArrayHasKey($job, $parsed['jobs']);
             $this->assertStringContainsString(
-                "github.ref == 'refs/heads/codex/distributor'",
+                "github.ref == 'refs/heads/main'",
                 $parsed['jobs'][$job]['if'] ?? '',
                 $job
             );
