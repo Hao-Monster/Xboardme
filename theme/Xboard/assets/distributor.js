@@ -122,6 +122,10 @@
   };
 
   const state = {
+    notices: [],
+    noticeIndex: 0,
+    noticeTimer: null,
+    noticeError: false,
     active: false,
     user: null,
     locale: localStorage.getItem('xboard_distributor_locale') || 'zh-CN',
@@ -535,7 +539,7 @@
               <button class="dist-logout" data-action="logout">${t('logout')}</button>
             </div>
           </header>
-          <main class="dist-content">${content}</main>
+          <main class="dist-content">${page === '/plan' ? `<div id="dist-notice-slot">${renderNoticeBar()}</div>` : ''}${content}</main>
         </section>
       </div>`;
   }
@@ -544,6 +548,7 @@
     const root = document.getElementById('distributor-app');
     if (!root) return;
     root.innerHTML = shell(content);
+    startNoticeRotation();
     window.requestAnimationFrame(() => {
       const nav = root.querySelector('.dist-sidebar nav');
       const active = nav?.querySelector('button.active');
@@ -619,6 +624,93 @@
     });
     if (!state.plans.some((plan) => planMatchesFilter(plan, state.planFilter))) state.planFilter = 'all';
     renderPlanCatalog();
+    loadNotices(renderContext);
+  }
+
+  async function loadNotices(renderContext) {
+    try {
+      const notices = [];
+      for (let page = 1; page <= 100; page++) {
+        const response = await api(`/user/notice/fetch?current=${page}`);
+        if (!isCurrentRouteRender(renderContext)) return;
+        if (!Array.isArray(response.data)) throw new Error('Invalid notice response');
+        notices.push(...response.data);
+        if (notices.length >= Number(response.total) || response.data.length === 0) break;
+        if (page === 100) throw new Error('Notice pagination limit exceeded');
+      }
+      state.notices = notices;
+      state.noticeIndex = 0;
+      state.noticeError = false;
+    } catch (error) {
+      if (!isCurrentRouteRender(renderContext)) return;
+      state.notices = [];
+      state.noticeError = true;
+    }
+    const slot = document.getElementById('dist-notice-slot');
+    if (slot) slot.innerHTML = renderNoticeBar();
+    startNoticeRotation();
+  }
+
+  function safeNoticeContent(html) {
+    const document = new DOMParser().parseFromString(String(html || ''), 'text/html');
+    const allowed = new Set(['P', 'BR', 'DIV', 'SPAN', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'UL', 'OL', 'LI', 'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'PRE', 'CODE', 'A', 'IMG', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD']);
+    for (const element of Array.from(document.body.querySelectorAll('*'))) {
+      if (!allowed.has(element.tagName)) { element.remove(); continue; }
+      const link = element.getAttribute('href');
+      const image = element.getAttribute('src');
+      const alt = element.getAttribute('alt');
+      for (const attribute of Array.from(element.attributes)) element.removeAttribute(attribute.name);
+      if (element.tagName === 'A' && /^https?:\/\//i.test(link || '')) {
+        element.setAttribute('href', link);
+        element.setAttribute('target', '_blank');
+        element.setAttribute('rel', 'noopener noreferrer');
+      }
+      if (element.tagName === 'IMG' && /^https?:\/\//i.test(image || '')) {
+        element.setAttribute('src', image);
+        element.setAttribute('alt', alt || '');
+        element.setAttribute('referrerpolicy', 'no-referrer');
+      }
+    }
+    return document.body.innerHTML;
+  }
+
+  function renderNoticeBar() {
+    if (state.noticeError) return `<div class="dist-notices" role="status">${state.locale === 'zh-CN' ? '公告加载失败' : 'Announcements unavailable'}<button data-action="retry-notices">${t('retry')}</button></div>`;
+    if (!state.notices.length) return '';
+    const notice = state.notices[state.noticeIndex];
+    const label = state.locale === 'zh-CN' ? '公告' : 'Announcements';
+    return `<section class="dist-notices" aria-label="${label}"><span aria-hidden="true">◉</span><strong>${label}</strong><button class="dist-notice-title" data-action="open-notice">${escapeHtml(notice.title)}</button>${state.notices.length > 1 ? `<button data-action="next-notice" aria-label="${state.locale === 'zh-CN' ? '下一条公告' : 'Next announcement'}">${state.noticeIndex + 1}/${state.notices.length} ›</button>` : ''}</section>`;
+  }
+
+  function advanceNotice() {
+    if (state.notices.length < 2) return;
+    state.noticeIndex = (state.noticeIndex + 1) % state.notices.length;
+    const bar = document.querySelector('.dist-notices');
+    if (!bar) return;
+    // Keep buttons mounted so keyboard focus survives a manual advance.
+    const title = bar.querySelector('.dist-notice-title');
+    title.textContent = state.notices[state.noticeIndex].title;
+    bar.querySelector('[data-action="next-notice"]').textContent = `${state.noticeIndex + 1}/${state.notices.length} ›`;
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      title.animate([{ transform: 'translateY(8px)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }], { duration: 250 });
+    }
+  }
+
+  function startNoticeRotation() {
+    clearInterval(state.noticeTimer);
+    state.noticeTimer = null;
+    if (currentPage() !== '/plan' || state.notices.length < 2 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const currentBar = document.querySelector('.dist-notices');
+    let hovered = currentBar?.matches(':hover') || false;
+    if (currentBar) {
+      currentBar.onpointerenter = () => { hovered = true; };
+      currentBar.onpointerleave = () => { hovered = false; };
+    }
+    state.noticeTimer = setInterval(() => {
+      const bar = document.querySelector('.dist-notices');
+      if (!state.active || !bar) { clearInterval(state.noticeTimer); return; }
+      if (!document.hidden && !state.modal && !hovered && !bar.contains(document.activeElement)) advanceNotice();
+    }, 5000);
   }
 
   function renderPlanCatalog() {
@@ -1145,6 +1237,12 @@
     root.classList.add('open');
     document.documentElement.classList.add('dist-modal-open');
     document.body.classList.add('dist-modal-open');
+    if (state.modal.type === 'notice') {
+      const notice = state.modal.notice;
+      root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal" role="dialog" aria-modal="true" aria-labelledby="dist-notice-heading"><button class="dist-modal-x" data-modal-action="cancel" aria-label="${t('cancel')}">×</button><h2 id="dist-notice-heading">${escapeHtml(notice.title)}</h2><div class="dist-notice-body" tabindex="0">${safeNoticeContent(notice.content)}</div></section></div>`;
+      root.querySelector('[data-modal-action="cancel"]').focus();
+      return;
+    }
     if (state.modal.type === 'knowledge') {
       const article = state.modal.article;
       root.innerHTML = `<div class="dist-modal-backdrop"><article class="dist-modal dist-knowledge-modal"><button class="dist-modal-x" data-modal-action="cancel">×</button><h2>${escapeHtml(article.title)}</h2><button type="button" class="dist-knowledge-share" data-copy="${escapeHtml(article.share_url || `${window.location.origin}/guide/${article.id}`)}">复制分享链接</button><div class="dist-knowledge-updated">${t('lastUpdated')}：${formatTime(article.updated_at)}</div><div class="dist-knowledge-body">${article.body || ''}</div></article></div>`;
@@ -1372,6 +1470,17 @@
       try { openRenewal(renew.dataset.renew); } catch (e) { if (mobileOrderAction) state.modalTrigger = null; toast(e.message, 'error'); }
       return;
     }
+    const noticeAction = target.closest('[data-action="open-notice"], [data-action="next-notice"], [data-action="retry-notices"]');
+    if (noticeAction) {
+      if (noticeAction.dataset.action === 'next-notice') advanceNotice();
+      else if (noticeAction.dataset.action === 'retry-notices') await loadNotices(beginRouteRender('/plan'));
+      else if (state.notices[state.noticeIndex]) {
+        state.modalTrigger = noticeAction;
+        state.modal = { type: 'notice', notice: state.notices[state.noticeIndex] };
+        renderModal();
+      }
+      return;
+    }
     const knowledge = target.closest('[data-knowledge-id]');
     if (knowledge) { try { await openKnowledge(knowledge.dataset.knowledgeId); } catch (e) { toast(e.message, 'error'); } return; }
     const copy = target.closest('[data-copy]');
@@ -1587,7 +1696,14 @@
   });
   document.addEventListener('keydown', (event) => {
     if (!state.active) return;
-    if (event.key === 'Escape' && (isMobileOrderActionModal() || state.modal?.type === 'entitlement')) {
+    if (event.key === 'Tab' && state.modal?.type === 'notice') {
+      const elements = Array.from(document.querySelectorAll('.dist-modal [data-modal-action], .dist-notice-body, .dist-notice-body a[href]'));
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+    if (event.key === 'Escape' && (isMobileOrderActionModal() || state.modal?.type === 'entitlement' || state.modal?.type === 'notice')) {
       event.preventDefault();
       closeModal();
       return;
