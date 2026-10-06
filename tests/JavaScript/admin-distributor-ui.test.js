@@ -455,7 +455,7 @@ test('admin exposes the package audience controls separately from permission gro
   assert.match(source, /data-distributor-name/);
   assert.match(source, /data-distributor-name-readonly-row/);
   assert.match(source, /data-distributor-name-value/);
-  assert.match(source, /maxlength="100"/);
+  assert.match(source, /maxlength="16"/);
   assert.match(source, /showReadonly = checkbox\.checked && savedName !== ''/);
   assert.match(source, /\/order\/remark\/update/);
   assert.match(source, /id="admin-dist-remark-title"/);

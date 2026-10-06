@@ -31,6 +31,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property-read User $distributor
  * @property-read User $subscriber
  * @property-read User|null $settledBy
+ * @property string|null $subscription_code
+ * @property string|null $subscription_name
  */
 class DistributorOrder extends Model
 {
@@ -60,11 +62,13 @@ class DistributorOrder extends Model
     public const SETTLEMENT_UNSETTLED = 0;
     public const SETTLEMENT_SETTLED = 1;
 
+    /** @return BelongsTo<Order, $this> */
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class, 'order_id');
     }
 
+    /** @return BelongsTo<User, $this> */
     public function distributor(): BelongsTo
     {
         return $this->belongsTo(User::class, 'distributor_user_id');

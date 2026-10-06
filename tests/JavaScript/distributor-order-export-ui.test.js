@@ -47,7 +47,7 @@ test('distributor order search supports enter, trims input and searches on the s
   assert.match(renderBlock[0], /params\.set\('search', state\.orderSearch\)/);
   assert.match(source, /event\.key !== 'Enter'/);
   assert.match(source, /event\.target\.value\.trim\(\)/);
-  assert.match(source, /输入订单号或用户名称查询/);
+  assert.match(source, /输入短订阅号、订单号或用户名称查询/);
 });
 
 test('distributor order list renders the administrator remark as read-only text', () => {

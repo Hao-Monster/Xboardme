@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Admin;
 
+use App\Rules\DistributorName;
 use Illuminate\Foundation\Http\FormRequest;
 
 class UserGenerate extends FormRequest
@@ -21,7 +22,7 @@ class UserGenerate extends FormRequest
             'email_suffix' => 'required',
             'password' => 'nullable',
             'is_distributor' => 'sometimes|boolean',
-            'distributor_name' => 'nullable|string|max:100|required_if:is_distributor,1,true'
+            'distributor_name' => ['nullable', 'string', 'required_if:is_distributor,1,true', new DistributorName()]
         ];
     }
 
@@ -31,7 +32,7 @@ class UserGenerate extends FormRequest
             'generate_count.integer' => '生成数量必须为数字',
             'generate_count.max' => '生成数量最大为500个',
             'distributor_name.required_if' => '启用分销商时必须填写分销商名称',
-            'distributor_name.max' => '分销商名称不能超过100个字符'
+            'distributor_name.max' => '分销商名称不能超过16个字符'
         ];
     }
 

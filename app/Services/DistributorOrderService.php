@@ -90,6 +90,7 @@ class DistributorOrderService
                 'hwid_enabled' => true,
                 'hwid_limit' => $lockedPlan->distributor_hwid_limit,
             ]);
+            app(DistributorSubscriptionNameService::class)->ensure($delivery);
 
             $order->fill([
                 'distributor_order_id' => $delivery->id,
@@ -233,6 +234,7 @@ class DistributorOrderService
 
     public function deliveryData(DistributorOrder $delivery, bool $includeClaimUrl = true): array
     {
+        app(DistributorSubscriptionNameService::class)->ensure($delivery);
         $delivery->loadMissing([
             'order:id,trade_no,plan_id,period',
             'order.plan:id,name',
@@ -242,6 +244,8 @@ class DistributorOrderService
 
         $data = [
             'trade_no' => $delivery->order->trade_no,
+            'subscription_code' => $delivery->subscription_code,
+            'subscription_name' => $delivery->subscription_name,
             'customer_name' => trim((string) $delivery->customer_name),
             'plan_id' => (int) $delivery->order->plan_id,
             'plan_name' => (string) ($delivery->order->plan->name ?: ''),
@@ -278,6 +282,7 @@ class DistributorOrderService
 
     public function subscriptionQrData(DistributorOrder $delivery): array
     {
+        app(DistributorSubscriptionNameService::class)->ensure($delivery);
         $delivery->loadMissing([
             'order:id,trade_no',
             'subscriber:id,token',
@@ -290,6 +295,8 @@ class DistributorOrderService
 
         return [
             'trade_no' => $delivery->order->trade_no,
+            'subscription_code' => $delivery->subscription_code,
+            'subscription_name' => $delivery->subscription_name,
             'customer_name' => trim((string) $delivery->customer_name),
             'qr_code' => $this->makeQrDataUri($this->subscriptionUrl($delivery)),
             'hwid_enabled' => (bool) $delivery->hwid_enabled,
@@ -343,11 +350,12 @@ class DistributorOrderService
 
     public function subscriptionUrl(DistributorOrder $delivery): string
     {
+        app(DistributorSubscriptionNameService::class)->ensure($delivery);
         $delivery->loadMissing(['order:id,trade_no', 'subscriber:id,token']);
 
         return Helper::withSubscriptionRemark(
             Helper::getSubscribeUrl($delivery->subscriber->token),
-            (string) $delivery->order->trade_no
+            (string) $delivery->subscription_name
         );
     }
 }
