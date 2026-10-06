@@ -66,6 +66,8 @@ class OrderResource extends JsonResource
             'is_distributor_order' => $distributorOrder !== null,
             'is_subscription_origin' => $isSubscriptionOrigin,
             'subscription_trade_no' => $distributorOrder?->order?->trade_no,
+            'subscription_code' => $distributorOrder?->subscription_code,
+            'subscription_name' => $distributorOrder?->subscription_name,
             'order_type_label' => Order::$typeMap[(int) $this->type] ?? (string) $this->type,
             'customer_name' => $distributorOrder?->customer_name,
             'remark' => $distributorOrder?->remark,

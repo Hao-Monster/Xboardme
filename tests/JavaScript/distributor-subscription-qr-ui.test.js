@@ -29,7 +29,7 @@ test('subscription QR preview uses the protected endpoint and composites order p
   assert.match(source, /payload\.customer_name/);
   assert.match(source, /const titleLines = wrapCanvasText/);
   assert.match(source, /titleLines\.forEach/);
-  assert.match(source, /`\$\{t\('orderNo'\)\} \$\{payload\.trade_no\}`/);
+  assert.match(source, /const detailLines = \[payload\.subscription_name \|\| `\$\{t\(\x27orderNo\x27\)\} \$\{payload\.trade_no\}`, \.\.\.deviceTexts\]/);
   assert.match(source, /canvas\.toDataURL\('image\/png'\)/);
   assert.match(source, /canvasBlob\(canvas\)/);
   assert.match(source, /dist-subscription-qr-preview/);
@@ -40,7 +40,7 @@ test('composited PNG supports image clipboard copy, feedback, download, and unsu
   assert.match(source, /new ClipboardItem\(\{ 'image\/png': state\.modal\.blob \}\)/);
   assert.match(source, /state\.modal\.copied = true/);
   assert.match(source, /modal\.copied \? t\('copySuccess'\) : t\('copyImage'\)/);
-  assert.match(source, /state\.modal\.payload\?\.trade_no \|\| state\.modal\.delivery\?\.trade_no/);
+  assert.match(source, /subscriptionLabel\(state\.modal\.payload \|\| state\.modal\.delivery\)/);
   assert.match(source, /URL\.createObjectURL\(state\.modal\.blob\)/);
   assert.match(source, /当前浏览器不支持复制图片，请使用下载图片/);
 });

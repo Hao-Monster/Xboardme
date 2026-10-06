@@ -90,6 +90,8 @@ class OrderController extends Controller
         $data['is_distributor_order'] = $distributorOrder !== null;
         $data['order_type_label'] = Order::$typeMap[(int) $order->type] ?? (string) $order->type;
         $data['subscription_trade_no'] = $distributorOrder?->order?->trade_no;
+        $data['subscription_code'] = $distributorOrder?->subscription_code;
+        $data['subscription_name'] = $distributorOrder?->subscription_name;
         $data['distributor_email'] = $distributorOrder?->distributor?->email;
         $data['distributor_name'] = $distributorOrder?->distributor?->distributor_name
             ?: $distributorOrder?->distributor?->email;
@@ -175,7 +177,7 @@ class OrderController extends Controller
                 $query->select([
                     'id', 'order_id', 'distributor_user_id', 'subscriber_user_id', 'customer_name', 'remark',
                     'delivery_status', 'settlement_status', 'config_issued_at', 'connected_at', 'connected_node_id',
-                    'connected_node_name', 'settled_at',
+                    'connected_node_name', 'settled_at', 'subscription_code', 'subscription_name',
                 ])->with([
                     'hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
                 ]);
@@ -245,6 +247,8 @@ class OrderController extends Controller
             $orderArray['is_distributor_order'] = $distributorOrder !== null;
             $orderArray['order_type_label'] = Order::$typeMap[(int) $order->type] ?? (string) $order->type;
             $orderArray['subscription_trade_no'] = $distributorOrder?->order?->trade_no;
+            $orderArray['subscription_code'] = $distributorOrder?->subscription_code;
+            $orderArray['subscription_name'] = $distributorOrder?->subscription_name;
             $orderArray['distributor_email'] = $distributorOrder?->distributor?->email;
             $orderArray['distributor_name'] = $distributorOrder?->distributor?->distributor_name
                 ?: $distributorOrder?->distributor?->email;

@@ -11,7 +11,7 @@ test('distributor order table places order time beside the order number', () => 
   const renderer = distributor.match(/async function renderOrders\(options = \{\}\)[\s\S]*?function periodLabel/);
   assert.ok(renderer, 'distributor order renderer should exist');
   assert.match(renderer[0], /<th class=\"dist-sequence-header\">[\s\S]*?<th>\$\{t\('orderTime'\)\}/);
-  assert.match(renderer[0], /<td class="dist-order-identity"><strong>\$\{escapeHtml\(order\.trade_no\)\}<\/strong><\/td>\s*<td class="dist-order-time" data-label="\$\{t\('orderTime'\)\}">\$\{formatTime\(order\.created_at\)\}<\/td>/);
+  assert.match(renderer[0], /<td class="dist-order-identity"><strong>\$\{escapeHtml\(subscriptionLabel\(order\)\)\}<\/strong>[^\n]*<\/td>\s*<td class="dist-order-time" data-label="\$\{t\('orderTime'\)\}">\$\{formatTime\(order\.created_at\)\}<\/td>/);
   assert.doesNotMatch(renderer[0], /\$\{orderType\} · \$\{formatTime\(order\.created_at\)\}/);
   assert.match(renderer[0], /colspan="14"/);
   assert.match(distributorStyles, /\.dist-order-time \{[^}]*white-space:nowrap/);
@@ -23,7 +23,7 @@ test('both administrator distributor tables use an independent order time column
   assert.match(rows[0], /<td class="admin-dist-order-time">\$\{formatTime\(order\.created_at\)\}<\/td>/);
   assert.doesNotMatch(rows[0], /order_type_label[^\n]*formatTime\(order\.created_at\)/);
 
-  const headers = [...admin.matchAll(/<th>订单号<\/th><th>下单时间<\/th><th>用户名称<\/th>/g)];
+  const headers = [...admin.matchAll(/<th>订阅名称 \/ 订单号<\/th><th>下单时间<\/th><th>用户名称<\/th>/g)];
   assert.equal(headers.length, 2, 'modal and native administrator tables should both expose order time');
   assert.equal([...admin.matchAll(/colspan="11"/g)].length, 2);
   assert.match(adminStyles, /\.admin-dist-order-time \{[^}]*white-space:nowrap/);

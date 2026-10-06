@@ -114,17 +114,17 @@ class ClientController extends Controller
             return;
         }
 
-        $title = "订单号：{$tradeNo}";
+        $title = $delivery->subscription_name ?: "订单号：{$tradeNo}";
         $response->headers->set('profile-title', 'base64:' . base64_encode($title));
-        $response->headers->set('content-disposition', $this->buildOrderContentDisposition(
-            $tradeNo,
+        $response->headers->set('content-disposition', $this->buildSubscriptionContentDisposition(
+            (string) ($delivery->subscription_code ?: $tradeNo),
             $title,
             (string) $response->headers->get('content-disposition')
         ));
         $response->headers->set('x-order-no', $tradeNo);
     }
 
-    private function buildOrderContentDisposition(string $tradeNo, string $title, string $current): string
+    private function buildSubscriptionContentDisposition(string $code, string $title, string $current): string
     {
         $extension = '';
         $decoded = rawurldecode($current);
@@ -132,7 +132,7 @@ class ClientController extends Controller
             $extension = '.' . strtolower($matches[1]);
         }
 
-        $asciiFilename = $tradeNo . $extension;
+        $asciiFilename = $code . $extension;
         $utf8Filename = $title . $extension;
 
         return 'attachment; filename="' . $asciiFilename . '"; filename*=UTF-8\'\'' . rawurlencode($utf8Filename);

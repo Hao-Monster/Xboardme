@@ -86,4 +86,38 @@ class ThemeAssetReleaseIntegrityTest extends TestCase
         $this->assertStringContainsString('settlement_not_in_advanced_filters', $browserSmoke);
         $this->assertStringContainsString('MOBILE_ASSET_SMOKE=PASS', $browserSmoke);
     }
+
+    public function test_served_browser_smoke_covers_new_names_and_unchanged_legacy_orders(): void
+    {
+        $browserSmoke = file_get_contents(base_path('.github/scripts/smoke-distributor-mobile-browser.sh'));
+
+        $this->assertStringContainsString("subscription_name: '一二三四五六七八九十甲乙丙丁戊己-261006-A7K9Q2'", $browserSmoke);
+        $this->assertStringContainsString("subscription_code: 'A7K9Q2'", $browserSmoke);
+        $this->assertStringContainsString('subscription_name: null', $browserSmoke);
+        $this->assertStringContainsString('data: [releaseOrder, legacyOrder]', $browserSmoke);
+        $this->assertStringContainsString('new_subscription_name', $browserSmoke);
+        $this->assertStringContainsString('new_order_number_retained', $browserSmoke);
+        $this->assertStringContainsString('legacy_order_identity', $browserSmoke);
+        $this->assertStringContainsString("row?.querySelectorAll('.dist-order-actions button')", $browserSmoke);
+        $this->assertStringContainsString('if (actions.length !== 3)', $browserSmoke);
+        $this->assertStringContainsString('prices_not_auto_hidden', $browserSmoke);
+        $this->assertStringContainsString('EXPECTED_SUBSCRIPTION_NAMES:=true', $browserSmoke);
+        $this->assertStringContainsString('invalid_subscription_name_expectation', $browserSmoke);
+        $this->assertStringContainsString('previous_release_order_identity', $browserSmoke);
+
+        $remoteSmoke = file_get_contents(base_path('.github/scripts/smoke-distributor-remote.sh'));
+        $this->assertStringContainsString('git show "$EXPECTED_ASSET_VERSION:theme/Xboard/assets/distributor.js" > "$expected_distributor"', $remoteSmoke);
+        $this->assertStringContainsString("grep -Fq 'subscription_name' \"\$expected_distributor\"", $remoteSmoke);
+        $this->assertStringContainsString('EXPECTED_SUBSCRIPTION_NAMES="$expected_subscription_names"', $remoteSmoke);
+    }
+
+    public function test_browser_smoke_accepts_only_the_rendered_result_node(): void
+    {
+        $browserSmoke = file_get_contents(base_path('.github/scripts/smoke-distributor-mobile-browser.sh'));
+
+        $this->assertStringContainsString('grep -Fq \'<pre id="mobile-smoke-result">MOBILE_ASSET_SMOKE=PASS</pre>\'', $browserSmoke);
+        $this->assertStringNotContainsString("grep -Fq 'MOBILE_ASSET_SMOKE=PASS'", $browserSmoke);
+        $this->assertStringContainsString('MOBILE_ASSET_SMOKE=FAIL browser_assertion', $browserSmoke);
+        $this->assertStringContainsString('MOBILE_ASSET_SMOKE=FAIL browser_timeout', $browserSmoke);
+    }
 }

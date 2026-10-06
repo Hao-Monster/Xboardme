@@ -92,6 +92,9 @@ html.distributor-mode, html.distributor-mode body { margin:0; background:var(--d
 .dist-table-wrap th,.dist-table-wrap td { padding:16px 18px; border-bottom:1px solid var(--dist-border); text-align:left; }
 .dist-table-wrap th { color:var(--dist-muted); font-size:13px; font-weight:600; }
 .dist-table-wrap td small { display:block; color:var(--dist-muted); margin-top:5px; }
+.dist-order-identity strong,.dist-order-identity small,.dist-delivery-identity { overflow-wrap:anywhere; }
+.dist-delivery-identity strong,.dist-delivery-identity small { display:block; }
+.dist-renewal-modal dd { min-width:0; overflow-wrap:anywhere; }
 .dist-order-time { min-width:150px; white-space:nowrap; color:var(--dist-muted); font-size:13px; }
 .dist-order-customer { min-width:140px; }.dist-order-plan { min-width:150px; }.dist-order-period { min-width:72px; }.dist-order-amount { min-width:105px; }.dist-order-settlement { min-width:92px; }.dist-order-remark-cell { min-width:180px; }
 .dist-order-bound-devices { min-width:220px; max-width:280px; white-space:normal; }.dist-order-used-traffic { min-width:105px; white-space:nowrap; }

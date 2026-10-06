@@ -124,6 +124,12 @@ verify_release_assets() {
   local local_hash
   local local_bytes
   local asset_version=$EXPECTED_ASSET_VERSION
+  local expected_subscription_names=false
+  local expected_distributor="$asset_work_dir/$label-expected-distributor-contract.js"
+  git show "$EXPECTED_ASSET_VERSION:theme/Xboard/assets/distributor.js" > "$expected_distributor"
+  if grep -Fq 'subscription_name' "$expected_distributor"; then
+    expected_subscription_names=true
+  fi
 
   curl --silent --show-error --fail --location \
     --header 'Cache-Control: no-cache' \
@@ -158,6 +164,7 @@ verify_release_assets() {
   DISTRIBUTOR_CSS_URL="$origin/theme/Xboard/assets/distributor.css?v=$asset_version" \
   DISTRIBUTOR_JS_URL="$origin/theme/Xboard/assets/distributor.js?v=$asset_version" \
   EXPECTED_ASSET_VERSION="$asset_version" \
+  EXPECTED_SUBSCRIPTION_NAMES="$expected_subscription_names" \
     bash "$script_dir/smoke-distributor-mobile-browser.sh"
 }
 

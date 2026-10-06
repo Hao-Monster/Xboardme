@@ -48,7 +48,7 @@ class OrderController extends Controller
 
         $orders = Order::with([
             'plan',
-            'distributorSubscription:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
+            'distributorSubscription:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit,subscription_code,subscription_name',
             'distributorSubscription.order:id,trade_no,plan_id,period',
             'distributorSubscription.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit,banned',
             'distributorSubscription.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',
@@ -159,7 +159,7 @@ class OrderController extends Controller
         $order = Order::with([
             'payment',
             'plan',
-            'distributorSubscription:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit',
+            'distributorSubscription:id,order_id,subscriber_user_id,customer_name,remark,delivery_status,settlement_status,config_issued_at,connected_at,connected_node_id,connected_node_name,claimed_at,closed_at,hwid_enabled,hwid_limit,subscription_code,subscription_name',
             'distributorSubscription.order:id,trade_no,plan_id,period',
             'distributorSubscription.subscriber:id,plan_id,token,transfer_enable,u,d,expired_at,speed_limit,device_limit,banned',
             'distributorSubscription.hwidDevices:id,distributor_order_id,hwid,device_model,last_seen_at',

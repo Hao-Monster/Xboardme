@@ -353,7 +353,7 @@ class DistributorOrderTest extends TestCase
         $first->assertRedirect(
             str_replace('#', '?flag=meta#', Helper::withSubscriptionRemark(
                 Helper::getSubscribeUrl($delivery->subscriber->token),
-                $order->trade_no
+                $delivery->subscription_name
             ))
         );
 
@@ -393,7 +393,7 @@ class DistributorOrderTest extends TestCase
             ->assertHeader('x-hwid-active', 'true')
             ->assertHeader('x-order-no', $order->trade_no);
         $this->assertSame(
-            '订单号：' . $order->trade_no,
+            $order->distributorOrder()->firstOrFail()->subscription_name,
             base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
         );
         $this->assertOrderContentDisposition($response, $order->trade_no);
@@ -447,7 +447,7 @@ class DistributorOrderTest extends TestCase
             ->assertHeader('x-hwid-active', 'true')
             ->assertHeader('x-order-no', $order->trade_no);
         $this->assertSame(
-            '订单号：' . $order->trade_no,
+            $order->distributorOrder()->firstOrFail()->subscription_name,
             base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
         );
         $this->assertOrderContentDisposition($response, $order->trade_no);
@@ -530,7 +530,7 @@ class DistributorOrderTest extends TestCase
 
             $response->assertOk()->assertHeader('x-order-no', $order->trade_no);
             $this->assertSame(
-                '订单号：' . $order->trade_no,
+                $order->distributorOrder()->firstOrFail()->subscription_name,
                 base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
             );
         }
@@ -538,7 +538,7 @@ class DistributorOrderTest extends TestCase
         $this->assertNotSame($firstOrder->trade_no, $secondOrder->trade_no);
     }
 
-    public function test_distributor_clash_subscription_uses_order_number_in_all_title_headers(): void
+    public function test_distributor_clash_subscription_uses_subscription_name_in_all_title_headers(): void
     {
         config(['cache.stores.redis' => ['driver' => 'array']]);
         app('cache')->forgetDriver('redis');
@@ -562,7 +562,7 @@ class DistributorOrderTest extends TestCase
 
         $response->assertOk()->assertHeader('x-order-no', $order->trade_no);
         $this->assertSame(
-            '订单号：' . $order->trade_no,
+            $order->distributorOrder()->firstOrFail()->subscription_name,
             base64_decode(substr((string) $response->headers->get('profile-title'), 7), true)
         );
         $this->assertOrderContentDisposition($response, $order->trade_no);
@@ -603,7 +603,7 @@ class DistributorOrderTest extends TestCase
         $this->assertFalse($claimedData['can_open']);
     }
 
-    public function test_distributor_subscription_urls_use_order_number_as_karing_remark(): void
+    public function test_distributor_subscription_urls_use_subscription_name_as_karing_remark(): void
     {
         $order = $this->createDistributorOrder(
             $this->makeUser('karing-url-title-dealer@example.com', true),
@@ -614,7 +614,7 @@ class DistributorOrderTest extends TestCase
 
         $url = app(DistributorOrderService::class)->subscriptionUrl($delivery);
 
-        $this->assertSame($order->trade_no, rawurldecode((string) parse_url($url, PHP_URL_FRAGMENT)));
+        $this->assertSame($delivery->subscription_name, rawurldecode((string) parse_url($url, PHP_URL_FRAGMENT)));
         $this->assertSame(
             parse_url(Helper::getSubscribeUrl($delivery->subscriber->token), PHP_URL_PATH),
             parse_url($url, PHP_URL_PATH)
@@ -1113,7 +1113,7 @@ class DistributorOrderTest extends TestCase
         $response->assertOk();
 
         $rows = $this->readXlsx($response);
-        $this->assertSame(['订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注'], $rows[0]);
+        $this->assertSame(['订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注', '订阅名称', '短订阅号'], $rows[0]);
         $this->assertSame($newer->trade_no, $rows[1][0]);
         $this->assertSame(
             Carbon::createFromTimestamp($newer->created_at, config('app.timezone'))->format('Y-m-d H:i:s'),
@@ -1131,6 +1131,8 @@ class DistributorOrderTest extends TestCase
         $this->assertEquals(30.0, $rows[1][10]);
         $this->assertSame('未结算', $rows[1][11]);
         $this->assertSame('=HYPERLINK("https://invalid.example","新订单备注")', $rows[1][12]);
+        $this->assertSame($newer->distributorOrder()->firstOrFail()->subscription_name, $rows[1][13]);
+        $this->assertSame($newer->distributorOrder()->firstOrFail()->subscription_code, $rows[1][14]);
         $this->assertSame($older->trade_no, $rows[2][0]);
         $this->assertSame('旧订单备注', $rows[2][12]);
         $this->assertCount(3, $rows);
@@ -1201,7 +1203,9 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.trade_no', $settled->trade_no);
 
         $rows = $this->readXlsx($this->get('/api/v1/user/order/export?settlement_status=1')->assertOk());
-        $this->assertSame(['订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注'], $rows[0]);
+        $this->assertSame(['订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注', '订阅名称', '短订阅号'], $rows[0]);
+        $this->assertSame($settled->distributorOrder()->firstOrFail()->subscription_name, $rows[1][12]);
+        $this->assertSame($settled->distributorOrder()->firstOrFail()->subscription_code, $rows[1][13]);
         $this->assertCount(2, $rows);
         $this->assertSame($settled->trade_no, $rows[1][0]);
         $this->assertSame(
@@ -2070,10 +2074,11 @@ class DistributorOrderTest extends TestCase
 
     private function assertOrderContentDisposition($response, string $tradeNo, string $extension = ''): void
     {
+        $delivery = Order::where('trade_no', $tradeNo)->firstOrFail()->distributorOrder()->firstOrFail();
         $disposition = (string) $response->headers->get('content-disposition');
-        $this->assertStringContainsString('filename="' . $tradeNo . $extension . '"', $disposition);
+        $this->assertStringContainsString('filename="' . $delivery->subscription_code . $extension . '"', $disposition);
         $this->assertStringContainsString(
-            "filename*=UTF-8''" . rawurlencode('订单号：' . $tradeNo . $extension),
+            "filename*=UTF-8''" . rawurlencode($delivery->subscription_name . $extension),
             $disposition
         );
     }
@@ -2086,6 +2091,7 @@ class DistributorOrderTest extends TestCase
             'uuid' => Helper::guid(true),
             'token' => Helper::guid(),
             'is_distributor' => $isDistributor,
+            'distributor_name' => $isDistributor ? '测试商户' : null,
             'is_admin' => false,
             'is_staff' => false,
             'banned' => false,

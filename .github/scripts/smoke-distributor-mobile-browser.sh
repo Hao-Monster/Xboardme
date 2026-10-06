@@ -5,6 +5,12 @@ set -euo pipefail
 : "${DISTRIBUTOR_JS_URL:?DISTRIBUTOR_JS_URL is required}"
 : "${EXPECTED_ASSET_VERSION:?EXPECTED_ASSET_VERSION is required}"
 : "${BROWSER_SMOKE_TIMEOUT_SECONDS:=30}"
+: "${EXPECTED_SUBSCRIPTION_NAMES:=true}"
+
+case "$EXPECTED_SUBSCRIPTION_NAMES" in
+  true|false) ;;
+  *) echo 'MOBILE_ASSET_SMOKE=FAIL invalid_subscription_name_expectation' >&2; exit 1 ;;
+esac
 
 if [[ ! "$EXPECTED_ASSET_VERSION" =~ ^[a-f0-9]{40}$ ]]; then
   echo 'MOBILE_ASSET_SMOKE=FAIL invalid_release_version' >&2
@@ -76,9 +82,12 @@ cat > "$fixture" <<HTML
     window.settings = { title: 'XBoard release smoke' };
     window.location.hash = '#/order';
     window.localStorage.setItem('VUE_NAIVE_ACCESS_TOKEN', JSON.stringify({ value: 'Bearer release-smoke', expire: null }));
+    const expectSubscriptionNames = $EXPECTED_SUBSCRIPTION_NAMES;
     const releaseOrder = {
       id: 70001,
       trade_no: 'RELEASE-SMOKE-ORDER-70001',
+      subscription_name: '一二三四五六七八九十甲乙丙丁戊己-261006-A7K9Q2',
+      subscription_code: 'A7K9Q2',
       type: 1,
       settlement_status: 0,
       subscription_trade_no: 'RELEASE-SMOKE-ORDER-70001',
@@ -106,10 +115,25 @@ cat > "$fixture" <<HTML
         device_limit: 0
       }
     };
+    const legacyOrder = {
+      ...releaseOrder,
+      id: 70002,
+      trade_no: 'RELEASE-SMOKE-LEGACY-70002',
+      subscription_trade_no: 'RELEASE-SMOKE-LEGACY-70002',
+      subscription_name: null,
+      subscription_code: null,
+      customer_name: '历史订阅验收用户',
+      can_view_subscription_qr: false,
+      can_renew: false,
+      hwid_enabled: false,
+      bound_devices: [],
+      bound_device_count: 0,
+      subscription_entitlement: null
+    };
     window.fetch = async function (input) {
       const url = String(input);
       if (url.includes('/user/order/fetch')) {
-        return new Response(JSON.stringify({ total: 1, current_page: 1, per_page: 20, last_page: 1, data: [releaseOrder] }), {
+        return new Response(JSON.stringify({ total: 2, current_page: 1, per_page: 20, last_page: 1, data: [releaseOrder, legacyOrder] }), {
           status: 200, headers: { 'Content-Type': 'application/json' }
         });
       }
@@ -145,15 +169,22 @@ cat > "$fixture" <<HTML
       const sequenceCell = row?.querySelector('.dist-order-sequence');
       const actionCell = row?.querySelector('.dist-order-action-cell');
       const orderIdentity = row?.querySelector('.dist-order-identity');
+      const legacyRow = document.querySelector('[data-subscription-trade-no="RELEASE-SMOKE-LEGACY-70002"]');
+      const legacyIdentity = legacyRow?.querySelector('.dist-order-identity');
       const hiddenEntitlement = document.querySelector('.dist-entitlement-row[hidden]');
       const settlement = document.querySelector('.dist-order-settlement');
       const boundDevices = document.querySelector('.dist-order-bound-devices');
       const usedTraffic = document.querySelector('.dist-order-used-traffic');
-      const actions = Array.from(document.querySelectorAll('.dist-order-actions button'));
+      const actions = Array.from(row?.querySelectorAll('.dist-order-actions button') || []);
       const failures = [];
       const mobile = window.innerWidth <= 640;
       if (mobile && !window.matchMedia('(max-width:640px), (max-width:900px) and (hover:none) and (pointer:coarse)').matches) failures.push('mobile_media_query');
       if (!row) failures.push('mobile_order_row');
+      if (expectSubscriptionNames) {
+        if (releaseOrder.subscription_name.length !== 30 || orderIdentity?.querySelector('strong')?.textContent !== releaseOrder.subscription_name) failures.push('new_subscription_name');
+        if (!orderIdentity?.querySelector('small')?.textContent.includes(releaseOrder.trade_no)) failures.push('new_order_number_retained');
+      } else if (orderIdentity?.querySelector('strong')?.textContent !== releaseOrder.trade_no || orderIdentity?.querySelector('small')) failures.push('previous_release_order_identity');
+      if (legacyIdentity?.querySelector('strong')?.textContent !== legacyOrder.trade_no || legacyIdentity?.querySelector('small')) failures.push('legacy_order_identity');
       if (!wrapper) failures.push('order_table_wrapper');
       if (!table) failures.push('orders_table');
       if (mobile && (!heading || getComputedStyle(heading).position !== 'sticky')) failures.push('sticky_heading');
@@ -275,7 +306,7 @@ for viewport in 360,800 390,844 412,924 430,932 1366,900 1440,900 1920,1080; do
     exit 1
   fi
 
-  if ! grep -Fq 'MOBILE_ASSET_SMOKE=PASS' <<< "$browser_output"; then
+  if ! grep -Fq '<pre id="mobile-smoke-result">MOBILE_ASSET_SMOKE=PASS</pre>' <<< "$browser_output"; then
     printf '%s\n' "$browser_output" >&2
     echo "MOBILE_ASSET_SMOKE=FAIL browser_assertion viewport=$viewport" >&2
     exit 1

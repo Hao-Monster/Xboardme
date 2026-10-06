@@ -42,7 +42,7 @@
       claimedOk: '订阅已经领取，可以安全关闭。', sequence: '序号', orderNo: '订单号', orderTime: '下单时间', amount: '订单金额', status: '订单状态',
       waitingConnection: '等待用户开启代理进入网络', connectedThrough: '客户已经通过 {node} 节点进入网络',
       settlement: '结算状态', plan: '订阅计划', period: '周期', created: '创建时间',
-      remark: '备注', actions: '操作', customerName: '用户名称',
+      remark: '备注', actions: '操作', customerName: '用户名称', subscriptionName: '订阅名称',
       boundDevices: '已绑定设备', unboundDevice: '尚未绑定设备', hwidDisabled: '未启用设备绑定',
       viewSubscriptionQr: '查看订阅二维码', subscriptionQrAction: '二维码', subscriptionPending: '订阅尚未生成',
       subscriptionBoundDevice: '订阅已绑定设备', subscriptionUnboundDevice: '订阅尚未绑定设备',
@@ -58,7 +58,7 @@
       inviteCode: '邀请码', copy: '复制邀请链接', commissionHistory: '佣金记录', noCode: '暂无邀请码',
       success: '操作成功', language: '语言', dark: '深色模式', light: '浅色模式', account: '账号',
       settlementFilter: '结算状态', allSettlements: '全部', exportExcel: '导出 Excel', exportSuccess: 'Excel 导出成功',
-      orderSearchPlaceholder: '输入订单号或用户名称查询', search: '查询', clear: '清空',
+      orderSearchPlaceholder: '输入短订阅号、订单号或用户名称查询', search: '查询', clear: '清空',
       orderOverview: '订单经营概览', orderOverviewHint: '统计与订单筛选相互独立，收入为所选时间内订单金额的累计值。',
       todayIncome: '今日收入', todayOrders: '今日订单', yesterdayIncome: '昨日收入', yesterdayOrders: '昨日订单',
       income: '收入', orderCount: '订单', customRange: '自定义', apply: '应用', advancedFilters: '高级筛选', hideFilters: '收起筛选',
@@ -90,7 +90,7 @@
       claimedOk: 'The subscription was claimed. It is safe to close.', sequence: 'No.', orderNo: 'Order', orderTime: 'Order time', amount: 'Amount', status: 'Status',
       waitingConnection: 'Waiting for the customer to enable the proxy', connectedThrough: 'Customer connected through {node}',
       settlement: 'Settlement', plan: 'Plan', period: 'Period', created: 'Created',
-      remark: 'Remark', actions: 'Actions', customerName: 'Customer name',
+      remark: 'Remark', actions: 'Actions', customerName: 'Customer name', subscriptionName: 'Subscription name',
       boundDevices: 'Bound devices', unboundDevice: 'No device bound', hwidDisabled: 'Device binding disabled',
       viewSubscriptionQr: 'View subscription QR', subscriptionQrAction: 'QR', subscriptionPending: 'Subscription not generated',
       subscriptionBoundDevice: 'Subscription bound to device', subscriptionUnboundDevice: 'Subscription has no bound device',
@@ -107,7 +107,7 @@
       commissionHistory: 'Commission history', noCode: 'No invite code', success: 'Success',
       language: 'Language', dark: 'Dark mode', light: 'Light mode', account: 'Account',
       settlementFilter: 'Settlement', allSettlements: 'All', exportExcel: 'Export Excel', exportSuccess: 'Excel exported',
-      orderSearchPlaceholder: 'Search by order or customer name', search: 'Search', clear: 'Clear',
+      orderSearchPlaceholder: 'Search by subscription code, order or customer name', search: 'Search', clear: 'Clear',
       orderOverview: 'Order performance', orderOverviewHint: 'Analytics are independent from list filters. Income is the sum of order amounts in the selected dates.',
       todayIncome: "Today's income", todayOrders: "Today's orders", yesterdayIncome: "Yesterday's income", yesterdayOrders: "Yesterday's orders",
       income: 'Income', orderCount: 'orders', customRange: 'Custom', apply: 'Apply', advancedFilters: 'More filters', hideFilters: 'Hide filters',
@@ -168,6 +168,9 @@
   function distributorAccountLabel(user) {
     const distributorName = String(user?.distributor_name ?? '').trim();
     return distributorName || String(user?.email ?? '').trim();
+  }
+  function subscriptionLabel(order) {
+    return String(order?.subscription_name || order?.trade_no || '');
   }
   const stripHtml = (value) => {
     const element = document.createElement('div');
@@ -242,7 +245,7 @@
       : (payload.hwid_devices || []).length
         ? payload.hwid_devices.map((hwid) => `${t('subscriptionBoundDevice')} ${hwid}`)
         : [t('subscriptionUnboundDevice')];
-    const detailLines = [`${t('orderNo')} ${payload.trade_no}`, ...deviceTexts]
+    const detailLines = [payload.subscription_name || `${t('orderNo')} ${payload.trade_no}`, ...deviceTexts]
       .flatMap((line) => wrapCanvasText(measure, line, width - padding * 2));
     const headerHeight = titleLines.length * titleLineHeight + 10 + detailLines.length * detailLineHeight + 20;
     canvas.width = width;
@@ -1060,7 +1063,7 @@
       return `<tr class="${rowClass}" data-subscription-trade-no="${escapeHtml(order.subscription_trade_no || order.trade_no)}">
         <td class="dist-order-sequence">${sequence}</td>
         <td class="${actionCellClass}"><div class="dist-order-actions utility-count-${utilityActionCount}">${order.is_subscription_origin ? qrAction : ''}${entitlementAction}${renewAction}</div></td>
-        <td class="dist-order-identity"><strong>${escapeHtml(order.trade_no)}</strong></td>
+        <td class="dist-order-identity"><strong>${escapeHtml(subscriptionLabel(order))}</strong>${order.subscription_name ? `<small>${t('orderNo')}：${escapeHtml(order.trade_no)}</small>` : ''}</td>
         <td class="dist-order-time" data-label="${t('orderTime')}">${formatTime(order.created_at)}</td>
         <td class="dist-order-type" data-label="${t('orderType')}">${orderType}</td>
         <td class="dist-order-original" data-label="${t('originalOrder')}">${originalOrder}</td>
@@ -1077,7 +1080,7 @@
     setContent(`<div class="dist-order-toolbar"><div class="dist-order-search"><button type="button" class="dist-order-columns-toggle" data-action="toggle-order-columns" aria-label="${t(state.orderFixedColumnsExpanded ? 'collapseOrderColumns' : 'expandOrderColumns')}">${t(state.orderFixedColumnsExpanded ? 'collapseOrderColumns' : 'expandOrderColumns')}</button><input id="dist-order-search" type="search" maxlength="512" value="${escapeHtml(state.orderSearch)}" placeholder="${t('orderSearchPlaceholder')}"><button data-action="search-orders">${t('search')}</button><button class="secondary" data-action="clear-order-search" ${state.orderSearch ? '' : 'disabled'}>${t('clear')}</button></div><button type="button" class="secondary dist-filter-toggle" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button data-action="export-orders">${t('exportExcel')}</button></div>
       ${renderOrderFilters()}
       <!-- class="dist-orders-table" -->
-       <div class="dist-mobile-order-controls"><button type="button" class="dist-order-columns-toggle dist-order-columns-toggle-mobile" data-action="toggle-order-columns" aria-label="${t(state.orderFixedColumnsExpanded ? 'collapseOrderColumns' : 'expandOrderColumns')}">${t(state.orderFixedColumnsExpanded ? 'collapseOrderColumns' : 'expandOrderColumns')}</button><button type="button" class="secondary dist-filter-toggle dist-filter-toggle-mobile" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button type="button" class="dist-export-orders-mobile" data-action="export-orders">${t('exportExcel')}</button></div><div class="dist-table-wrap dist-order-list" tabindex="0" aria-label="${t('orders')}"><table class="dist-orders-table ${state.orderFixedColumnsExpanded ? '' : 'is-order-columns-collapsed'}"><colgroup><col class="dist-col-sequence"><col class="dist-col-actions"><col class="dist-col-order-no"><col class="dist-col-order-time"><col class="dist-col-order-type"><col class="dist-col-original"><col class="dist-col-customer"><col class="dist-col-plan"><col class="dist-col-period"><col class="dist-col-amount"><col class="dist-col-devices"><col class="dist-col-traffic"><col class="dist-col-settlement"><col class="dist-col-remark"></colgroup><thead><tr><th class="dist-sequence-header">${t('sequence')}</th><th>${t('actions')}</th><th>${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('orderType')}</th><th>${t('originalOrder')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th></tr></thead>
+       <div class="dist-mobile-order-controls"><button type="button" class="dist-order-columns-toggle dist-order-columns-toggle-mobile" data-action="toggle-order-columns" aria-label="${t(state.orderFixedColumnsExpanded ? 'collapseOrderColumns' : 'expandOrderColumns')}">${t(state.orderFixedColumnsExpanded ? 'collapseOrderColumns' : 'expandOrderColumns')}</button><button type="button" class="secondary dist-filter-toggle dist-filter-toggle-mobile" data-action="toggle-order-filters" aria-expanded="${state.orderFiltersOpen}" aria-controls="dist-order-filters">${t(state.orderFiltersOpen ? 'hideFilters' : 'advancedFilters')}</button><button type="button" class="dist-export-orders-mobile" data-action="export-orders">${t('exportExcel')}</button></div><div class="dist-table-wrap dist-order-list" tabindex="0" aria-label="${t('orders')}"><table class="dist-orders-table ${state.orderFixedColumnsExpanded ? '' : 'is-order-columns-collapsed'}"><colgroup><col class="dist-col-sequence"><col class="dist-col-actions"><col class="dist-col-order-no"><col class="dist-col-order-time"><col class="dist-col-order-type"><col class="dist-col-original"><col class="dist-col-customer"><col class="dist-col-plan"><col class="dist-col-period"><col class="dist-col-amount"><col class="dist-col-devices"><col class="dist-col-traffic"><col class="dist-col-settlement"><col class="dist-col-remark"></colgroup><thead><tr><th class="dist-sequence-header">${t('sequence')}</th><th>${t('actions')}</th><th>${t('subscriptionName')} / ${t('orderNo')}</th><th>${t('orderTime')}</th><th>${t('orderType')}</th><th>${t('originalOrder')}</th><th>${t('customerName')}</th><th>${t('plan')}</th><th>${t('period')}</th><th>${t('amount')}</th><th>${t('boundDevices')}</th><th>${t('usedTraffic')}</th><th>${t('settlement')}</th><th>${t('remark')}</th></tr></thead>
       <tbody>${rows || `<tr class="dist-orders-empty"><td colspan="14" class="dist-empty">${t('empty')}</td></tr>`}</tbody></table></div>${desktopPagination}`);
     if (append) window.scrollTo({ top: oldScrollY, behavior: 'instant' });
   }
@@ -1261,6 +1264,7 @@
       if (modal.result) {
         root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-renewal-modal" role="dialog" aria-modal="true" aria-labelledby="dist-renewal-result-title"><button class="dist-modal-x" data-modal-action="renew-done" aria-label="${t('closePopup')}">×</button><h2 id="dist-renewal-result-title">${t('renewSuccess')}</h2>
           <p class="dist-renewal-hint">${t('renewHint')}</p><dl>
+          ${modal.order.subscription_name ? `<div><dt>${t('subscriptionName')}</dt><dd>${escapeHtml(modal.order.subscription_name)}</dd></div>` : ''}
           <div><dt>${t('renewOrder')}</dt><dd>${escapeHtml(modal.result.trade_no)}</dd></div>
           <div><dt>${t('amount')}</dt><dd>${money(modal.result.total_amount)}</dd></div>
           <div><dt>${t('renewNewExpiry')}</dt><dd>${formatTime(modal.result.expired_at_after)}</dd></div>
@@ -1272,6 +1276,7 @@
       const options = modal.periods.map(([key]) => `<option value="${key}" ${modal.period === key ? 'selected' : ''}>${periodName(key)} · ${money(modal.order.plan[key])}</option>`).join('');
       root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-renewal-modal" role="dialog" aria-modal="true" aria-labelledby="dist-renewal-title"><button class="dist-modal-x" data-modal-action="cancel" aria-label="${t('cancel')}">×</button><h2 id="dist-renewal-title">${t('renewTitle')}</h2>
         <p class="dist-renewal-hint">${t('renewHint')}</p><dl>
+        ${modal.order.subscription_name ? `<div><dt>${t('subscriptionName')}</dt><dd>${escapeHtml(modal.order.subscription_name)}</dd></div>` : ''}
         <div><dt>${t('customerName')}</dt><dd>${escapeHtml(modal.order.customer_name || '-')}</dd></div>
         <div><dt>${t('plan')}</dt><dd>${escapeHtml(modal.order.plan?.name || '-')}</dd></div>
         <div><dt>${t('renewCurrentExpiry')}</dt><dd>${formatTime(modal.order.subscription_entitlement?.expired_at)}</dd></div>
@@ -1294,6 +1299,7 @@
       ? t('connectedThrough').replace('{node}', delivery.connected_node_name || '-')
       : issued ? t('waitingConnection') : '';
     root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-qr-modal"><button class="dist-modal-x" data-modal-action="close-delivery">×</button><h2>${t('qrTitle')}</h2>
+      ${delivery.subscription_name ? `<p class="dist-delivery-identity"><strong>${escapeHtml(delivery.subscription_name)}</strong><small>${t('orderNo')}：${escapeHtml(delivery.trade_no)}</small></p>` : ''}
       <p>${pending ? t('qrHint') : claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p>
       ${pending && modal.imageUrl ? `<img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}"><div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>` : `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong>${claimed && issued ? `<small class="dist-network-status">${escapeHtml(connectionText)}</small>` : ''}</div>`}
       <div class="dist-modal-actions"><button data-modal-action="buy-again">${t('buyAgain')}</button><button class="primary" data-modal-action="close-delivery">${t('closePopup')}</button></div>
@@ -1644,7 +1650,7 @@
       const url = URL.createObjectURL(state.modal.blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `订阅二维码-${state.modal.payload?.trade_no || state.modal.delivery?.trade_no}.png`;
+      link.download = `订阅二维码-${subscriptionLabel(state.modal.payload || state.modal.delivery)}.png`;
       document.body.appendChild(link);
       link.click();
       link.remove();

@@ -23,11 +23,11 @@ class DistributorOrderExportService
     private const CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     private const ADMIN_HEADERS = [
-        '订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注',
+        '订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '已绑定设备', '已用流量', '分销商', '套餐', '周期', '原价', '结算状态', '备注', '订阅名称', '短订阅号',
     ];
 
     private const DISTRIBUTOR_HEADERS = [
-        '订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注',
+        '订单号', '下单时间', '订单类型', '关联原订单', '用户名称', '订阅计划', '周期', '订单金额', '已绑定设备', '已用流量', '结算状态', '备注', '订阅名称', '短订阅号',
     ];
 
     public function __construct(
@@ -76,6 +76,8 @@ class DistributorOrderExportService
                 $this->yuan($order->total_amount),
                 $this->settlementLabel((int) $order->settlement_status),
                 (string) ($order->remark ?? ''),
+                (string) ($order->subscription_name ?? ''),
+                (string) ($order->subscription_code ?? ''),
             ],
             '分销订单'
         );
@@ -119,6 +121,8 @@ class DistributorOrderExportService
                 $this->trafficLabel($order->used_traffic),
                 $this->settlementLabel((int) $order->settlement_status),
                 (string) ($order->remark ?? ''),
+                (string) ($order->subscription_name ?? ''),
+                (string) ($order->subscription_code ?? ''),
             ],
             '我的分销订单'
         );
@@ -142,6 +146,8 @@ class DistributorOrderExportService
                 'v2_order.created_at',
                 'v2_distributor_order.id as distributor_order_id',
                 'v2_distributor_order.customer_name',
+                'v2_distributor_order.subscription_code',
+                'v2_distributor_order.subscription_name',
                 'v2_distributor_order.remark',
                 'distributor.email as distributor_email',
                 'distributor.distributor_name as distributor_name',
