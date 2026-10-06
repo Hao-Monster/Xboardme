@@ -70,7 +70,7 @@ UI 使用本机 Chrome、390px 和 1440px 视口及本地接口夹具。二维�
 在仓库根目录运行：
 
 ```powershell
-php vendor/bin/phpunit tests/Feature/Distributor/DistributorSubscriptionNameTest.php --do-not-cache-result
+php vendor/bin/phpunit --filter DistributorSubscriptionName tests/Feature/Distributor --do-not-cache-result
 php vendor/bin/phpunit --do-not-cache-result
 node --test tests/JavaScript/*.test.js
 node tests/Browser/distributor-subscription-name.cjs
