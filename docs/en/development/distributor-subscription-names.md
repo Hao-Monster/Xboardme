@@ -51,6 +51,10 @@ exists for clean test rollback and does not delete orders or subscription users.
 
 ## Verification
 
+See the [test plan and task list](distributor-subscription-names-test-plan.md)
+and [local test report](distributor-subscription-names-test-report-20261006.md)
+for acceptance cases, execution evidence and remaining environment checks.
+
 Run `php vendor/bin/phpunit tests/Feature/Distributor/DistributorSubscriptionNameTest.php`
 and the existing distributor suite. The new tests cover HTTP headers for Karing,
 FlClash and Clash Verge user agents, stable renewals, unchanged legacy records, UTC/Shanghai

@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Laravel\Sanctum\Sanctum;
 use OpenSpout\Reader\XLSX\Reader;
+use OpenSpout\Writer\Common\Helper\CellHelper;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Tests\TestCase;
 
@@ -93,6 +94,136 @@ class DistributorSubscriptionNameTest extends TestCase
         $this->assertSame($originalToken, $delivery->subscriber->fresh()->token);
         $this->assertSame($originalUuid, $delivery->subscriber->fresh()->uuid);
         $this->assertSame(1, $delivery->hwidDevices()->count());
+    }
+
+    public function test_public_subscription_labels_cannot_authenticate_or_mutate_subscription_state(): void
+    {
+        config(['cache.stores.redis' => ['driver' => 'array']]);
+        app('cache')->forgetDriver('redis');
+        $order = $this->createOrder($this->makeUser('public-label-auth@example.com', '公开名称商户'));
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $this->makeServer();
+        $before = $this->purchaseState();
+
+        foreach (['Karing/1.2.22.2502 Android', 'FlClash/0.8.92', 'ClashVerge/2.4.2'] as $userAgent) {
+            foreach ([$delivery->subscription_code, $delivery->subscription_name] as $publicLabel) {
+                foreach (['client.subscribe', 'client.subscribe.legacy'] as $routeName) {
+                    $this->withHeaders([
+                        'User-Agent' => $userAgent,
+                        'X-HWID' => 'public-label-must-not-bind',
+                    ])->get(route($routeName, ['token' => $publicLabel], false))
+                        ->assertForbidden()
+                        ->assertHeaderMissing('profile-title')
+                        ->assertHeaderMissing('x-order-no');
+
+                    $this->assertSame($before, $this->purchaseState());
+                    $this->assertSame(0, $delivery->hwidDevices()->count());
+                }
+            }
+        }
+
+        $this->withHeaders([
+            'User-Agent' => 'FlClash/0.8.92',
+            'X-HWID' => 'real-token-authorized-device',
+        ])->get(route('client.subscribe', ['token' => $delivery->subscriber->token], false))
+            ->assertOk()->assertHeader('x-order-no', $order->trade_no);
+        $this->assertSame(1, $delivery->hwidDevices()->count());
+        $this->assertSame('real-token-authorized-device', $delivery->hwidDevices()->firstOrFail()->hwid);
+    }
+
+    public function test_new_purchase_rejects_invalid_stored_merchant_names_without_partial_writes(): void
+    {
+        $dealer = $this->makeUser('invalid-stored-purchase@example.com', '历史商户');
+        $legacyOrder = $this->createOrder($dealer);
+        $legacyDelivery = $this->asLegacySubscription($legacyOrder);
+        $legacyBefore = $legacyDelivery->getRawOriginal();
+        $legacyUrl = app(DistributorOrderService::class)->subscriptionUrl($legacyDelivery);
+        Sanctum::actingAs($dealer);
+
+        foreach ([null, '   ', str_repeat('甲', 17), str_repeat('😀', 9), "商户\n名称", 'a@b.co'] as $invalidName) {
+            $dealer->update(['distributor_name' => $invalidName]);
+            $before = $this->purchaseState();
+
+            $this->postJson('/api/v1/user/order/save', [
+                'plan_id' => $legacyOrder->plan_id,
+                'period' => 'month_price',
+                'customer_name' => '不应创建的客户',
+            ])->assertUnprocessable()->assertJsonValidationErrors('distributor_name');
+
+            $this->assertSame($before, $this->purchaseState());
+            $this->getJson('/api/v1/user/order/detail?' . http_build_query(['trade_no' => $legacyOrder->trade_no]))
+                ->assertOk()->assertJsonPath('data.subscription_name', null);
+            $this->assertSame($legacyBefore, $legacyDelivery->fresh()->getRawOriginal());
+            $this->assertSame($legacyUrl, app(DistributorOrderService::class)->subscriptionUrl($legacyDelivery->fresh()));
+        }
+
+        $this->postJson('/api/v1/user/order/renew', [
+            'trade_no' => $legacyOrder->trade_no,
+            'period' => 'quarter_price',
+            'idempotency_key' => '123e4567-e89b-42d3-a456-426614175201',
+        ])->assertOk();
+        $this->assertSame(1, DistributorOrder::count());
+        $this->assertNull($legacyDelivery->fresh()->subscription_name);
+        $this->assertNull($legacyDelivery->fresh()->subscription_code);
+        $this->assertSame($legacyUrl, app(DistributorOrderService::class)->subscriptionUrl($legacyDelivery->fresh()));
+    }
+
+    public function test_boundary_and_reserved_character_names_survive_purchase_and_all_delivery_encodings(): void
+    {
+        config(['cache.stores.redis' => ['driver' => 'array']]);
+        app('cache')->forgetDriver('redis');
+        Carbon::setTestNow(Carbon::create(2026, 10, 6, 9, 0, 0, 'Asia/Shanghai'));
+        $dealer = $this->makeUser('encoded-name-purchase@example.com', '初始商户');
+        $seedOrder = $this->createOrder($dealer);
+        $seedDelivery = $seedOrder->distributorOrder()->firstOrFail();
+        $seedBefore = $seedDelivery->getRawOriginal();
+        $this->makeServer();
+
+        foreach ([str_repeat('甲', 16), str_repeat('😀', 8), '=甲&乙#<北>'] as $merchantName) {
+            $this->flushHeaders();
+            $dealer->update(['distributor_name' => $merchantName]);
+            Sanctum::actingAs($dealer);
+            $tradeNo = $this->postJson('/api/v1/user/order/save', [
+                'plan_id' => $seedOrder->plan_id,
+                'period' => 'month_price',
+                'customer_name' => '编码验收客户',
+            ])->assertOk()->json('data');
+            $order = Order::where('trade_no', $tradeNo)->firstOrFail();
+            $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+            $expectedName = $merchantName . '-261006-' . $delivery->subscription_code;
+
+            $this->assertMatchesRegularExpression('/^[A-HJ-NP-Z2-9]{6}$/D', $delivery->subscription_code);
+            $this->assertSame($expectedName, $delivery->subscription_name);
+            $url = app(DistributorOrderService::class)->subscriptionUrl($delivery);
+            $this->assertSame($expectedName, rawurldecode((string) parse_url($url, PHP_URL_FRAGMENT)));
+            $this->assertSame(Helper::getSubscribeUrl($delivery->subscriber->token), preg_replace('/#.*$/', '', $url));
+
+            foreach (['Karing/1.2.22.2502 Android', 'FlClash/0.8.92', 'ClashVerge/2.4.2'] as $userAgent) {
+                $response = $this->withHeaders([
+                    'User-Agent' => $userAgent,
+                    'X-HWID' => 'encoded-name-device-001',
+                ])->get(route('client.subscribe', ['token' => $delivery->subscriber->token], false))
+                    ->assertOk()->assertHeader('x-order-no', $tradeNo);
+                $this->assertSame($expectedName, base64_decode(substr((string) $response->headers->get('profile-title'), 7), true));
+                $disposition = (string) $response->headers->get('content-disposition');
+                $this->assertSame(1, preg_match("/filename\\*=UTF-8''([^;]+)/", $disposition, $matches));
+                $filename = rawurldecode($matches[1]);
+                $this->assertSame($expectedName, preg_replace('/\.(conf|yaml|yml|json|txt)$/i', '', $filename));
+                $this->assertStringContainsString('filename="' . $delivery->subscription_code, $disposition);
+            }
+
+            $this->flushHeaders();
+            Sanctum::actingAs($dealer);
+            $rows = $this->readXlsx($this->get('/api/v1/user/order/export?' . http_build_query([
+                'search' => $delivery->subscription_code,
+            ]))->assertOk(), [
+                '订阅名称' => $expectedName,
+                '短订阅号' => $delivery->subscription_code,
+            ]);
+            $this->assertCount(2, $rows);
+            $this->assertExportIdentity($rows, $delivery);
+            $this->assertSame($seedBefore, $seedDelivery->fresh()->getRawOriginal());
+        }
     }
 
     public function test_renewal_and_merchant_rename_keep_the_first_subscription_name_and_code(): void
@@ -574,7 +705,18 @@ class DistributorSubscriptionNameTest extends TestCase
         return $delivery->fresh(['subscriber']);
     }
 
-    private function readXlsx($response): array
+    private function purchaseState(): array
+    {
+        $snapshot = [];
+        foreach (['v2_order', 'v2_user', 'v2_distributor_order', 'v2_distributor_hwid_device', 'v2_traffic_reset_logs'] as $table) {
+            $snapshot[$table] = DB::table($table)->orderBy('id')->get()
+                ->map(static fn (object $row): array => (array) $row)->all();
+        }
+
+        return $snapshot;
+    }
+
+    private function readXlsx($response, array $expectedIdentity = []): array
     {
         $this->assertInstanceOf(BinaryFileResponse::class, $response->baseResponse);
         $this->assertStringContainsString(
@@ -592,12 +734,63 @@ class DistributorSubscriptionNameTest extends TestCase
                 }
                 break;
             }
+            if ($expectedIdentity !== []) {
+                $this->assertXlsxIdentityIsLiteral($path, $rows[0], $expectedIdentity);
+            }
         } finally {
             $reader->close();
             @unlink($path);
         }
 
         return $rows;
+    }
+
+    private function assertXlsxIdentityIsLiteral(string $path, array $headers, array $expectedIdentity): void
+    {
+        // OpenSpout's reader infers FormulaCell from any leading '=', even for stored strings.
+        // Inspect the actual worksheet so a literal value cannot conceal a written formula.
+        $archive = new \ZipArchive();
+        $this->assertTrue($archive->open($path));
+        try {
+            $worksheetXml = $archive->getFromName('xl/worksheets/sheet1.xml');
+            $this->assertIsString($worksheetXml);
+            $worksheet = new \DOMDocument();
+            $this->assertTrue($worksheet->loadXML($worksheetXml, LIBXML_NONET));
+            $xpath = new \DOMXPath($worksheet);
+            $xpath->registerNamespace('s', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+            $this->assertSame(0, $xpath->query('//s:f')->length);
+
+            foreach ($expectedIdentity as $header => $expectedValue) {
+                $columnIndex = array_search($header, $headers, true);
+                $this->assertNotFalse($columnIndex);
+                $address = CellHelper::getColumnLettersFromColumnIndex($columnIndex) . '2';
+                $cell = $xpath->query('//s:c[@r="' . $address . '"]')->item(0);
+                $this->assertInstanceOf(\DOMElement::class, $cell);
+                $this->assertContains($cell->getAttribute('t'), ['inlineStr', 's']);
+                $this->assertSame(0, $xpath->query('.//s:f', $cell)->length);
+
+                if ($cell->getAttribute('t') === 's') {
+                    $sharedStringsXml = $archive->getFromName('xl/sharedStrings.xml');
+                    $this->assertIsString($sharedStringsXml);
+                    $sharedStrings = new \DOMDocument();
+                    $this->assertTrue($sharedStrings->loadXML($sharedStringsXml, LIBXML_NONET));
+                    $sharedXPath = new \DOMXPath($sharedStrings);
+                    $sharedXPath->registerNamespace('s', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main');
+                    $stringIndex = $xpath->evaluate('string(s:v)', $cell);
+                    $this->assertMatchesRegularExpression('/^[0-9]+$/D', $stringIndex);
+                    $textNodes = $sharedXPath->query('/s:sst/s:si[' . ((int) $stringIndex + 1) . ']//s:t');
+                } else {
+                    $textNodes = $xpath->query('s:is//s:t', $cell);
+                }
+                $actualValue = '';
+                foreach ($textNodes as $textNode) {
+                    $actualValue .= $textNode->textContent;
+                }
+                $this->assertSame($expectedValue, $actualValue);
+            }
+        } finally {
+            $archive->close();
+        }
     }
 
     private function nameServiceWithCodes(array $codes): DistributorSubscriptionNameService
