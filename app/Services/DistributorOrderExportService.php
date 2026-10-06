@@ -45,7 +45,6 @@ class DistributorOrderExportService
         ?string $settlementMonth = null
     ): BinaryFileResponse
     {
-        app(DistributorSubscriptionNameService::class)->backfillPending($distributorUserId);
         $query = $this->baseQuery()
             ->when($distributorUserId !== null, function (Builder $query) use ($distributorUserId) {
                 $query->where('v2_distributor_order.distributor_user_id', $distributorUserId);
@@ -91,7 +90,6 @@ class DistributorOrderExportService
         array $filters = []
     ): BinaryFileResponse
     {
-        app(DistributorSubscriptionNameService::class)->backfillPending($distributorUserId);
         $query = $this->baseQuery()
             ->where('v2_order.user_id', $distributorUserId)
             ->where('v2_distributor_order.distributor_user_id', $distributorUserId)

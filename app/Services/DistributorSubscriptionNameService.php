@@ -8,28 +8,21 @@ use Carbon\Carbon;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use LogicException;
 use RuntimeException;
 
 class DistributorSubscriptionNameService
 {
     private const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
-    public function backfillPending(?int $distributorUserId = null): void
-    {
-        DistributorOrder::query()
-            ->when($distributorUserId !== null, fn ($query) => $query->where('distributor_user_id', $distributorUserId))
-            ->where(fn ($query) => $query->whereNull('subscription_code')->orWhereNull('subscription_name'))
-            ->chunkById(200, function ($deliveries): void {
-                foreach ($deliveries as $delivery) {
-                    $this->ensure($delivery);
-                }
-            });
-    }
-
-    public function ensure(DistributorOrder $delivery): void
+    public function assignToNewSubscription(DistributorOrder $delivery): void
     {
         if ($delivery->subscription_code && $delivery->subscription_name) {
             return;
+        }
+        // Legacy subscriptions deliberately keep null metadata and their original title.
+        if (!$delivery->wasRecentlyCreated) {
+            throw new LogicException('只能在新建分销订阅时分配名称');
         }
 
         $identity = DB::transaction(function () use ($delivery): array {

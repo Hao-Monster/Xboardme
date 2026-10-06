@@ -31,7 +31,7 @@ test('QR image prints the subscription name without an order prefix and preserve
     ['subscriptionLabel', 'wrapCanvasText', 'composeSubscriptionQrPng'], {
       loadImage: async () => ({}), canvasBlob: async () => new Blob(['png']),
       document: { createElement: () => canvas },
-      t: (key) => ({ premiumCustomerQrTitleFallback: '客户订阅码', subscriptionBoundDevice: '订阅已绑定设备' }[key] || key),
+      t: (key) => ({ orderNo: '订单号', premiumCustomerQrTitleFallback: '客户订阅码', subscriptionBoundDevice: '订阅已绑定设备' }[key] || key),
     });
   await composeSubscriptionQrPng({
     subscription_name: subscriptionName, trade_no: tradeNo,
@@ -41,6 +41,10 @@ test('QR image prints the subscription name without an order prefix and preserve
   assert.ok(printed.includes('订阅已绑定设备 pixel-123'));
   assert.ok(printed.includes('订阅已绑定设备 vivo-456'));
   assert.equal(printed.some((text) => text.includes(tradeNo) || /订单号/.test(text)), false);
+  printed.length = 0;
+  await composeSubscriptionQrPng({ subscription_name: null, trade_no: tradeNo, qr_code: 'fixture' });
+  assert.ok(printed.includes(`订单号 ${tradeNo}`), 'historical QR captions retain their exact former format');
+  assert.equal(printed.includes(subscriptionName), false);
 });
 
 test('subscription label uses the saved name and keeps older API responses readable', () => {
@@ -63,6 +67,7 @@ test('distributor order list shows the name and retains the individual transacti
       { id: 1, subscription_name: subscriptionName, trade_no: tradeNo, type: 1 },
       { id: 2, subscription_name: subscriptionName, trade_no: 'RENEW-TRANSACTION', type: 2 },
       { id: 3, subscription_name: '<script>alert(1)</script>', trade_no: 'ESCAPED' },
+      { id: 4, subscription_name: null, trade_no: 'LEGACY-ORDER' },
     ] }),
   });
   await renderOrders();
@@ -71,16 +76,63 @@ test('distributor order list shows the name and retains the individual transacti
   assert.ok(html.includes('<small>orderNo：RENEW-TRANSACTION</small>'));
   assert.ok(html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
   assert.equal(html.includes('<script>'), false);
+  assert.ok(html.includes('<td class="dist-order-identity"><strong>LEGACY-ORDER</strong></td>'));
 });
 
 test('admin order list renders the subscription name safely and retains the original trade number', () => {
   const { orderRows } = functions(adminSource, ['orderRows'], {
-    state: { orders: [{ id: 1, subscription_name: subscriptionName, trade_no: tradeNo }] },
+    state: { orders: [
+      { id: 1, subscription_name: subscriptionName, trade_no: tradeNo },
+      { id: 2, subscription_name: null, trade_no: 'LEGACY-ORDER' },
+    ] },
     escapeHtml, money: String, formatTraffic: String, formatTime: String, renderBoundDevices: () => '',
   });
   const html = orderRows();
   assert.ok(html.includes(`<strong>${subscriptionName}</strong>`));
   assert.ok(html.includes(`<small>订单号：${tradeNo}</small>`));
+  assert.ok(html.includes('<strong>LEGACY-ORDER</strong>'));
+  assert.equal(html.includes('<small>订单号：LEGACY-ORDER</small>'), false);
+});
+
+test('historical delivery and renewal dialogs omit new subscription-name fields while new orders retain them', () => {
+  const root = { classList: { add() {} }, innerHTML: '' };
+  const state = { modal: null };
+  const { renderModal } = functions(distributorSource, ['subscriptionLabel', 'renderModal'], {
+    state, escapeHtml, t: (key) => key, money: String, formatTime: String,
+    document: { getElementById: () => root, documentElement: root, body: root },
+  });
+  for (const savedName of [null, subscriptionName]) {
+    const order = { trade_no: tradeNo, subscription_name: savedName, plan: {} };
+    for (const modal of [
+      { type: 'delivery', delivery: { ...order, delivery_status: 1 } },
+      { type: 'renewal', order, periods: [] },
+      { type: 'renewal', order, result: { trade_no: 'RENEWAL' } },
+    ]) {
+      state.modal = modal;
+      renderModal();
+      if (savedName) assert.ok(root.innerHTML.includes(subscriptionName));
+      else {
+        assert.equal(root.innerHTML.includes('dist-delivery-identity'), false);
+        assert.equal(root.innerHTML.includes('<dt>subscriptionName</dt>'), false);
+        assert.equal(root.innerHTML.includes(`<strong>${tradeNo}</strong>`), false);
+      }
+    }
+  }
+});
+
+test('historical admin order details omit the new blank name row', async () => {
+  const modal = { classList: { add() {} }, innerHTML: '' };
+  let order = { id: 1, trade_no: tradeNo, subscription_name: null };
+  const { showOrderDetail } = functions(adminSource, ['showOrderDetail'], {
+    document: { getElementById: () => modal }, escapeHtml, money: String,
+    dataOf: (data) => data, api: async () => order,
+  });
+  await showOrderDetail(1);
+  assert.equal(modal.innerHTML.includes('<dt>订阅名称</dt>'), false);
+  assert.ok(modal.innerHTML.includes(`<dt>订单号</dt><dd>${tradeNo}</dd>`));
+  order = { ...order, subscription_name: subscriptionName };
+  await showOrderDetail(1);
+  assert.ok(modal.innerHTML.includes(`<dt>订阅名称</dt><dd>${subscriptionName}</dd>`));
 });
 
 test('merchant-name validation trims values and enforces the same UTF-16 limit as the inputs', () => {

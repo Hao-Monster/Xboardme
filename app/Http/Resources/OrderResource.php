@@ -32,7 +32,6 @@ class OrderResource extends JsonResource
         }
         $subscriptionEntitlement = null;
         if ($distributorOrder) {
-            app(\App\Services\DistributorSubscriptionNameService::class)->ensure($distributorOrder);
             $subscriptionEntitlement = app(DistributorOrderEntitlementService::class)
                 ->data($distributorOrder);
         }

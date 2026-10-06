@@ -245,7 +245,7 @@
       : (payload.hwid_devices || []).length
         ? payload.hwid_devices.map((hwid) => `${t('subscriptionBoundDevice')} ${hwid}`)
         : [t('subscriptionUnboundDevice')];
-    const detailLines = [subscriptionLabel(payload), ...deviceTexts]
+    const detailLines = [payload.subscription_name || `${t('orderNo')} ${payload.trade_no}`, ...deviceTexts]
       .flatMap((line) => wrapCanvasText(measure, line, width - padding * 2));
     const headerHeight = titleLines.length * titleLineHeight + 10 + detailLines.length * detailLineHeight + 20;
     canvas.width = width;
@@ -1264,7 +1264,7 @@
       if (modal.result) {
         root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-renewal-modal" role="dialog" aria-modal="true" aria-labelledby="dist-renewal-result-title"><button class="dist-modal-x" data-modal-action="renew-done" aria-label="${t('closePopup')}">×</button><h2 id="dist-renewal-result-title">${t('renewSuccess')}</h2>
           <p class="dist-renewal-hint">${t('renewHint')}</p><dl>
-          <div><dt>${t('subscriptionName')}</dt><dd>${escapeHtml(subscriptionLabel(modal.order))}</dd></div>
+          ${modal.order.subscription_name ? `<div><dt>${t('subscriptionName')}</dt><dd>${escapeHtml(modal.order.subscription_name)}</dd></div>` : ''}
           <div><dt>${t('renewOrder')}</dt><dd>${escapeHtml(modal.result.trade_no)}</dd></div>
           <div><dt>${t('amount')}</dt><dd>${money(modal.result.total_amount)}</dd></div>
           <div><dt>${t('renewNewExpiry')}</dt><dd>${formatTime(modal.result.expired_at_after)}</dd></div>
@@ -1276,7 +1276,7 @@
       const options = modal.periods.map(([key]) => `<option value="${key}" ${modal.period === key ? 'selected' : ''}>${periodName(key)} · ${money(modal.order.plan[key])}</option>`).join('');
       root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-renewal-modal" role="dialog" aria-modal="true" aria-labelledby="dist-renewal-title"><button class="dist-modal-x" data-modal-action="cancel" aria-label="${t('cancel')}">×</button><h2 id="dist-renewal-title">${t('renewTitle')}</h2>
         <p class="dist-renewal-hint">${t('renewHint')}</p><dl>
-        <div><dt>${t('subscriptionName')}</dt><dd>${escapeHtml(subscriptionLabel(modal.order))}</dd></div>
+        ${modal.order.subscription_name ? `<div><dt>${t('subscriptionName')}</dt><dd>${escapeHtml(modal.order.subscription_name)}</dd></div>` : ''}
         <div><dt>${t('customerName')}</dt><dd>${escapeHtml(modal.order.customer_name || '-')}</dd></div>
         <div><dt>${t('plan')}</dt><dd>${escapeHtml(modal.order.plan?.name || '-')}</dd></div>
         <div><dt>${t('renewCurrentExpiry')}</dt><dd>${formatTime(modal.order.subscription_entitlement?.expired_at)}</dd></div>
@@ -1299,7 +1299,7 @@
       ? t('connectedThrough').replace('{node}', delivery.connected_node_name || '-')
       : issued ? t('waitingConnection') : '';
     root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-qr-modal"><button class="dist-modal-x" data-modal-action="close-delivery">×</button><h2>${t('qrTitle')}</h2>
-      <p class="dist-delivery-identity"><strong>${escapeHtml(subscriptionLabel(delivery))}</strong><small>${t('orderNo')}：${escapeHtml(delivery.trade_no)}</small></p>
+      ${delivery.subscription_name ? `<p class="dist-delivery-identity"><strong>${escapeHtml(delivery.subscription_name)}</strong><small>${t('orderNo')}：${escapeHtml(delivery.trade_no)}</small></p>` : ''}
       <p>${pending ? t('qrHint') : claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p>
       ${pending && modal.imageUrl ? `<img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}"><div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>` : `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong>${claimed && issued ? `<small class="dist-network-status">${escapeHtml(connectionText)}</small>` : ''}</div>`}
       <div class="dist-modal-actions"><button data-modal-action="buy-again">${t('buyAgain')}</button><button class="primary" data-modal-action="close-delivery">${t('closePopup')}</button></div>

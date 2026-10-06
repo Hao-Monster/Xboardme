@@ -20,6 +20,8 @@ const order = {
   plan: { id: 1, name: '测试套餐', month_price: 1000 },
   subscription_entitlement: { transfer_enable: 107374182400, remaining_traffic: 107374182400 },
 };
+const legacyTradeNo = '20260925101012345678901234';
+const legacyOrder = { ...order, id: 2, trade_no: legacyTradeNo, subscription_trade_no: legacyTradeNo, subscription_name: null, subscription_code: null };
 
 (async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -34,9 +36,9 @@ const order = {
         const url = new URL(route.request().url());
         if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: '<meta name="viewport" content="width=device-width,initial-scale=1"><div id="app"></div>' });
         if (url.pathname.endsWith('/user/info')) return route.fulfill({ json: { data: { email: 'fixture@example.invalid', distributor_name: '小北', is_distributor: true } } });
-        if (url.pathname.endsWith('/user/order/fetch')) return route.fulfill({ json: { total: 1, data: [currentOrder] } });
+        if (url.pathname.endsWith('/user/order/fetch')) return route.fulfill({ json: { total: 2, data: [currentOrder, legacyOrder] } });
         if (url.pathname.endsWith('/user/distributor/subscription-qr')) return route.fulfill({ json: { data: {
-          ...currentOrder, hwid_enabled: maximum, hwid_devices: maximum ? [longDeviceLabel, longDeviceLabel + 'SECOND'] : [],
+          ...(url.searchParams.get('trade_no') === legacyTradeNo ? legacyOrder : currentOrder), hwid_enabled: maximum, hwid_devices: maximum ? [longDeviceLabel, longDeviceLabel + 'SECOND'] : [],
           qr_code: qrFixture,
         } } });
         return route.abort();
@@ -67,12 +69,14 @@ const order = {
       });
       await page.addStyleTag({ content: fs.readFileSync('theme/Xboard/assets/distributor.css', 'utf8') });
       await page.addScriptTag({ content: fs.readFileSync('theme/Xboard/assets/distributor.js', 'utf8') });
-      await page.locator('.dist-order-identity strong').waitFor();
-      assert.equal(await page.locator('.dist-order-identity strong').innerText(), currentName);
+      await page.locator('.dist-order-identity strong').first().waitFor();
+      assert.equal(await page.locator('.dist-order-identity strong').first().innerText(), currentName);
       assert.equal(await page.locator('.dist-order-identity small').innerText(), `订单号：${tradeNo}`);
+      assert.equal(await page.locator('.dist-order-identity strong').nth(1).innerText(), legacyTradeNo);
+      assert.equal(await page.locator('.dist-order-identity').nth(1).locator('small').count(), 0);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       assert.match(await page.locator('#dist-order-search').getAttribute('placeholder'), /短订阅号/);
-      await page.locator('[data-subscription-qr]').click();
+      await page.locator('[data-subscription-qr]').first().click();
       await page.locator('.dist-subscription-qr-preview').waitFor();
       const image = await page.locator('.dist-subscription-qr-preview').evaluate((el) => ({ complete: el.complete, width: el.naturalWidth }));
       assert.equal(image.complete, true);
@@ -107,14 +111,23 @@ const order = {
           console.log(`QR layout inspection image: ${output}`);
         }
       }
-      await page.locator('[data-modal-action="cancel"]').click();
-      await page.locator('[data-renew]').click();
+      await page.locator('[data-modal-action="cancel"]').first().click();
+      await page.locator('[data-renew]').first().click();
       const dialog = page.locator('.dist-renewal-modal');
       await dialog.waitFor();
       assert.ok((await dialog.innerText()).includes(currentName));
       assert.equal(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth), true);
+      await page.locator('[data-modal-action="cancel"]').first().click();
+      await page.evaluate(() => { window.qrTexts = []; window.qrImages = []; });
+      await page.locator(`[data-subscription-qr="${legacyTradeNo}"]`).click();
+      await page.locator('.dist-subscription-qr-preview').waitFor();
+      assert.ok((await page.evaluate(() => window.qrTexts)).some(({ text }) => text === `订单号 ${legacyTradeNo}`));
+      await page.locator('[data-modal-action="cancel"]').first().click();
+      await page.locator(`[data-renew="${legacyTradeNo}"]`).click();
+      await dialog.waitFor();
+      assert.equal(await dialog.locator('dt').filter({ hasText: '订阅名称' }).count(), 0);
       assert.deepEqual(errors, []);
-      console.log(`PASS subscription naming browser ${width}px ${maximum ? 'maximum' : 'normal'}: name, trade number, measured QR bounds, renewal, overflow, console`);
+      console.log(`PASS subscription naming browser ${width}px ${maximum ? 'maximum' : 'normal'}: mixed legacy/new names, old QR caption, measured new QR bounds, renewal, overflow, console`);
       await page.close();
     }
 
@@ -126,7 +139,7 @@ const order = {
       const url = new URL(route.request().url());
       if (url.pathname === '/') return route.fulfill({ contentType: 'text/html', body: '<meta charset="utf-8"><main><h1>订单管理</h1><div><table></table></div></main>' });
       if (url.pathname.endsWith('/user/distributor/options')) return route.fulfill({ json: { data: [] } });
-      if (url.pathname.endsWith('/order/fetch')) return route.fulfill({ json: { total: 1, data: [order] } });
+      if (url.pathname.endsWith('/order/fetch')) return route.fulfill({ json: { total: 2, data: [order, legacyOrder] } });
       if (url.pathname.endsWith('/user/generate')) { creates += 1; return route.fulfill({ json: { data: true } }); }
       return route.abort();
     });
@@ -137,8 +150,10 @@ const order = {
     });
     await page.addStyleTag({ content: fs.readFileSync('public/assets/admin-distributor.css', 'utf8') });
     await page.addScriptTag({ content: fs.readFileSync('public/assets/admin-distributor.js', 'utf8') });
-    await page.locator('#xboard-native-distributor-orders tbody strong').waitFor();
+    await page.locator('#xboard-native-distributor-orders tbody strong').first().waitFor();
     assert.equal(await page.locator('#xboard-native-distributor-orders tbody strong').first().innerText(), name);
+    assert.equal(await page.locator('#xboard-native-distributor-orders tbody strong').nth(1).innerText(), legacyTradeNo);
+    assert.equal(await page.locator('#xboard-native-distributor-orders tbody').getByText(`订单号：${legacyTradeNo}`, { exact: true }).count(), 0);
     await page.locator('#admin-dist-entry').click();
     await page.locator('[data-tab="users"]').click();
     assert.equal(await page.locator('#admin-dist-create-name').getAttribute('maxlength'), '16');

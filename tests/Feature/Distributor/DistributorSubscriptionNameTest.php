@@ -18,7 +18,6 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Validation\ValidationException;
 use Laravel\Sanctum\Sanctum;
 use OpenSpout\Reader\XLSX\Reader;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
@@ -164,38 +163,105 @@ class DistributorSubscriptionNameTest extends TestCase
         }
     }
 
-    public function test_legacy_delivery_gets_a_stable_name_using_original_order_date_without_rewriting_business_data(): void
+    public function test_legacy_reads_keep_original_headers_url_remark_and_null_metadata(): void
     {
-        Carbon::setTestNow(Carbon::create(2026, 10, 6, 9, 0, 0, 'Asia/Shanghai'));
+        config(['cache.stores.redis' => ['driver' => 'array']]);
+        app('cache')->forgetDriver('redis');
         $dealer = $this->makeUser('legacy-name@example.com', '历史商户');
         $order = $this->createOrder($dealer);
-        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $delivery = $this->asLegacySubscription($order);
         $orderBefore = $order->fresh()->getRawOriginal();
         $subscriberBefore = $delivery->subscriber->fresh()->getRawOriginal();
-        DB::table('v2_distributor_order')->where('id', $delivery->id)->update([
-            'subscription_code' => null,
-            'subscription_name' => null,
-        ]);
+        $url = app(DistributorOrderService::class)->subscriptionUrl($delivery);
+        $this->assertSame($order->trade_no, rawurldecode((string) parse_url($url, PHP_URL_FRAGMENT)));
+        $baseUrl = Helper::getSubscribeUrl($delivery->subscriber->token);
+        $this->assertSame($baseUrl, preg_replace('/#.*$/', '', $url));
+        $uri = parse_url($baseUrl, PHP_URL_PATH);
+        $query = parse_url($baseUrl, PHP_URL_QUERY);
+        $this->makeServer();
+        foreach (['Karing/1.2.22.2502 Android', 'FlClash/0.8.92', 'ClashVerge/2.4.2'] as $userAgent) {
+            $response = $this->withHeaders([
+                'User-Agent' => $userAgent,
+                'X-HWID' => 'legacy-subscription-device-001',
+            ])->get($uri . ($query ? '?' . $query : ''))->assertOk()
+                ->assertHeader('x-order-no', $order->trade_no);
+            $this->assertSame('订单号：' . $order->trade_no, base64_decode(substr((string) $response->headers->get('profile-title'), 7), true));
+            $disposition = (string) $response->headers->get('content-disposition');
+            $this->assertStringContainsString('filename="' . $order->trade_no, $disposition);
+            $this->assertStringContainsString("filename*=UTF-8''" . rawurlencode('订单号：' . $order->trade_no), $disposition);
+            $this->assertNull($delivery->fresh()->subscription_name);
+            $this->assertNull($delivery->fresh()->subscription_code);
+        }
+        $this->flushHeaders();
         $legacyBefore = $delivery->fresh()->getRawOriginal();
-        Carbon::setTestNow(Carbon::create(2027, 1, 1, 9, 0, 0, 'Asia/Shanghai'));
+        Sanctum::actingAs($dealer);
+        $this->getJson('/api/v1/user/order/fetch')->assertOk()
+            ->assertJsonPath('data.0.subscription_name', null)
+            ->assertJsonPath('data.0.subscription_code', null);
+        $this->getJson('/api/v1/user/order/detail?' . http_build_query(['trade_no' => $order->trade_no]))
+            ->assertOk()->assertJsonPath('data.subscription_name', null);
+        foreach (['delivery', 'subscription-qr'] as $endpoint) {
+            $qr = $this->getJson('/api/v1/user/distributor/' . $endpoint . '?' . http_build_query(['trade_no' => $order->trade_no]))
+                ->assertOk()->assertJsonPath('data.subscription_name', null)
+                ->assertJsonPath('data.subscription_code', null);
+            if ($endpoint === 'subscription-qr') {
+                $this->assertStringStartsWith('data:image/svg+xml;base64,', $qr->json('data.qr_code'));
+            }
+        }
+        Sanctum::actingAs($this->makeUser('legacy-read-admin@example.com', null, true));
+        $this->postJson($this->adminRoute(AdminOrderController::class, 'fetch'), ['distributor_only' => true])
+            ->assertOk()->assertJsonPath('data.0.subscription_name', null);
+        $this->postJson($this->adminRoute(AdminOrderController::class, 'detail'), ['id' => $order->id])
+            ->assertOk()->assertJsonPath('data.subscription_name', null)
+            ->assertJsonPath('data.subscribe_url', $url);
 
-        $legacy = $delivery->fresh();
-        app(DistributorSubscriptionNameService::class)->ensure($legacy);
-        $legacy->refresh();
-        $this->assertMatchesRegularExpression('/^历史商户-261006-[A-HJ-NP-Z2-9]{6}$/uD', $legacy->subscription_name);
-        $name = $legacy->subscription_name;
-        $code = $legacy->subscription_code;
-        $dealer->update(['distributor_name' => '改名后商户']);
-        app(DistributorSubscriptionNameService::class)->ensure($legacy);
-
-        $this->assertSame($name, $legacy->fresh()->subscription_name);
-        $this->assertSame($code, $legacy->fresh()->subscription_code);
         $this->assertSame($orderBefore, $order->fresh()->getRawOriginal());
         $this->assertSame($subscriberBefore, $delivery->subscriber->fresh()->getRawOriginal());
-        $after = $legacy->fresh()->getRawOriginal();
-        unset($after['subscription_code'], $after['subscription_name']);
-        unset($legacyBefore['subscription_code'], $legacyBefore['subscription_name']);
-        $this->assertSame($legacyBefore, $after);
+        $this->assertSame($legacyBefore, $delivery->fresh()->getRawOriginal());
+    }
+
+    public function test_legacy_renewal_keeps_original_name_token_uuid_and_null_metadata(): void
+    {
+        $dealer = $this->makeUser('legacy-renewal@example.com', '历史商户');
+        $order = $this->createOrder($dealer);
+        $delivery = $this->asLegacySubscription($order);
+        $token = $delivery->subscriber->token;
+        $uuid = $delivery->subscriber->uuid;
+        $url = app(DistributorOrderService::class)->subscriptionUrl($delivery);
+        $dealer->update(['distributor_name' => null]);
+        Sanctum::actingAs($dealer);
+
+        $renewalTradeNo = $this->postJson('/api/v1/user/order/renew', [
+            'trade_no' => $order->trade_no,
+            'period' => 'quarter_price',
+            'idempotency_key' => '123e4567-e89b-42d3-a456-426614175101',
+        ])->assertOk()->json('data.trade_no');
+
+        $this->assertNotSame($order->trade_no, $renewalTradeNo);
+        $this->assertSame(1, DistributorOrder::count());
+        $this->assertNull($delivery->fresh()->subscription_code);
+        $this->assertNull($delivery->fresh()->subscription_name);
+        $this->assertSame($url, app(DistributorOrderService::class)->subscriptionUrl($delivery->fresh()));
+        $this->assertSame($order->trade_no, rawurldecode((string) parse_url($url, PHP_URL_FRAGMENT)));
+        $this->assertSame($token, $delivery->subscriber->fresh()->token);
+        $this->assertSame($uuid, $delivery->subscriber->fresh()->uuid);
+        $this->getJson('/api/v1/user/order/fetch')->assertOk()->assertJsonCount(2, 'data')
+            ->assertJsonPath('data.0.subscription_name', null)
+            ->assertJsonPath('data.1.subscription_name', null);
+    }
+
+    public function test_name_assignment_cannot_be_applied_to_a_persisted_legacy_subscription(): void
+    {
+        $order = $this->createOrder($this->makeUser('legacy-guard@example.com', '历史商户'));
+        $delivery = $this->asLegacySubscription($order);
+        $before = $delivery->getRawOriginal();
+
+        try {
+            app(DistributorSubscriptionNameService::class)->assignToNewSubscription($delivery);
+            $this->fail('A persisted legacy subscription must never acquire a new display identity.');
+        } catch (\LogicException $exception) {
+            $this->assertSame($before, $delivery->fresh()->getRawOriginal());
+        }
     }
 
     public function test_database_rejects_duplicate_short_codes(): void
@@ -211,17 +277,15 @@ class DistributorSubscriptionNameTest extends TestCase
     public function test_short_code_collision_retries_against_the_real_database_and_keeps_existing_identity(): void
     {
         $dealer = $this->makeUser('collision-retry@example.com', '冲突重试商户');
-        $first = $this->createOrder($dealer)->distributorOrder()->firstOrFail();
-        $second = $this->createOrder($dealer)->distributorOrder()->firstOrFail();
+        $firstOrder = $this->createOrder($dealer);
+        $first = $firstOrder->distributorOrder()->firstOrFail();
         $firstName = $first->subscription_name;
-        DB::table('v2_distributor_order')->where('id', $second->id)->update([
-            'subscription_code' => null,
-            'subscription_name' => null,
-        ]);
         $availableCode = $first->subscription_code === 'A7K9Q2' ? 'B7K9Q2' : 'A7K9Q2';
         $service = $this->nameServiceWithCodes([$first->subscription_code, $availableCode]);
+        $this->app->instance(DistributorSubscriptionNameService::class, $service);
 
-        $service->ensure($second->fresh());
+        $secondOrder = app(DistributorOrderService::class)->create($dealer, $firstOrder->plan, Plan::PERIOD_MONTHLY);
+        $second = $secondOrder->distributorOrder()->firstOrFail();
 
         $this->assertSame(2, $service->attempts);
         $this->assertSame($availableCode, $second->fresh()->subscription_code);
@@ -259,7 +323,7 @@ class DistributorSubscriptionNameTest extends TestCase
         $this->assertSame($firstBefore, $first->fresh()->getRawOriginal());
     }
 
-    public function test_migration_backfills_legacy_subscriptions_preserves_business_data_and_is_repeatable(): void
+    public function test_migration_preserves_legacy_subscriptions_without_assigning_names_and_is_repeatable(): void
     {
         Carbon::setTestNow(Carbon::create(2026, 10, 5, 16, 0, 0, 'UTC'));
         $order = $this->createOrder($this->makeUser('migration-name@example.com', '迁移商户'));
@@ -276,7 +340,8 @@ class DistributorSubscriptionNameTest extends TestCase
         Carbon::setTestNow(Carbon::create(2027, 1, 1, 9, 0, 0, 'Asia/Shanghai'));
         $migration->up();
         $migrated = $delivery->fresh();
-        $this->assertMatchesRegularExpression('/^迁移商户-261006-[A-HJ-NP-Z2-9]{6}$/uD', $migrated->subscription_name);
+        $this->assertNull($migrated->subscription_name);
+        $this->assertNull($migrated->subscription_code);
         $migratedBefore = $migrated->getRawOriginal();
         $migration->up();
 
@@ -288,35 +353,32 @@ class DistributorSubscriptionNameTest extends TestCase
         $this->assertSame($deliveryBefore, $deliveryAfter);
     }
 
-    public function test_migration_rejects_invalid_legacy_merchant_names_without_publishing_a_substitute(): void
+    public function test_invalid_legacy_merchant_names_do_not_block_migration_or_legacy_reads(): void
     {
         $migration = require database_path('migrations/2026_10_06_000001_add_distributor_subscription_names.php');
         foreach ([null, '   ', 'a@b.co', str_repeat('甲', 17)] as $index => $invalidName) {
             $dealer = $this->makeUser('invalid-legacy-' . $index . '@example.com', '历史有效商户');
             $order = $this->createOrder($dealer);
-            $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+            $delivery = $this->asLegacySubscription($order);
             $orderBefore = $order->fresh()->getRawOriginal();
             $subscriberBefore = $delivery->subscriber->fresh()->getRawOriginal();
-            DB::table('v2_distributor_order')->where('id', $delivery->id)->update([
-                'subscription_code' => null,
-                'subscription_name' => null,
-            ]);
+            $deliveryBefore = $delivery->getRawOriginal();
             $dealer->update(['distributor_name' => $invalidName]);
 
-            try {
-                $migration->up();
-                $this->fail('Invalid historical merchant names must block migration.');
-            } catch (ValidationException $exception) {
-                $this->assertArrayHasKey('distributor_name', $exception->errors());
-            }
+            $migration->up();
+            Sanctum::actingAs($dealer);
+            $this->getJson('/api/v1/user/order/fetch')->assertOk()->assertJsonCount(1, 'data')
+                ->assertJsonPath('data.0.subscription_name', null);
+            $url = app(DistributorOrderService::class)->subscriptionUrl($delivery->fresh());
+            $this->assertSame($order->trade_no, rawurldecode((string) parse_url($url, PHP_URL_FRAGMENT)));
+            $this->getJson('/api/v1/user/distributor/subscription-qr?' . http_build_query(['trade_no' => $order->trade_no]))
+                ->assertOk()->assertJsonPath('data.subscription_name', null);
 
             $this->assertNull($delivery->fresh()->subscription_name);
             $this->assertNull($delivery->fresh()->subscription_code);
             $this->assertSame($orderBefore, $order->fresh()->getRawOriginal());
             $this->assertSame($subscriberBefore, $delivery->subscriber->fresh()->getRawOriginal());
-            $dealer->update(['distributor_name' => '修正后商户']);
-            $migration->up();
-            $this->assertStringStartsWith('修正后商户-', $delivery->fresh()->subscription_name);
+            $this->assertSame($deliveryBefore, $delivery->fresh()->getRawOriginal());
         }
     }
 
@@ -345,43 +407,48 @@ class DistributorSubscriptionNameTest extends TestCase
             $this->assertTrue(Schema::hasIndex('v2_distributor_order', 'v2_dist_subscription_code_unique', 'unique'));
             $first->refresh();
             $second->refresh();
-            $this->assertNotSame($first->subscription_code, $second->subscription_code);
-            $this->assertStringStartsWith('中断迁移商户-', $first->subscription_name);
-            $this->assertStringStartsWith('中断迁移商户-', $second->subscription_name);
+            $this->assertNull($first->subscription_code);
+            $this->assertNull($first->subscription_name);
+            $this->assertNull($second->subscription_code);
+            $this->assertNull($second->subscription_name);
+            $newFirst = $this->createOrder($dealer)->distributorOrder()->firstOrFail();
+            $newSecond = $this->createOrder($dealer)->distributorOrder()->firstOrFail();
             try {
-                DB::transaction(function () use ($first, $second) {
-                    DB::table('v2_distributor_order')->where('id', $second->id)
-                        ->update(['subscription_code' => $first->subscription_code]);
+                DB::transaction(function () use ($newFirst, $newSecond) {
+                    DB::table('v2_distributor_order')->where('id', $newSecond->id)
+                        ->update(['subscription_code' => $newFirst->subscription_code]);
                 });
                 $this->fail('Resumed migration must recreate the database uniqueness constraint.');
             } catch (\Illuminate\Database\UniqueConstraintViolationException $exception) {
-                $this->assertNotSame($first->subscription_code, $second->fresh()->subscription_code);
+                $this->assertNotSame($newFirst->subscription_code, $newSecond->fresh()->subscription_code);
             }
         }
     }
 
-    public function test_direct_distributor_export_backfills_legacy_names_and_supports_short_code_filter_with_tenant_isolation(): void
+    public function test_distributor_export_preserves_legacy_metadata_and_filters_new_short_codes_with_tenant_isolation(): void
     {
         $owner = $this->makeUser('export-name-owner@example.com', '导出商户');
         $other = $this->makeUser('export-name-other@example.com', '其他商户');
+        $legacyOrder = $this->createOrder($owner);
+        $legacyDelivery = $this->asLegacySubscription($legacyOrder);
+        $legacyBefore = $legacyDelivery->getRawOriginal();
         $ownOrder = $this->createOrder($owner);
-        $otherOrder = $this->createOrder($other);
         $ownDelivery = $ownOrder->distributorOrder()->firstOrFail();
+        $otherOrder = $this->createOrder($other);
         $otherDelivery = $otherOrder->distributorOrder()->firstOrFail();
         $foreignCode = $otherDelivery->subscription_code;
-        DB::table('v2_distributor_order')->update(['subscription_code' => null, 'subscription_name' => null]);
+        $otherLegacy = $this->asLegacySubscription($this->createOrder($other));
+        $otherLegacyBefore = $otherLegacy->getRawOriginal();
         $other->update(['distributor_name' => null]);
         Sanctum::actingAs($owner);
 
         $rows = $this->readXlsx($this->get('/api/v1/user/order/export')->assertOk());
 
-        $this->assertCount(2, $rows);
+        $this->assertCount(3, $rows);
         $this->assertSame($ownOrder->trade_no, $rows[1][0]);
-        $ownDelivery->refresh();
-        $this->assertStringStartsWith('导出商户-', $ownDelivery->subscription_name);
         $this->assertExportIdentity($rows, $ownDelivery);
-        $this->assertNull($otherDelivery->fresh()->subscription_name);
-        $this->assertNull($otherDelivery->fresh()->subscription_code);
+        $this->assertSame($legacyOrder->trade_no, $rows[2][0]);
+        $this->assertLegacyExportIdentity($rows, 2);
         $filteredRows = $this->readXlsx($this->get('/api/v1/user/order/export?' . http_build_query([
             'search' => strtolower($ownDelivery->subscription_code),
         ]))->assertOk());
@@ -390,18 +457,21 @@ class DistributorSubscriptionNameTest extends TestCase
         $this->assertExportIdentity($filteredRows, $ownDelivery);
         $this->getJson('/api/v1/user/order/export?' . http_build_query(['search' => $foreignCode]))
             ->assertUnprocessable();
-        $this->assertNull($otherDelivery->fresh()->subscription_name);
+        $this->assertSame($legacyBefore, $legacyDelivery->fresh()->getRawOriginal());
+        $this->assertSame($otherLegacyBefore, $otherLegacy->fresh()->getRawOriginal());
+        $this->assertSame($foreignCode, $otherDelivery->fresh()->subscription_code);
     }
 
-    public function test_direct_admin_export_backfills_only_selected_merchant_until_an_unfiltered_export_is_requested(): void
+    public function test_admin_exports_preserve_legacy_metadata_for_selected_and_all_merchants(): void
     {
         $selected = $this->makeUser('export-admin-selected@example.com', '选择的商户');
         $other = $this->makeUser('export-admin-other@example.com', '其他商户');
         $selectedOrder = $this->createOrder($selected);
+        $selectedDelivery = $this->asLegacySubscription($selectedOrder);
+        $selectedBefore = $selectedDelivery->getRawOriginal();
         $otherOrder = $this->createOrder($other);
-        $selectedDelivery = $selectedOrder->distributorOrder()->firstOrFail();
-        $otherDelivery = $otherOrder->distributorOrder()->firstOrFail();
-        DB::table('v2_distributor_order')->update(['subscription_code' => null, 'subscription_name' => null]);
+        $otherDelivery = $this->asLegacySubscription($otherOrder);
+        $otherBefore = $otherDelivery->getRawOriginal();
         $other->update(['distributor_name' => null]);
         Sanctum::actingAs($this->makeUser('export-name-admin@example.com', null, true));
         $uri = $this->adminRoute(AdminOrderController::class, 'export');
@@ -411,24 +481,15 @@ class DistributorSubscriptionNameTest extends TestCase
 
         $this->assertCount(2, $rows);
         $this->assertSame($selectedOrder->trade_no, $rows[1][0]);
-        $selectedDelivery->refresh();
-        $this->assertStringStartsWith('选择的商户-', $selectedDelivery->subscription_name);
-        $this->assertExportIdentity($rows, $selectedDelivery);
-        $this->assertNull($otherDelivery->fresh()->subscription_name);
-        $this->assertNull($otherDelivery->fresh()->subscription_code);
-        $filteredRows = $this->readXlsx($this->get($uri . '?' . http_build_query([
-            ...$filter,
-            'search' => strtolower($selectedDelivery->subscription_code),
-        ]))->assertOk());
-        $this->assertCount(2, $filteredRows);
-        $this->assertExportIdentity($filteredRows, $selectedDelivery);
+        $this->assertLegacyExportIdentity($rows);
 
-        $other->update(['distributor_name' => '其他商户']);
         $allRows = $this->readXlsx($this->get($uri)->assertOk());
         $this->assertCount(3, $allRows);
         $this->assertSame($otherOrder->trade_no, $allRows[1][0]);
-        $this->assertExportIdentity($allRows, $otherDelivery->fresh());
-        $this->assertSame($selectedDelivery->subscription_name, $selectedDelivery->fresh()->subscription_name);
+        $this->assertLegacyExportIdentity($allRows, 1);
+        $this->assertLegacyExportIdentity($allRows, 2);
+        $this->assertSame($selectedBefore, $selectedDelivery->fresh()->getRawOriginal());
+        $this->assertSame($otherBefore, $otherDelivery->fresh()->getRawOriginal());
     }
 
     public function test_admin_can_save_sixteen_character_merchant_names_and_rejects_long_or_control_character_names(): void
@@ -490,6 +551,27 @@ class DistributorSubscriptionNameTest extends TestCase
         $this->assertNotEmpty($rows[1][$codeIndex]);
         $this->assertSame($delivery->subscription_name, $rows[1][$nameIndex]);
         $this->assertSame($delivery->subscription_code, $rows[1][$codeIndex]);
+    }
+
+    private function assertLegacyExportIdentity(array $rows, int $rowIndex = 1): void
+    {
+        $nameIndex = array_search('订阅名称', $rows[0], true);
+        $codeIndex = array_search('短订阅号', $rows[0], true);
+        $this->assertNotFalse($nameIndex);
+        $this->assertNotFalse($codeIndex);
+        $this->assertSame('', $rows[$rowIndex][$nameIndex]);
+        $this->assertSame('', $rows[$rowIndex][$codeIndex]);
+    }
+
+    private function asLegacySubscription(Order $order): DistributorOrder
+    {
+        $delivery = $order->distributorOrder()->firstOrFail();
+        DB::table('v2_distributor_order')->where('id', $delivery->id)->update([
+            'subscription_code' => null,
+            'subscription_name' => null,
+        ]);
+
+        return $delivery->fresh(['subscriber']);
     }
 
     private function readXlsx($response): array

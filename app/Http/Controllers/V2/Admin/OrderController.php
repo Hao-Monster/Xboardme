@@ -72,9 +72,6 @@ class OrderController extends Controller
             return $this->fail([400202, '订单不存在']);
 
         $distributorOrder = $order->distributorSubscription ?: $order->distributorOrder;
-        if ($distributorOrder) {
-            app(\App\Services\DistributorSubscriptionNameService::class)->ensure($distributorOrder);
-        }
         $subscribeUrl = null;
         if ($order->status === Order::STATUS_COMPLETED) {
             $subscriber = $distributorOrder?->subscriber ?: $order->user;
@@ -244,9 +241,6 @@ class OrderController extends Controller
         $paginatedResults->getCollection()->transform(function ($order) {
             $orderArray = $order->toArray();
             $distributorOrder = $order->distributorSubscription;
-            if ($distributorOrder) {
-                app(\App\Services\DistributorSubscriptionNameService::class)->ensure($distributorOrder);
-            }
             unset($orderArray['distributor_order']);
             unset($orderArray['distributor_subscription']);
             $orderArray['period'] = PlanService::getLegacyPeriod((string) $order->period);

@@ -114,11 +114,10 @@ class ClientController extends Controller
             return;
         }
 
-        app(\App\Services\DistributorSubscriptionNameService::class)->ensure($delivery);
-        $title = (string) $delivery->subscription_name;
+        $title = $delivery->subscription_name ?: "订单号：{$tradeNo}";
         $response->headers->set('profile-title', 'base64:' . base64_encode($title));
         $response->headers->set('content-disposition', $this->buildSubscriptionContentDisposition(
-            (string) $delivery->subscription_code,
+            (string) ($delivery->subscription_code ?: $tradeNo),
             $title,
             (string) $response->headers->get('content-disposition')
         ));

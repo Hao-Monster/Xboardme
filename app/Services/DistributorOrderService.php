@@ -90,7 +90,7 @@ class DistributorOrderService
                 'hwid_enabled' => true,
                 'hwid_limit' => $lockedPlan->distributor_hwid_limit,
             ]);
-            app(DistributorSubscriptionNameService::class)->ensure($delivery);
+            app(DistributorSubscriptionNameService::class)->assignToNewSubscription($delivery);
 
             $order->fill([
                 'distributor_order_id' => $delivery->id,
@@ -234,7 +234,6 @@ class DistributorOrderService
 
     public function deliveryData(DistributorOrder $delivery, bool $includeClaimUrl = true): array
     {
-        app(DistributorSubscriptionNameService::class)->ensure($delivery);
         $delivery->loadMissing([
             'order:id,trade_no,plan_id,period',
             'order.plan:id,name',
@@ -282,7 +281,6 @@ class DistributorOrderService
 
     public function subscriptionQrData(DistributorOrder $delivery): array
     {
-        app(DistributorSubscriptionNameService::class)->ensure($delivery);
         $delivery->loadMissing([
             'order:id,trade_no',
             'subscriber:id,token',
@@ -350,12 +348,11 @@ class DistributorOrderService
 
     public function subscriptionUrl(DistributorOrder $delivery): string
     {
-        app(DistributorSubscriptionNameService::class)->ensure($delivery);
         $delivery->loadMissing(['order:id,trade_no', 'subscriber:id,token']);
 
         return Helper::withSubscriptionRemark(
             Helper::getSubscribeUrl($delivery->subscriber->token),
-            (string) $delivery->subscription_name
+            (string) ($delivery->subscription_name ?: $delivery->order->trade_no)
         );
     }
 }

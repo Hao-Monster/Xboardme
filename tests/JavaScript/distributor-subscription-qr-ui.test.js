@@ -29,7 +29,7 @@ test('subscription QR preview uses the protected endpoint and composites order p
   assert.match(source, /payload\.customer_name/);
   assert.match(source, /const titleLines = wrapCanvasText/);
   assert.match(source, /titleLines\.forEach/);
-  assert.match(source, /const detailLines = \[subscriptionLabel\(payload\), \.\.\.deviceTexts\]/);
+  assert.match(source, /const detailLines = \[payload\.subscription_name \|\| `\$\{t\(\x27orderNo\x27\)\} \$\{payload\.trade_no\}`, \.\.\.deviceTexts\]/);
   assert.match(source, /canvas\.toDataURL\('image\/png'\)/);
   assert.match(source, /canvasBlob\(canvas\)/);
   assert.match(source, /dist-subscription-qr-preview/);

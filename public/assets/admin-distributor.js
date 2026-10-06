@@ -784,7 +784,7 @@
     let modal = document.getElementById('admin-dist-detail');
     if (!modal) { modal = document.createElement('div'); modal.id = 'admin-dist-detail'; document.body.appendChild(modal); }
     modal.innerHTML = `<div class="admin-dist-detail-backdrop"><section><button data-detail-close>×</button><h2>分销订单详情</h2><dl>
-      <div><dt>订阅名称</dt><dd>${escapeHtml(order.subscription_name || '-')}</dd></div><div><dt>订单号</dt><dd>${escapeHtml(order.trade_no)}</dd></div><div><dt>分销商</dt><dd>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</dd></div>
+      ${order.subscription_name ? `<div><dt>订阅名称</dt><dd>${escapeHtml(order.subscription_name)}</dd></div>` : ''}<div><dt>订单号</dt><dd>${escapeHtml(order.trade_no)}</dd></div><div><dt>分销商</dt><dd>${escapeHtml(order.distributor_name || order.distributor_email || '-')}</dd></div>
       <div><dt>订单类型</dt><dd>${escapeHtml(order.order_type_label || '-')}</dd></div><div><dt>关联原订单</dt><dd>${Number(order.type) === 2 ? escapeHtml(order.subscription_trade_no || '-') : '-'}</dd></div>
       <div><dt>套餐</dt><dd>${escapeHtml(order.plan?.name || '-')}</dd></div><div><dt>原价</dt><dd>${money(order.total_amount)}</dd></div>
       <div><dt>结算状态</dt><dd>${order.settlement_status === 1 ? '已结算' : '未结算'}</dd></div><div><dt>订阅链接</dt><dd class="url">${order.subscribe_url ? `<code>${escapeHtml(order.subscribe_url)}</code><button data-copy-subscription="${escapeHtml(order.subscribe_url)}">复制</button>` : '订单未完成，暂无订阅链接'}</dd></div>
