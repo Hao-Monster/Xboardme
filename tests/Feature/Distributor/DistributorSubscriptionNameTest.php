@@ -5,6 +5,7 @@ namespace Tests\Feature\Distributor;
 use App\Http\Controllers\V2\Admin\OrderController as AdminOrderController;
 use App\Http\Controllers\V2\Admin\UserController as AdminUserController;
 use App\Models\DistributorOrder;
+use App\Models\AdminAuditLog;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Server;
@@ -233,7 +234,11 @@ class DistributorSubscriptionNameTest extends TestCase
         $name = $delivery->subscription_name;
         $code = $delivery->subscription_code;
         $token = $delivery->subscriber->token;
-        $dealer->update(['distributor_name' => '新商户']);
+        Sanctum::actingAs($this->makeUser('rename-renewal-admin@example.com', null, true));
+        $this->postJson($this->adminRoute(AdminUserController::class, 'update'), [
+            'id' => $dealer->id, 'distributor_name' => '新商户',
+        ])->assertOk()->assertJsonPath('data', true);
+        $dealer->refresh();
         Carbon::setTestNow(Carbon::create(2026, 10, 8, 9, 0, 0, 'Asia/Shanghai'));
         Sanctum::actingAs($dealer);
 
@@ -255,6 +260,9 @@ class DistributorSubscriptionNameTest extends TestCase
             ->assertJsonPath('data.0.subscription_code', $code)
             ->assertJsonPath('data.1.subscription_name', $name)
             ->assertJsonPath('data.1.subscription_code', $code);
+
+        $newOrder = $this->createOrder($dealer);
+        $this->assertStringStartsWith('新商户-261008-', $newOrder->distributorOrder()->firstOrFail()->subscription_name);
     }
 
     public function test_short_code_and_full_name_search_preserve_distributor_ownership_and_admin_access(): void
@@ -526,13 +534,13 @@ class DistributorSubscriptionNameTest extends TestCase
         Sanctum::actingAs($admin);
         $uri = $this->adminRoute(AdminUserController::class, 'update');
         foreach ([str_repeat('甲', 16), 'ABCDEFGHIJKLMNOP', str_repeat('😀', 8), '  ABC 中文商户  '] as $name) {
-            $this->postJson($uri, ['id' => $dealer->id, 'is_distributor' => true, 'distributor_name' => $name])->assertOk();
+            $this->postJson($uri, ['id' => $dealer->id, 'distributor_name' => $name])->assertOk();
             $this->assertSame(trim($name), $dealer->fresh()->distributor_name);
         }
 
         $savedName = $dealer->fresh()->distributor_name;
         foreach ([str_repeat('甲', 17), 'ABCDEFGHIJKLMNOPQ', str_repeat('😀', 9), "商户\n名称", "商户\t名称", '   ', 'a@b.co'] as $name) {
-            $this->postJson($uri, ['id' => $dealer->id, 'is_distributor' => true, 'distributor_name' => $name])
+            $this->postJson($uri, ['id' => $dealer->id, 'distributor_name' => $name])
                 ->assertUnprocessable();
             $this->assertSame($savedName, $dealer->fresh()->distributor_name);
         }
@@ -556,6 +564,63 @@ class DistributorSubscriptionNameTest extends TestCase
             'distributor_name' => str_repeat('甲', 17),
         ])->assertUnprocessable();
         $this->assertNull(User::byEmail('generated-invalid-name@example.com')->first());
+    }
+
+    public function test_minimal_admin_rename_preserves_account_sessions_visibility_and_existing_orders(): void
+    {
+        $admin = $this->makeUser('qa-rename-admin@example.com', null, true);
+        $dealer = $this->makeUser('qa-rename-dealer@example.com', '原商户');
+        $dealer->update(['balance' => 12345, 'commission_balance' => 6789, 'discount' => 90]);
+        $order = $this->createOrder($dealer);
+        $delivery = $order->distributorOrder()->with('subscriber')->firstOrFail();
+        $session = $dealer->createToken('qa-rename-session')->accessToken;
+        $visibility = ['user_id' => $dealer->id, 'plan_id' => $order->plan_id, 'audience' => 'distributor'];
+        DB::table('v2_plan_visibility_user')->insert($visibility);
+        $beforeAccount = $dealer->fresh()->getRawOriginal();
+        $beforeOrder = $order->fresh()->getRawOriginal();
+        $beforeDelivery = $delivery->getRawOriginal();
+        $beforeSubscriber = $delivery->subscriber->getRawOriginal();
+        $beforeSession = $session->fresh()->getRawOriginal();
+        $beforeUrl = app(DistributorOrderService::class)->subscriptionUrl($delivery);
+
+        Sanctum::actingAs($admin);
+        $payload = ['id' => $dealer->id, 'distributor_name' => '新商户'];
+        $uri = $this->adminRoute(AdminUserController::class, 'update');
+        $this->postJson($uri, $payload)->assertOk()->assertJsonPath('data', true);
+        $this->getJson($this->adminRoute(AdminUserController::class, 'getUserInfoById') . '?id=' . $dealer->id)
+            ->assertOk()->assertJsonPath('data.distributor_name', '新商户')->assertJsonPath('data.is_distributor', true);
+        $afterAccount = $dealer->fresh()->getRawOriginal();
+        foreach (['distributor_name', 'updated_at'] as $key) {
+            unset($beforeAccount[$key], $afterAccount[$key]);
+        }
+        $this->assertSame($beforeAccount, $afterAccount);
+        $this->assertSame($beforeOrder, $order->fresh()->getRawOriginal());
+        $this->assertSame($beforeDelivery, $delivery->fresh()->getRawOriginal());
+        $this->assertSame($beforeSubscriber, $delivery->subscriber->fresh()->getRawOriginal());
+        $this->assertSame($beforeSession, $session->fresh()->getRawOriginal());
+        $this->assertDatabaseHas('v2_plan_visibility_user', $visibility);
+        $this->assertSame($beforeUrl, app(DistributorOrderService::class)->subscriptionUrl($delivery->fresh()));
+        $audit = AdminAuditLog::where('admin_id', $admin->id)->where('action', 'user.update')->firstOrFail();
+        $this->assertSame($payload, json_decode($audit->request_data, true, 512, JSON_THROW_ON_ERROR));
+        $this->postJson($this->adminRoute(AdminOrderController::class, 'detail'), ['id' => $order->id])
+            ->assertOk()->assertJsonPath('data.distributor_name', '新商户')
+            ->assertJsonPath('data.subscription_name', $delivery->subscription_name);
+    }
+
+    public function test_guest_customer_distributor_and_staff_cannot_use_admin_rename(): void
+    {
+        $dealer = $this->makeUser('qa-rename-target@example.com', '受保护商户');
+        $uri = $this->adminRoute(AdminUserController::class, 'update');
+        $payload = ['id' => $dealer->id, 'distributor_name' => '未授权改名'];
+        $this->postJson($uri, $payload)->assertForbidden();
+        $customer = $this->makeUser('qa-rename-customer@example.com');
+        $staff = $this->makeUser('qa-rename-staff@example.com');
+        $staff->update(['is_staff' => true]);
+        foreach ([$customer, $dealer, $staff] as $actor) {
+            Sanctum::actingAs($actor);
+            $this->postJson($uri, $payload)->assertForbidden();
+            $this->assertSame('受保护商户', $dealer->fresh()->distributor_name);
+        }
     }
 
     private function adminRoute(string $controller, string $method): string
