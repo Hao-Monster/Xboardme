@@ -419,7 +419,7 @@ test('admin exposes the package audience controls separately from permission gro
   );
 
   const injectedName = { value: ' 华东渠道 ' };
-  const injectedWrapper = { querySelector: () => injectedName };
+  const injectedWrapper = { dataset: { distributorMode: 'edit', distributorUserId: '7', distributorInitialRole: '0' }, querySelector: () => injectedName };
   const injectedSwitch = {
     checked: true,
     offsetParent: {},
@@ -435,7 +435,7 @@ test('admin exposes the package audience controls separately from permission gro
     distributor_name: '华东渠道',
   });
   const readonlyWrapper = {
-    dataset: { distributorName: '已保存分销商' },
+    dataset: { distributorMode: 'edit', distributorUserId: '8', distributorInitialRole: '1', distributorName: '已保存分销商' },
     querySelector: () => null,
   };
   document.injectedSwitches = [{
@@ -449,8 +449,6 @@ test('admin exposes the package audience controls separately from permission gro
   assert.deepEqual(JSON.parse(readonlyXhr.sentBody), {
     id: 8,
     remarks: '只修改备注',
-    is_distributor: 1,
-    distributor_name: '已保存分销商',
   });
   assert.match(source, /data-distributor-name/);
   assert.match(source, /data-distributor-name-readonly-row/);

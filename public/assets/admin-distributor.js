@@ -259,7 +259,7 @@
       const url = this.__adminDistUrl || '';
       const identityRevision = distributorIdentityRevision;
       if (/\/user\/(update|generate)(?:\?|$)/.test(url)) {
-        body = appendDistributorField(body);
+        body = appendDistributorField(body, /\/user\/generate(?:\?|$)/.test(url));
       }
       this.addEventListener('load', function () {
         if (/\/user\/fetch(?:\?|$)/.test(url)) rememberUsers(this.responseText, identityRevision);
@@ -274,7 +274,7 @@
       const url = typeof input === 'string' ? input : input?.url || '';
       const identityRevision = distributorIdentityRevision;
       if (/\/user\/(update|generate)(?:\?|$)/.test(url) && init.body) {
-        init = { ...init, body: appendDistributorField(init.body) };
+        init = { ...init, body: appendDistributorField(init.body, /\/user\/generate(?:\?|$)/.test(url)) };
       }
       return originalFetch(input, init).then((response) => {
         if (/\/user\/fetch(?:\?|$)/.test(url)) {
@@ -291,9 +291,14 @@
     };
   }
 
-  function activeInjectedSwitch() {
+  function activeInjectedSwitch(id, creating) {
     return [...document.querySelectorAll('.xboard-distributor-injected input[type="checkbox"]')]
-      .find((input) => input.offsetParent !== null);
+      .find((input) => {
+        const field = input.closest('.xboard-distributor-injected');
+        return input.offsetParent !== null && !input.disabled && (creating
+          ? field?.dataset.distributorMode === 'create'
+          : field?.dataset.distributorMode === 'edit' && id != null && String(id) === field.dataset.distributorUserId);
+      });
   }
 
   function validateDistributorName(value) {
@@ -305,11 +310,25 @@
     return name;
   }
 
-  function appendDistributorField(body) {
-    const checkbox = activeInjectedSwitch();
+  function appendDistributorField(body, creating = false) {
+    let parsed = body;
+    let encoded = false;
+    if (typeof body === 'string') {
+      try { parsed = JSON.parse(body); }
+      catch (_) {
+        if (!body.includes('=')) return body;
+        parsed = new URLSearchParams(body);
+        encoded = true;
+      }
+    }
+    const isForm = parsed instanceof FormData || parsed instanceof URLSearchParams;
+    if (!isForm && (typeof body !== 'string' || !parsed || typeof parsed !== 'object' || Array.isArray(parsed))) return body;
+    const checkbox = activeInjectedSwitch(isForm ? parsed.get('id') : parsed.id, creating);
     if (!checkbox) return body;
     const value = checkbox.checked ? 1 : 0;
     const field = checkbox.closest('.xboard-distributor-injected');
+    // A stale editor saving unrelated profile fields must not write cached identity.
+    if (!creating && (field?.dataset.distributorInitialRole == null || String(value) === field.dataset.distributorInitialRole)) return body;
     const nameInput = field?.querySelector('[data-distributor-name]');
     const savedName = String(field?.dataset?.distributorName || '').trim();
     let distributorName = '';
@@ -317,25 +336,14 @@
       try { distributorName = validateDistributorName(savedName || nameInput?.value); }
       catch (error) { toast(error.message, 'error'); throw error; }
     }
-    if (body instanceof FormData || body instanceof URLSearchParams) {
-      body.set('is_distributor', String(value));
-      body.set('distributor_name', distributorName);
-      return body;
+    if (isForm) {
+      parsed.set('is_distributor', String(value));
+      if (value || creating) parsed.set('distributor_name', distributorName);
+      return encoded ? parsed.toString() : parsed;
     }
-    if (typeof body === 'string') {
-      try {
-        const parsed = JSON.parse(body);
-        parsed.is_distributor = value;
-        parsed.distributor_name = distributorName;
-        return JSON.stringify(parsed);
-      } catch (_) {
-        const params = new URLSearchParams(body);
-        params.set('is_distributor', String(value));
-        params.set('distributor_name', distributorName);
-        return params.toString();
-      }
-    }
-    return body;
+    parsed.is_distributor = value;
+    if (value || creating) parsed.distributor_name = distributorName;
+    return JSON.stringify(parsed);
   }
 
   function rememberUsers(responseText, requestRevision = distributorIdentityRevision) {
@@ -353,7 +361,12 @@
           verified.name = user.distributor_name;
           verified.isDistributor = user.is_distributor;
         }
-        userCache.set(String(user.email).toLowerCase(), user);
+        const email = String(user.email).toLowerCase();
+        // A saved email change must not leave an older entry first in the ID lookup.
+        for (const [cachedEmail, cachedUser] of userCache) {
+          if (cachedEmail !== email && Number(cachedUser.id) === Number(user.id)) userCache.delete(cachedEmail);
+        }
+        userCache.set(email, user);
       });
       setTimeout(syncInjectedDistributorSwitches, 0);
     } catch (_) { /* not a user list response */ }
@@ -374,19 +387,34 @@
     document.querySelectorAll('[role="dialog"], [data-radix-dialog-content], .n-modal').forEach((dialog) => {
       const checkbox = dialog.querySelector('.xboard-distributor-injected input[type="checkbox"]');
       if (!checkbox) return;
-      const emailInput = [...dialog.querySelectorAll('input')]
-        .find((input) => String(input.value || '').includes('@'));
-      const user = emailInput ? userCache.get(String(emailInput.value).toLowerCase()) : null;
-      if (user) {
-        checkbox.checked = Boolean(user.is_distributor);
-        const field = checkbox.closest('.xboard-distributor-injected');
-        const distributorName = String(user.distributor_name || '').trim();
-        if (field) field.dataset.distributorName = distributorName;
-        const nameInput = dialog.querySelector('[data-distributor-name]');
-        if (nameInput) nameInput.value = distributorName;
-      }
+      const field = checkbox.closest('.xboard-distributor-injected');
+      if (field?.dataset.distributorMode !== 'edit') return;
+      const user = field.dataset.distributorUserId
+        ? [...userCache.values()].find((item) => String(item.id) === field.dataset.distributorUserId)
+        : userCache.get(field.dataset.distributorLookupEmail);
+      if (user) syncInjectedDistributorField(checkbox, user);
       syncDistributorNameField(checkbox);
     });
+  }
+
+  function syncInjectedDistributorField(checkbox, user) {
+    const field = checkbox.closest('.xboard-distributor-injected');
+    if (!field || (field.dataset.distributorUserId && field.dataset.distributorUserId !== String(user.id))) return;
+    const initial = field.dataset.distributorInitialRole;
+    const dirty = initial != null && checkbox.checked !== (initial === '1');
+    field.dataset.distributorUserId = String(user.id);
+    checkbox.disabled = false;
+    if (!dirty) {
+      checkbox.checked = Boolean(user.is_distributor);
+      field.dataset.distributorInitialRole = user.is_distributor ? '1' : '0';
+    }
+    // Preserve an unsaved conversion name and role intent across cache refreshes.
+    if (!dirty || initial === '1') {
+      field.dataset.distributorName = String(user.distributor_name || '').trim();
+      const input = field.querySelector('[data-distributor-name]');
+      if (input) input.value = field.dataset.distributorName;
+    }
+    syncDistributorNameField(checkbox);
   }
 
   function syncDistributorNameField(checkbox) {
@@ -416,10 +444,13 @@
 
       let checked = false;
       let savedDistributorName = '';
-      if (isEdit) {
+      let user = null;
+      let lookupEmail = '';
+      if (!isCreate) {
         const emailInput = [...dialog.querySelectorAll('input')]
           .find((input) => String(input.value || '').includes('@'));
-        const user = emailInput ? userCache.get(String(emailInput.value).toLowerCase()) : null;
+        lookupEmail = String(emailInput?.value || '').toLowerCase();
+        user = userCache.get(lookupEmail);
         checked = Boolean(user?.is_distributor);
         savedDistributorName = String(user?.distributor_name || '').trim();
       }
@@ -427,6 +458,10 @@
       const field = document.createElement('div');
       field.className = 'xboard-distributor-injected';
       field.dataset.distributorName = savedDistributorName;
+      field.dataset.distributorMode = isCreate ? 'create' : 'edit';
+      field.dataset.distributorLookupEmail = lookupEmail;
+      if (user) field.dataset.distributorUserId = String(user.id);
+      if (isCreate || user) field.dataset.distributorInitialRole = checked ? '1' : '0';
       field.innerHTML = `<div class="xboard-distributor-injected-toggle"><div><strong>是否分销商</strong><small>Distributor account</small></div><label class="admin-dist-switch"><input type="checkbox" ${checked ? 'checked' : ''}><span></span></label></div><label class="xboard-distributor-name" data-distributor-name-row>分销商名称<input type="text" maxlength="16" data-distributor-name placeholder="请输入分销商名称"><small>最多 16 个字符，用于客户端订阅名称；中文、字母、数字和空格计入长度。</small></label><div class="xboard-distributor-name-readonly" data-distributor-name-readonly-row><span>分销商名称</span><strong data-distributor-name-value></strong></div>`;
 
       const staffNode = [...dialog.querySelectorAll('label,div,span')]
@@ -439,7 +474,9 @@
         if (footer) form.insertBefore(field, footer);
         else form.appendChild(field);
       }
-      syncDistributorNameField(field.querySelector('input[type="checkbox"]'));
+      const checkbox = field.querySelector('input[type="checkbox"]');
+      checkbox.disabled = !isCreate && !user;
+      syncDistributorNameField(checkbox);
     });
   }
 
@@ -770,16 +807,9 @@
       if (Number(order.user_id) === Number(user.id)) order.distributor_name = user.distributor_name;
     }
     document.querySelectorAll('[role="dialog"], [data-radix-dialog-content], .n-modal').forEach((dialog) => {
-      const email = [...dialog.querySelectorAll('input')].find((item) => String(item.value || '').includes('@'));
-      if (String(email?.value || '').toLowerCase() !== String(user.email).toLowerCase()) return;
       const checkbox = dialog.querySelector('.xboard-distributor-injected input[type="checkbox"]');
       const field = checkbox?.closest('.xboard-distributor-injected');
-      if (!field) return;
-      field.dataset.distributorName = user.distributor_name || '';
-      const name = field.querySelector('[data-distributor-name]');
-      if (name) name.value = user.distributor_name || '';
-      if (!user.is_distributor) checkbox.checked = false;
-      syncDistributorNameField(checkbox);
+      if (field?.dataset.distributorUserId === String(user.id)) syncInjectedDistributorField(checkbox, user);
     });
   }
 
@@ -807,8 +837,10 @@
     let busy = false;
     let currentUser = null;
     let attemptedName = null;
+    let attemptedRevision = null;
     let needsVerification = true;
     let writeError = '';
+    let writeRejected = false;
 
     function setBusy(value) {
       busy = value;
@@ -825,6 +857,10 @@
       if (!user || Number(user.id) !== userId || typeof user.is_distributor !== 'boolean') {
         throw new Error('用户详情响应无效');
       }
+      if (!Object.prototype.hasOwnProperty.call(user, 'distributor_revision') || (user.distributor_revision !== null
+        && (typeof user.distributor_revision !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.distributor_revision)))) {
+        throw new Error('缺少有效的分销商版本，请刷新页面并确认服务已更新');
+      }
       currentUser = user;
       needsVerification = false;
       recheck.hidden = true;
@@ -833,14 +869,20 @@
       dialog.querySelector('[data-rename-current]').textContent = `当前名称：${user.distributor_name || '未设置'}`;
       if (!user.is_distributor) {
         status.textContent = '该账号已不是分销商，不能修改名称，请关闭后刷新列表。';
-      } else if (attemptedName !== null && user.distributor_name === attemptedName) {
+      } else if (attemptedName !== null && !writeRejected && user.distributor_revision !== attemptedRevision && user.distributor_name === attemptedName) {
         if (state.open && state.tab === 'users') renderUsers();
         if (document.getElementById('xboard-native-distributor-orders')) renderNativeOrders();
         toast('分销商名称已更新并核对');
         dialog.close();
       } else if (attemptedName !== null) {
-        status.textContent = `${writeError || '保存后名称不一致'}。已读取当前名称，请核对后再保存。`;
-        attemptedName = null;
+        if (!writeRejected && user.distributor_revision === attemptedRevision) {
+          needsVerification = true;
+          recheck.hidden = false;
+          status.textContent = `保存结果未确认，请勿重复提交：${writeError || '名称及版本尚未更新'}。请重新核对。`;
+        } else {
+          status.textContent = `${writeError || '分销商信息已被其他操作修改'}。已读取当前名称，请核对草稿后再保存。`;
+          attemptedName = null;
+        }
       } else {
         input.value = user.distributor_name || '';
         status.textContent = '';
@@ -890,14 +932,19 @@
       catch (error) { status.textContent = error.message; input.focus(); return; }
       if (name === currentUser.distributor_name) { dialog.close(); return; }
       attemptedName = name;
+      attemptedRevision = currentUser.distributor_revision;
       writeError = '';
+      writeRejected = false;
       setBusy(true);
       status.textContent = '正在保存并核对…';
       try {
-        const result = await renameRequest('/user/update', { method: 'POST', data: { id: userId, distributor_name: name } });
+        const result = await renameRequest('/user/distributor/rename', { method: 'POST', data: {
+          id: userId, distributor_name: name, expected_distributor_revision: attemptedRevision,
+        } });
         if (dataOf(result) !== true) throw new Error('保存响应无效');
       } catch (error) {
         writeError = error.message;
+        writeRejected = [400, 401, 403, 404, 405, 409, 419, 422, 429].includes(error.status);
       }
       // A timed-out response can still mean the server committed. Never retry the write here.
       await runVerification();

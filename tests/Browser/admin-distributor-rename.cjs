@@ -1,21 +1,22 @@
-// Real Chrome UI, synthetic API boundary only; never connects to production.
+// Real browser UI, synthetic API boundary only; never connects to production.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { test, before, after } = require('node:test');
-const { chromium } = require('playwright');
+const { launchBrowser } = require('./helpers/browser-runtime.cjs');
 const { expect } = require('playwright/test');
 
 let browser;
-before(async () => { browser = await chromium.launch({ channel: 'chrome', headless: true }); });
+before(async () => { browser = await launchBrowser(); });
 after(async () => { await browser?.close(); });
 
 async function fixture(t, width = 1440) {
   const page = await browser.newPage({ viewport: { width, height: 900 } });
   page.setDefaultTimeout(5000);
   const state = {
-    user: { id: 7, email: 'qa-merchant@example.invalid', distributor_name: '旧<&商户>', is_distributor: true, banned: false, balance: 12345, commission_balance: 6789 },
-    updates: [], reads: 0, mode: 'ok', readFailure: false, release: null,
+    user: { id: 7, email: 'qa-merchant@example.invalid', distributor_name: '旧<&商户>', distributor_revision: null, is_distributor: true, banned: false, balance: 12345, commission_balance: 6789 },
+    updates: [], completed: [], reads: 0, mode: 'ok', readFailure: false, release: null,
   };
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -47,12 +48,33 @@ async function fixture(t, width = 1440) {
     if (url.pathname.endsWith('/user/update')) {
       const data = route.request().postDataJSON();
       state.updates.push(data);
-      if (state.mode === 'pending' || state.mode === 'timeout') await new Promise((resolve) => { state.release = resolve; });
-      if (state.mode === 'reject') return route.fulfill({ status: 422, json: { status: 'fail', message: 'QA名称被拒绝' } });
-      if (state.mode === 'role-changed') { state.user.is_distributor = false; state.user.distributor_name = null; }
-      else if (state.mode !== 'mismatch' && state.mode !== 'timeout') state.user.distributor_name = data.distributor_name;
-      if (state.mode === 'lost-response') return route.abort('failed');
-      if (state.mode === 'read-failed') state.readFailure = true;
+      if ('is_distributor' in data) state.user.is_distributor = Boolean(data.is_distributor);
+      if ('distributor_name' in data) state.user.distributor_name = data.distributor_name;
+      if ('is_distributor' in data || 'distributor_name' in data) state.user.distributor_revision = randomUUID();
+      return route.fulfill({ json: { status: 'success', data: true } });
+    }
+    if (url.pathname.endsWith('/user/distributor/rename')) {
+      const data = route.request().postDataJSON();
+      const mode = state.mode;
+      state.updates.push(data);
+      // Browser abort is not server cancellation: release can still apply the CAS.
+      if (mode === 'pending' || mode === 'timeout') await new Promise((resolve) => { state.release = resolve; });
+      if (mode === 'reject') return route.fulfill({ status: 422, json: { status: 'fail', message: 'QA名称被拒绝' } });
+      if (mode === 'server-error') return route.fulfill({ status: 503, json: { message: 'QA服务暂不可用' } });
+      if (mode === 'role-changed') {
+        state.user.is_distributor = false;
+        state.user.distributor_name = null;
+        state.user.distributor_revision = randomUUID();
+      } else if (!state.user.is_distributor || data.expected_distributor_revision !== state.user.distributor_revision) {
+        state.completed.push({ name: data.distributor_name, status: 409 });
+        return route.fulfill({ status: 409, json: { message: '分销商信息已变化，请核对后重试' } });
+      } else if (mode !== 'mismatch') {
+        state.user.distributor_name = data.distributor_name;
+        state.user.distributor_revision = randomUUID();
+      }
+      state.completed.push({ name: data.distributor_name, status: 200 });
+      if (mode === 'lost-response') return route.abort('failed');
+      if (mode === 'read-failed') state.readFailure = true;
       return route.fulfill({ json: { status: 'success', data: true } });
     }
     if (url.pathname === '/favicon.ico') return route.fulfill({ status: 204 });
@@ -101,7 +123,7 @@ for (const width of [390, 1440]) test(`rename via list at ${width}px: trim, esca
   await f.input.fill('  新<&店>😀  ');
   await f.input.press('Enter');
   await f.saved('新<&店>😀');
-  assert.deepEqual(f.state.updates, [{ id: 7, distributor_name: '新<&店>😀' }]);
+  assert.deepEqual(f.state.updates, [{ id: 7, distributor_name: '新<&店>😀', expected_distributor_revision: null }]);
   await expect(f.page.locator('.admin-dist-user-list [data-distributor-rename="7"]')).toBeFocused();
 });
 
@@ -193,10 +215,10 @@ for (const mode of ['mismatch', 'role-changed']) test(`HTTP success with ${mode}
   f.state.mode = mode;
   await f.input.fill('请求的新名称');
   await f.save.click();
-  await expect(f.status).toContainText(mode === 'mismatch' ? '名称不一致' : '已不是分销商');
+  await expect(f.status).toContainText(mode === 'mismatch' ? '保存结果未确认' : '已不是分销商');
   await expect(f.page.locator('.admin-dist-toast')).toHaveCount(0);
   assert.equal(f.state.updates.length, 1);
-  if (mode === 'role-changed') await expect(f.save).toBeDisabled();
+  await expect(f.save).toBeDisabled();
 });
 
 test('expired local authentication sends no write and cannot report success', async (t) => {
@@ -227,16 +249,16 @@ test('visible native editors cannot contaminate rename and target cached name st
   await f.input.fill('缓存同步新名');
   await f.save.click();
   await f.saved('缓存同步新名');
-  assert.deepEqual(f.state.updates, [{ id: 7, distributor_name: '缓存同步新名' }]);
+  assert.deepEqual(f.state.updates, [{ id: 7, distributor_name: '缓存同步新名', expected_distributor_revision: null }]);
   await expect(f.page.locator('#qa-native-7 [data-distributor-name-value]')).toHaveText('缓存同步新名');
   await f.page.locator('[data-admin-dist="close"]').click();
   await f.page.evaluate(() => window.fetch('/api/v2/qa-admin/user/update', {
     method: 'POST', body: JSON.stringify({ id: 7, remarks: '仅改备注' }),
   }));
-  assert.deepEqual(f.state.updates[1], { id: 7, remarks: '仅改备注', is_distributor: 1, distributor_name: '缓存同步新名' });
+  assert.deepEqual(f.state.updates[1], { id: 7, remarks: '仅改备注' });
 });
 
-test('35-second write timeout is bounded and only followed by a read', async (t) => {
+test('35-second write timeout and unchanged readback keep saving locked', async (t) => {
   const f = await fixture(t);
   await f.page.clock.install();
   await f.open();
@@ -245,10 +267,101 @@ test('35-second write timeout is bounded and only followed by a read', async (t)
   await f.save.click();
   await expect.poll(() => f.state.updates.length).toBe(1);
   await f.page.clock.fastForward(35001);
-  await expect(f.status).toContainText('已读取当前名称');
+  await expect(f.status).toContainText('保存结果未确认');
+  await expect(f.save).toBeDisabled();
   await expect(f.input).toHaveValue('超时测试');
   assert.equal(f.state.updates.length, 1);
   f.state.release();
+  await expect.poll(() => f.state.completed.length).toBe(1);
+  await f.dialog.locator('[data-rename-recheck]').click();
+  await f.saved('超时测试');
+  assert.equal(f.state.updates.length, 1, 'recheck must not repeat the write');
+});
+
+test('a timed-out earlier command cannot overwrite a later successful rename after reopening', async (t) => {
+  const f = await fixture(t);
+  await f.page.clock.install();
+  await f.open();
+  f.state.mode = 'timeout';
+  await f.input.fill('先发出的请求');
+  await f.save.click();
+  await expect.poll(() => f.state.updates.length).toBe(1);
+  const releaseFirst = f.state.release;
+  await f.page.clock.fastForward(35001);
+  await expect(f.status).toContainText('保存结果未确认');
+  await expect(f.save).toBeDisabled();
+  await f.dialog.locator('[data-rename-cancel]').click();
+  await expect(f.dialog).toHaveCount(0);
+  f.state.mode = 'ok';
+  await f.open();
+  await f.input.fill('后发成功的名称');
+  await f.save.click();
+  await f.saved('后发成功的名称');
+  const revision = f.state.user.distributor_revision;
+  releaseFirst();
+  await expect.poll(() => f.state.completed.length).toBe(2);
+  assert.deepEqual(f.state.completed, [
+    { name: '后发成功的名称', status: 200 }, { name: '先发出的请求', status: 409 },
+  ]);
+  assert.equal(f.state.user.distributor_name, '后发成功的名称');
+  assert.equal(f.state.user.distributor_revision, revision);
+  assert.equal(f.state.updates.length, 2);
+});
+
+test('version conflict preserves draft and only an explicit retry uses the refreshed revision', async (t) => {
+  const f = await fixture(t);
+  await f.open();
+  f.state.user.distributor_name = '另一个管理员改名';
+  f.state.user.distributor_revision = randomUUID();
+  const revision = f.state.user.distributor_revision;
+  await f.input.fill('我的名称草稿');
+  await f.save.click();
+  await expect(f.status).toContainText('分销商信息已变化');
+  await expect(f.input).toHaveValue('我的名称草稿');
+  await expect(f.save).toBeEnabled();
+  await expect(f.page.locator('.admin-dist-toast')).toHaveCount(0);
+  assert.equal(f.state.updates.length, 1);
+  assert.equal(f.state.user.distributor_name, '另一个管理员改名');
+  await f.save.click();
+  await f.saved('我的名称草稿');
+  assert.equal(f.state.updates.length, 2);
+  assert.equal(f.state.updates[1].expected_distributor_revision, revision);
+});
+
+test('explicit conflict is not reported as this request succeeding even if another writer chose the same name', async (t) => {
+  const f = await fixture(t);
+  await f.open();
+  f.state.user.distributor_name = '同一个名称';
+  f.state.user.distributor_revision = randomUUID();
+  await f.input.fill('同一个名称');
+  await f.save.click();
+  await expect(f.status).toContainText('分销商信息已变化');
+  await expect(f.page.locator('.admin-dist-toast')).toHaveCount(0);
+  await expect(f.dialog).toBeVisible();
+  assert.equal(f.state.updates.length, 1);
+});
+
+for (const revision of [undefined, 'not-a-uuid', 3]) test(`invalid revision ${String(revision)} fails closed without legacy fallback`, async (t) => {
+  const f = await fixture(t);
+  if (revision === undefined) delete f.state.user.distributor_revision;
+  else f.state.user.distributor_revision = revision;
+  await f.page.locator('.admin-dist-user-list [data-distributor-rename="7"]').click();
+  await expect(f.status).toContainText('缺少有效的分销商版本');
+  await expect(f.save).toBeDisabled();
+  assert.equal(f.state.updates.length, 0);
+});
+
+test('server error with unchanged revision cannot unlock an uncertain save', async (t) => {
+  const f = await fixture(t);
+  await f.open();
+  f.state.mode = 'server-error';
+  await f.input.fill('未知保存结果');
+  await f.save.click();
+  await expect(f.status).toContainText('保存结果未确认');
+  await expect(f.save).toBeDisabled();
+  await f.dialog.locator('[data-rename-recheck]').click();
+  await expect(f.save).toBeDisabled();
+  assert.equal(f.state.updates.length, 1);
 });
 
 for (const transport of ['fetch', 'xhr']) test(`late native ${transport} user-list response cannot restore the old name on an ordinary profile save`, async (t) => {
@@ -289,5 +402,5 @@ for (const transport of ['fetch', 'xhr']) test(`late native ${transport} user-li
   await f.page.evaluate(() => window.fetch('/api/v2/qa-admin/user/update', {
     method: 'POST', body: JSON.stringify({ id: 7, remarks: '仅改备注', balance: window.qaOldUser.balance }),
   }));
-  assert.deepEqual(f.state.updates[1], { id: 7, remarks: '仅改备注', balance: 123.45, is_distributor: 1, distributor_name: '不能被旧响应覆盖' });
+  assert.deepEqual(f.state.updates[1], { id: 7, remarks: '仅改备注', balance: 123.45 });
 });

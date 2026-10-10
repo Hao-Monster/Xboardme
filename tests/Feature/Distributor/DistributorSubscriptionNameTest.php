@@ -590,7 +590,9 @@ class DistributorSubscriptionNameTest extends TestCase
         $this->getJson($this->adminRoute(AdminUserController::class, 'getUserInfoById') . '?id=' . $dealer->id)
             ->assertOk()->assertJsonPath('data.distributor_name', '新商户')->assertJsonPath('data.is_distributor', true);
         $afterAccount = $dealer->fresh()->getRawOriginal();
-        foreach (['distributor_name', 'updated_at'] as $key) {
+        $this->assertTrue(\Illuminate\Support\Str::isUuid($afterAccount['distributor_revision']));
+        $this->assertNotSame($beforeAccount['distributor_revision'], $afterAccount['distributor_revision']);
+        foreach (['distributor_name', 'distributor_revision', 'updated_at'] as $key) {
             unset($beforeAccount[$key], $afterAccount[$key]);
         }
         $this->assertSame($beforeAccount, $afterAccount);

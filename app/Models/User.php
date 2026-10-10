@@ -10,6 +10,7 @@ use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Str;
 
 /**
  * App\Models\User
@@ -43,6 +44,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int|null $is_admin 是否管理员
  * @property bool $is_distributor 是否分销商
  * @property string|null $distributor_name 分销商名称
+ * @property string|null $distributor_revision 分销身份并发版本
  * @property int|null $next_reset_at 下次流量重置时间
  * @property int|null $last_reset_at 上次流量重置时间
  * @property int|null $telegram_id Telegram ID
@@ -69,7 +71,7 @@ class User extends Authenticatable
     use HasApiTokens;
     protected $table = 'v2_user';
     protected $dateFormat = 'U';
-    protected $guarded = ['id'];
+    protected $guarded = ['id', 'distributor_revision'];
     protected $casts = [
         'created_at' => 'timestamp',
         'updated_at' => 'timestamp',
@@ -89,6 +91,17 @@ class User extends Authenticatable
     public const COMMISSION_TYPE_SYSTEM = 0;
     public const COMMISSION_TYPE_PERIOD = 1;
     public const COMMISSION_TYPE_ONETIME = 2;
+
+    protected static function booted(): void
+    {
+        static::updating(function (User $user): void {
+            if ($user->isDirty(['distributor_name', 'is_distributor'])) {
+                // Rotate in the same SQL update, including legacy API/model writes and ABA changes.
+                $user->distributor_revision = (string) Str::uuid();
+            }
+        });
+    }
+
     protected function email(): Attribute
     {
         return Attribute::make(

@@ -149,7 +149,7 @@ test('merchant-name validation trims values and enforces the same UTF-16 limit a
 
 test('native admin request bridge validates before sending and preserves valid saved names', () => {
   const notifications = [];
-  const field = { dataset: {}, querySelector: () => ({ value: ' A'.repeat(17) }) };
+  const field = { dataset: { distributorInitialRole: '0' }, querySelector: () => ({ value: ' A'.repeat(17) }) };
   const checkbox = { checked: true, closest: () => field };
   const { appendDistributorField } = functions(adminSource, ['validateDistributorName', 'appendDistributorField'], {
     activeInjectedSwitch: () => checkbox, FormData, URLSearchParams,
@@ -162,7 +162,10 @@ test('native admin request bridge validates before sending and preserves valid s
     id: 7, is_distributor: 1, distributor_name: '小北',
   });
   checkbox.checked = false;
-  assert.equal(JSON.parse(appendDistributorField('{}')).distributor_name, '');
+  assert.deepEqual(JSON.parse(appendDistributorField('{"id":7}')), { id: 7 });
+  field.dataset.distributorInitialRole = '1';
+  assert.deepEqual(JSON.parse(appendDistributorField('{"id":7}')), { id: 7, is_distributor: 0 });
+  assert.equal(JSON.parse(appendDistributorField('{}', true)).distributor_name, '');
 });
 
 test('creation, existing-user conversion and native admin bridge reject email merchant names before requests', async () => {
@@ -174,7 +177,7 @@ test('creation, existing-user conversion and native admin bridge reject email me
   };
   let nativeName = ' a@b.co ';
   const checkbox = { checked: true, closest: () => ({
-    dataset: {}, querySelector: () => ({ value: nativeName }),
+    dataset: { distributorInitialRole: '0' }, querySelector: () => ({ value: nativeName }),
   }) };
   const { createUser, toggleUser, appendDistributorField } = functions(adminSource,
     ['validateDistributorName', 'createUser', 'toggleUser', 'appendDistributorField'], {

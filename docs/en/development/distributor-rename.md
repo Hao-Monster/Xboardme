@@ -7,16 +7,20 @@
 - Add an explicit **编辑名称** action to existing distributors in the distributor
   account list and search result. Keep the native user editor's saved name
   read-only; do not rename by revoking/regranting the distributor role.
-- Reuse the administrator-only user update API with exactly
-  `{id, distributor_name}`. Isolate internal API requests from the native form
-  request bridge so another open user editor cannot overwrite the payload.
+- Use the administrator-only `POST /user/distributor/rename` with exactly
+  `{id, distributor_name, expected_distributor_revision}`. Read the nullable UUID
+  revision from the detail endpoint and compare it in the atomic SQL UPDATE.
+  Isolate internal requests from the native form bridge. Native profile saves
+  append identity fields only for an explicit role change on the matching ID.
 - Read the current user before editing, validate using the existing 16 UTF-16
   unit rule, trim whitespace, reject empty/control/email-shaped names, and
   prevent duplicate submissions. No new uniqueness requirement.
 - Read back after a write (including an ambiguous network failure). Only report
-  success when the target is still a distributor and the stored name matches.
-  If verification fails, disable saving and offer a read-only recheck. Never
-  automatically retry a write. Bound each rename request to 35 seconds.
+  success when the target is still a distributor, the stored name matches and
+  the revision advanced, with no definite rejection. An unchanged revision after
+  an uncertain write keeps saving locked; offer a read-only recheck. A conflict
+  preserves the draft and requires an explicit retry with the newly read revision.
+  Never automatically retry a write. Bound each rename request to 35 seconds.
 - Update cached names and relevant displays after a verified read. Existing
   subscription names/codes, trade numbers, credentials, balances, roles,
   sessions, and plan visibility remain unchanged. The order's live distributor
@@ -26,9 +30,12 @@
   Later fresh reads still apply other administrators' changes. Preserve each
   response's money units and unrelated fields rather than replacing cached users
   wholesale with the detail response.
-- No backend schema, permission, payment, or order logic changes are planned.
-  The existing API's concurrent-admin last-writer behavior is unchanged; this
-  UI does not claim to eliminate SQLite writer contention during peak traffic.
+- Add nullable `v2_user.distributor_revision` without a data backfill. Model
+  identity updates rotate it in the same write; ordinary profile saves do not.
+  Existing explicit identity writes through `user/update` retain last-writer
+  behavior. No permission, payment or order changes; no claim of eliminating
+  SQLite writer contention. See [the concurrency repair plan](distributor-rename-concurrency-fix.md)
+  for the revised regression matrix and release boundaries.
 
 ## Acceptance and test matrix (before implementation)
 
@@ -46,8 +53,13 @@
 
 Browser fixtures are synthetic, not production acceptance. SQLite evidence does
 not substitute for the CI PHP 8.3/8.4 and MySQL 5.7/8.4 matrix. Source JS/CSS are
-served directly; there is no new frontend build dependency. Rollback is a normal
-revert of this change, with no database rollback or name rewrite.
+served directly; Playwright is a locked test-only dependency, not a new asset
+build. Run `npm ci --ignore-scripts`, `npx --no-install playwright install chromium`,
+then `npm run test:browser:distributor-rename`. CI runs both the focused dialog and
+real native-admin suites. `PLAYWRIGHT_CHANNEL=chrome` optionally selects a local
+Chrome. Roll application code back while retaining the additive column; do not
+drop it while new writers run. Old assets/writers must be retired for full protection.
 
 Execution results, corrections, review and remaining release checks are recorded
-in [the test report](distributor-rename-test-report-20261010.md).
+in [the original test report](distributor-rename-test-report-20261010.md) and
+[the concurrency repair report](distributor-rename-concurrency-test-report-20261010.md).
