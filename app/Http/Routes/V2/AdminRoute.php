@@ -145,6 +145,7 @@ class AdminRoute
             ], function ($router) {
                 $router->any('/fetch', [UserController::class, 'fetch']);
                 $router->post('/update', [UserController::class, 'update']);
+                $router->post('/distributor/rename', [UserController::class, 'renameDistributor']);
                 $router->get('/getUserInfoById', [UserController::class, 'getUserInfoById']);
                 $router->post('/generate', [UserController::class, 'generate']);
                 $router->post('/dumpCSV', [UserController::class, 'dumpCSV']);

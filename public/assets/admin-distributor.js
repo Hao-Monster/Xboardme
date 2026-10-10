@@ -5,7 +5,11 @@
   window.__xboardAdminDistributor = true;
 
   const TOKEN_KEY = 'XBOARD_ACCESS_TOKEN';
+  // Native user forms need the bridge; explicit internal payloads must not inherit it.
+  const internalFetch = window.fetch.bind(window);
   const userCache = new Map();
+  const verifiedDistributorIdentities = new Map();
+  let distributorIdentityRevision = 0;
   const orderDetailCache = new Map();
   const state = {
     open: false,
@@ -155,7 +159,7 @@
     const token = authToken();
     if (!token) throw new Error('管理员登录已失效');
     const method = options.method || 'GET';
-    const response = await fetch(`/api/v2/${securePath()}${path}`, {
+    const response = await internalFetch(`/api/v2/${securePath()}${path}`, {
       method,
       headers: {
         Authorization: token,
@@ -165,6 +169,7 @@
       body: options.data ? JSON.stringify(options.data) : undefined,
       credentials: 'same-origin',
       cache: 'no-store',
+      signal: options.signal,
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok || payload?.status === 'fail') {
@@ -252,12 +257,13 @@
 
     XMLHttpRequest.prototype.send = function (body) {
       const url = this.__adminDistUrl || '';
+      const identityRevision = distributorIdentityRevision;
       if (/\/user\/(update|generate)(?:\?|$)/.test(url)) {
-        body = appendDistributorField(body);
+        body = appendDistributorField(body, /\/user\/generate(?:\?|$)/.test(url));
       }
       this.addEventListener('load', function () {
-        if (/\/user\/fetch(?:\?|$)/.test(url)) rememberUsers(this.responseText);
-        if (/\/user\/getUserInfoById(?:\?|$)/.test(url)) rememberUsers(this.responseText);
+        if (/\/user\/fetch(?:\?|$)/.test(url)) rememberUsers(this.responseText, identityRevision);
+        if (/\/user\/getUserInfoById(?:\?|$)/.test(url)) rememberUsers(this.responseText, identityRevision);
         if (/\/order\/detail(?:\?|$)/.test(url)) rememberOrderDetail(this.responseText);
       });
       return originalSend.call(this, body);
@@ -266,15 +272,16 @@
     const originalFetch = window.fetch.bind(window);
     window.fetch = function (input, init = {}) {
       const url = typeof input === 'string' ? input : input?.url || '';
+      const identityRevision = distributorIdentityRevision;
       if (/\/user\/(update|generate)(?:\?|$)/.test(url) && init.body) {
-        init = { ...init, body: appendDistributorField(init.body) };
+        init = { ...init, body: appendDistributorField(init.body, /\/user\/generate(?:\?|$)/.test(url)) };
       }
       return originalFetch(input, init).then((response) => {
         if (/\/user\/fetch(?:\?|$)/.test(url)) {
-          response.clone().text().then(rememberUsers).catch(() => {});
+          response.clone().text().then((text) => rememberUsers(text, identityRevision)).catch(() => {});
         }
         if (/\/user\/getUserInfoById(?:\?|$)/.test(url)) {
-          response.clone().text().then(rememberUsers).catch(() => {});
+          response.clone().text().then((text) => rememberUsers(text, identityRevision)).catch(() => {});
         }
         if (/\/order\/detail(?:\?|$)/.test(url)) {
           response.clone().text().then(rememberOrderDetail).catch(() => {});
@@ -284,9 +291,14 @@
     };
   }
 
-  function activeInjectedSwitch() {
+  function activeInjectedSwitch(id, creating) {
     return [...document.querySelectorAll('.xboard-distributor-injected input[type="checkbox"]')]
-      .find((input) => input.offsetParent !== null);
+      .find((input) => {
+        const field = input.closest('.xboard-distributor-injected');
+        return input.offsetParent !== null && !input.disabled && (creating
+          ? field?.dataset.distributorMode === 'create'
+          : field?.dataset.distributorMode === 'edit' && id != null && String(id) === field.dataset.distributorUserId);
+      });
   }
 
   function validateDistributorName(value) {
@@ -298,11 +310,25 @@
     return name;
   }
 
-  function appendDistributorField(body) {
-    const checkbox = activeInjectedSwitch();
+  function appendDistributorField(body, creating = false) {
+    let parsed = body;
+    let encoded = false;
+    if (typeof body === 'string') {
+      try { parsed = JSON.parse(body); }
+      catch (_) {
+        if (!body.includes('=')) return body;
+        parsed = new URLSearchParams(body);
+        encoded = true;
+      }
+    }
+    const isForm = parsed instanceof FormData || parsed instanceof URLSearchParams;
+    if (!isForm && (typeof body !== 'string' || !parsed || typeof parsed !== 'object' || Array.isArray(parsed))) return body;
+    const checkbox = activeInjectedSwitch(isForm ? parsed.get('id') : parsed.id, creating);
     if (!checkbox) return body;
     const value = checkbox.checked ? 1 : 0;
     const field = checkbox.closest('.xboard-distributor-injected');
+    // A stale editor saving unrelated profile fields must not write cached identity.
+    if (!creating && (field?.dataset.distributorInitialRole == null || String(value) === field.dataset.distributorInitialRole)) return body;
     const nameInput = field?.querySelector('[data-distributor-name]');
     const savedName = String(field?.dataset?.distributorName || '').trim();
     let distributorName = '';
@@ -310,33 +336,37 @@
       try { distributorName = validateDistributorName(savedName || nameInput?.value); }
       catch (error) { toast(error.message, 'error'); throw error; }
     }
-    if (body instanceof FormData || body instanceof URLSearchParams) {
-      body.set('is_distributor', String(value));
-      body.set('distributor_name', distributorName);
-      return body;
+    if (isForm) {
+      parsed.set('is_distributor', String(value));
+      if (value || creating) parsed.set('distributor_name', distributorName);
+      return encoded ? parsed.toString() : parsed;
     }
-    if (typeof body === 'string') {
-      try {
-        const parsed = JSON.parse(body);
-        parsed.is_distributor = value;
-        parsed.distributor_name = distributorName;
-        return JSON.stringify(parsed);
-      } catch (_) {
-        const params = new URLSearchParams(body);
-        params.set('is_distributor', String(value));
-        params.set('distributor_name', distributorName);
-        return params.toString();
-      }
-    }
-    return body;
+    parsed.is_distributor = value;
+    if (value || creating) parsed.distributor_name = distributorName;
+    return JSON.stringify(parsed);
   }
 
-  function rememberUsers(responseText) {
+  function rememberUsers(responseText, requestRevision = distributorIdentityRevision) {
     try {
       const payload = typeof responseText === 'string' ? JSON.parse(responseText) : responseText;
       const users = Array.isArray(payload?.data) ? payload.data : payload?.data?.email ? [payload.data] : [];
       users.forEach((user) => {
-        if (user?.email) userCache.set(String(user.email).toLowerCase(), user);
+        if (!user?.email) return;
+        const verified = verifiedDistributorIdentities.get(Number(user.id));
+        // A request begun before verification may finish later and otherwise restore the old name.
+        if (verified && requestRevision < verified.revision) {
+          user = { ...user, distributor_name: verified.name, is_distributor: verified.isDistributor };
+        } else if (verified) {
+          // Future reads remain authoritative, including changes made by another administrator.
+          verified.name = user.distributor_name;
+          verified.isDistributor = user.is_distributor;
+        }
+        const email = String(user.email).toLowerCase();
+        // A saved email change must not leave an older entry first in the ID lookup.
+        for (const [cachedEmail, cachedUser] of userCache) {
+          if (cachedEmail !== email && Number(cachedUser.id) === Number(user.id)) userCache.delete(cachedEmail);
+        }
+        userCache.set(email, user);
       });
       setTimeout(syncInjectedDistributorSwitches, 0);
     } catch (_) { /* not a user list response */ }
@@ -357,19 +387,34 @@
     document.querySelectorAll('[role="dialog"], [data-radix-dialog-content], .n-modal').forEach((dialog) => {
       const checkbox = dialog.querySelector('.xboard-distributor-injected input[type="checkbox"]');
       if (!checkbox) return;
-      const emailInput = [...dialog.querySelectorAll('input')]
-        .find((input) => String(input.value || '').includes('@'));
-      const user = emailInput ? userCache.get(String(emailInput.value).toLowerCase()) : null;
-      if (user) {
-        checkbox.checked = Boolean(user.is_distributor);
-        const field = checkbox.closest('.xboard-distributor-injected');
-        const distributorName = String(user.distributor_name || '').trim();
-        if (field) field.dataset.distributorName = distributorName;
-        const nameInput = dialog.querySelector('[data-distributor-name]');
-        if (nameInput) nameInput.value = distributorName;
-      }
+      const field = checkbox.closest('.xboard-distributor-injected');
+      if (field?.dataset.distributorMode !== 'edit') return;
+      const user = field.dataset.distributorUserId
+        ? [...userCache.values()].find((item) => String(item.id) === field.dataset.distributorUserId)
+        : userCache.get(field.dataset.distributorLookupEmail);
+      if (user) syncInjectedDistributorField(checkbox, user);
       syncDistributorNameField(checkbox);
     });
+  }
+
+  function syncInjectedDistributorField(checkbox, user) {
+    const field = checkbox.closest('.xboard-distributor-injected');
+    if (!field || (field.dataset.distributorUserId && field.dataset.distributorUserId !== String(user.id))) return;
+    const initial = field.dataset.distributorInitialRole;
+    const dirty = initial != null && checkbox.checked !== (initial === '1');
+    field.dataset.distributorUserId = String(user.id);
+    checkbox.disabled = false;
+    if (!dirty) {
+      checkbox.checked = Boolean(user.is_distributor);
+      field.dataset.distributorInitialRole = user.is_distributor ? '1' : '0';
+    }
+    // Preserve an unsaved conversion name and role intent across cache refreshes.
+    if (!dirty || initial === '1') {
+      field.dataset.distributorName = String(user.distributor_name || '').trim();
+      const input = field.querySelector('[data-distributor-name]');
+      if (input) input.value = field.dataset.distributorName;
+    }
+    syncDistributorNameField(checkbox);
   }
 
   function syncDistributorNameField(checkbox) {
@@ -399,10 +444,13 @@
 
       let checked = false;
       let savedDistributorName = '';
-      if (isEdit) {
+      let user = null;
+      let lookupEmail = '';
+      if (!isCreate) {
         const emailInput = [...dialog.querySelectorAll('input')]
           .find((input) => String(input.value || '').includes('@'));
-        const user = emailInput ? userCache.get(String(emailInput.value).toLowerCase()) : null;
+        lookupEmail = String(emailInput?.value || '').toLowerCase();
+        user = userCache.get(lookupEmail);
         checked = Boolean(user?.is_distributor);
         savedDistributorName = String(user?.distributor_name || '').trim();
       }
@@ -410,6 +458,10 @@
       const field = document.createElement('div');
       field.className = 'xboard-distributor-injected';
       field.dataset.distributorName = savedDistributorName;
+      field.dataset.distributorMode = isCreate ? 'create' : 'edit';
+      field.dataset.distributorLookupEmail = lookupEmail;
+      if (user) field.dataset.distributorUserId = String(user.id);
+      if (isCreate || user) field.dataset.distributorInitialRole = checked ? '1' : '0';
       field.innerHTML = `<div class="xboard-distributor-injected-toggle"><div><strong>是否分销商</strong><small>Distributor account</small></div><label class="admin-dist-switch"><input type="checkbox" ${checked ? 'checked' : ''}><span></span></label></div><label class="xboard-distributor-name" data-distributor-name-row>分销商名称<input type="text" maxlength="16" data-distributor-name placeholder="请输入分销商名称"><small>最多 16 个字符，用于客户端订阅名称；中文、字母、数字和空格计入长度。</small></label><div class="xboard-distributor-name-readonly" data-distributor-name-readonly-row><span>分销商名称</span><strong data-distributor-name-value></strong></div>`;
 
       const staffNode = [...dialog.querySelectorAll('label,div,span')]
@@ -422,7 +474,9 @@
         if (footer) form.insertBefore(field, footer);
         else form.appendChild(field);
       }
-      syncDistributorNameField(field.querySelector('input[type="checkbox"]'));
+      const checkbox = field.querySelector('input[type="checkbox"]');
+      checkbox.disabled = !isCreate && !user;
+      syncDistributorNameField(checkbox);
     });
   }
 
@@ -706,11 +760,11 @@
   }
 
   function renderUsers(searchResult = null) {
-    const result = searchResult ? `<div class="admin-dist-user-result"><div><strong>${escapeHtml(searchResult.email)}</strong><small>ID ${searchResult.id}${searchResult.banned ? ' · 已封禁' : ''}</small><label>分销商名称<input id="admin-dist-user-name" type="text" maxlength="16" value="${escapeHtml(searchResult.distributor_name || '')}" placeholder="请输入分销商名称"><small>最多 16 个字符，用于客户端订阅名称；中文、字母、数字和空格计入长度。</small></label></div><button data-user-toggle="${searchResult.id}" data-current="${searchResult.is_distributor ? 1 : 0}">${searchResult.is_distributor ? '取消分销商' : '设为分销商'}</button></div>` : '';
+    const result = searchResult ? `<div class="admin-dist-user-result"><div><strong>${escapeHtml(searchResult.email)}</strong><small>ID ${searchResult.id}${searchResult.banned ? ' · 已封禁' : ''}</small><label>分销商名称<input id="admin-dist-user-name" type="text" maxlength="16" value="${escapeHtml(searchResult.distributor_name || '')}" placeholder="请输入分销商名称" ${searchResult.is_distributor ? 'readonly' : ''}><small>最多 16 个字符，用于客户端订阅名称；中文、字母、数字和空格计入长度。</small></label></div><span class="admin-dist-user-actions">${searchResult.is_distributor ? `<button type="button" data-distributor-rename="${searchResult.id}">编辑名称</button>` : ''}<button data-user-toggle="${searchResult.id}" data-current="${searchResult.is_distributor ? 1 : 0}">${searchResult.is_distributor ? '取消分销商' : '设为分销商'}</button></span></div>` : '';
     renderPanel(`<div class="admin-dist-user-grid">
       <section><h2>设置已有用户</h2><p>输入完整邮箱，将普通用户设置为分销商，或取消已有分销身份。</p><div class="admin-dist-form-row"><input id="admin-dist-user-email" type="email" placeholder="user@example.com"><button data-admin-dist="search-user">查询</button></div>${result}</section>
       <section><h2>创建分销商</h2><p>创建后账号不获得普通订阅，只能进入分销页面。</p><label>分销商名称<input id="admin-dist-create-name" type="text" maxlength="16" placeholder="请输入分销商名称"><small>最多 16 个字符，用于客户端订阅名称；中文、字母、数字和空格计入长度。</small></label><label>邮箱<input id="admin-dist-create-email" type="email" placeholder="dealer@example.com"></label><label>密码（留空则与邮箱相同）<input id="admin-dist-create-password" type="password" minlength="8"></label><button data-admin-dist="create-user">创建分销商</button></section>
-      <section class="wide"><h2>当前分销商</h2><div class="admin-dist-user-list">${state.distributors.map((user) => `<div><span><strong>${escapeHtml(user.distributor_name || user.email)}${user.banned ? '（已封禁）' : ''}</strong><small>${escapeHtml(user.email)}</small></span><button data-user-toggle="${user.id}" data-current="1">取消分销商</button></div>`).join('') || '<p>暂无分销商</p>'}</div></section>
+      <section class="wide"><h2>当前分销商</h2><p>编辑名称只影响后续新购订阅的命名，已有订阅及续费名称不变。</p><div class="admin-dist-user-list">${state.distributors.map((user) => `<div><span><strong>${escapeHtml(user.distributor_name || user.email)}${user.banned ? '（已封禁）' : ''}</strong><small>${escapeHtml(user.email)}</small></span><span class="admin-dist-user-actions"><button type="button" data-distributor-rename="${user.id}">编辑名称</button><button data-user-toggle="${user.id}" data-current="1">取消分销商</button></span></div>`).join('') || '<p>暂无分销商</p>'}</div></section>
     </div>`);
   }
 
@@ -721,6 +775,188 @@
     const user = (payload?.data || []).find((item) => String(item.email).toLowerCase() === email);
     if (!user) throw new Error('没有找到该用户');
     renderUsers(user);
+  }
+
+  async function renameRequest(path, options = {}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 35000);
+    try {
+      return await api(path, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function syncRenamedDistributor(user) {
+    verifiedDistributorIdentities.set(Number(user.id), {
+      revision: ++distributorIdentityRevision, name: user.distributor_name, isDistributor: user.is_distributor,
+    });
+    // Preserve native editor fields (including its money representation); only update identity.
+    for (const cached of userCache.values()) {
+      if (Number(cached.id) === Number(user.id)) {
+        cached.distributor_name = user.distributor_name;
+        cached.is_distributor = user.is_distributor;
+      }
+    }
+    state.distributors = state.distributors.flatMap((item) => Number(item.id) !== Number(user.id)
+      ? [item] : user.is_distributor ? [{ ...item, distributor_name: user.distributor_name }] : []);
+    for (const order of state.orders) {
+      if (Number(order.user_id) === Number(user.id)) order.distributor_name = user.distributor_name;
+    }
+    for (const order of orderDetailCache.values()) {
+      if (Number(order.user_id) === Number(user.id)) order.distributor_name = user.distributor_name;
+    }
+    document.querySelectorAll('[role="dialog"], [data-radix-dialog-content], .n-modal').forEach((dialog) => {
+      const checkbox = dialog.querySelector('.xboard-distributor-injected input[type="checkbox"]');
+      const field = checkbox?.closest('.xboard-distributor-injected');
+      if (field?.dataset.distributorUserId === String(user.id)) syncInjectedDistributorField(checkbox, user);
+    });
+  }
+
+  async function openDistributorNameEditor(id, trigger) {
+    if (document.getElementById('admin-dist-rename')) return;
+    const userId = Number(id);
+    if (!Number.isSafeInteger(userId) || userId <= 0) throw new Error('分销商 ID 无效');
+    const dialog = document.createElement('dialog');
+    dialog.id = 'admin-dist-rename';
+    dialog.className = 'admin-dist-rename-dialog';
+    dialog.setAttribute('aria-labelledby', 'admin-dist-rename-title');
+    dialog.setAttribute('aria-describedby', 'admin-dist-rename-help');
+    dialog.innerHTML = `<form novalidate><h2 id="admin-dist-rename-title">编辑分销商名称</h2><p data-rename-account></p><p data-rename-current></p>
+      <label for="admin-dist-rename-name">新名称</label><input id="admin-dist-rename-name" type="text" maxlength="16" required autocomplete="off" aria-describedby="admin-dist-rename-help admin-dist-rename-status">
+      <p id="admin-dist-rename-help">最多 16 个字符。仅影响后续新购订阅的命名；已有订阅名称、链接及续费不变。</p>
+      <p id="admin-dist-rename-status" role="status" aria-live="polite"></p>
+      <footer><button type="button" data-rename-cancel>取消</button><button type="button" data-rename-recheck hidden>重新核对</button><button type="submit" class="primary">保存名称</button></footer></form>`;
+    document.body.appendChild(dialog);
+    const form = dialog.querySelector('form');
+    const input = dialog.querySelector('input');
+    const status = dialog.querySelector('[role="status"]');
+    const save = dialog.querySelector('[type="submit"]');
+    const cancel = dialog.querySelector('[data-rename-cancel]');
+    const recheck = dialog.querySelector('[data-rename-recheck]');
+    let busy = false;
+    let currentUser = null;
+    let attemptedName = null;
+    let attemptedRevision = null;
+    let needsVerification = true;
+    let writeError = '';
+    let writeRejected = false;
+
+    function setBusy(value) {
+      busy = value;
+      form.setAttribute('aria-busy', String(value));
+      save.disabled = value || needsVerification || !currentUser?.is_distributor;
+      input.disabled = value || needsVerification || !currentUser?.is_distributor;
+      cancel.disabled = value;
+      recheck.disabled = value;
+      save.textContent = value ? '处理中…' : '保存名称';
+    }
+
+    async function verify() {
+      const user = dataOf(await renameRequest(`/user/getUserInfoById?id=${userId}`));
+      if (!user || Number(user.id) !== userId || typeof user.is_distributor !== 'boolean') {
+        throw new Error('用户详情响应无效');
+      }
+      if (!Object.prototype.hasOwnProperty.call(user, 'distributor_revision') || (user.distributor_revision !== null
+        && (typeof user.distributor_revision !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.distributor_revision)))) {
+        throw new Error('缺少有效的分销商版本，请刷新页面并确认服务已更新');
+      }
+      currentUser = user;
+      needsVerification = false;
+      recheck.hidden = true;
+      syncRenamedDistributor(user);
+      dialog.querySelector('[data-rename-account]').textContent = `${user.email} · ID ${userId}`;
+      dialog.querySelector('[data-rename-current]').textContent = `当前名称：${user.distributor_name || '未设置'}`;
+      if (!user.is_distributor) {
+        status.textContent = '该账号已不是分销商，不能修改名称，请关闭后刷新列表。';
+      } else if (attemptedName !== null && !writeRejected && user.distributor_revision !== attemptedRevision && user.distributor_name === attemptedName) {
+        if (state.open && state.tab === 'users') renderUsers();
+        if (document.getElementById('xboard-native-distributor-orders')) renderNativeOrders();
+        toast('分销商名称已更新并核对');
+        dialog.close();
+      } else if (attemptedName !== null) {
+        if (!writeRejected && user.distributor_revision === attemptedRevision) {
+          needsVerification = true;
+          recheck.hidden = false;
+          status.textContent = `保存结果未确认，请勿重复提交：${writeError || '名称及版本尚未更新'}。请重新核对。`;
+        } else {
+          status.textContent = `${writeError || '分销商信息已被其他操作修改'}。已读取当前名称，请核对草稿后再保存。`;
+          attemptedName = null;
+        }
+      } else {
+        input.value = user.distributor_name || '';
+        status.textContent = '';
+      }
+    }
+
+    async function runVerification() {
+      try {
+        await verify();
+      } catch (error) {
+        needsVerification = true;
+        recheck.hidden = false;
+        status.textContent = `${attemptedName === null ? '无法读取当前名称' : '保存结果未确认，请勿重复提交'}：${error.message}。请重新核对。`;
+      }
+    }
+
+    cancel.addEventListener('click', () => { if (!busy) dialog.close(); });
+    dialog.addEventListener('cancel', (event) => { if (busy) event.preventDefault(); });
+    dialog.addEventListener('keydown', (event) => {
+      if (event.key !== 'Tab') return;
+      const focusable = [...dialog.querySelectorAll('input:not(:disabled), button:not(:disabled)')]
+        .filter((element) => !element.hidden);
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (!first || (event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      }
+    });
+    dialog.addEventListener('close', () => {
+      dialog.remove();
+      const target = trigger?.isConnected ? trigger : document.querySelector(`[data-distributor-rename="${userId}"]`) || document.getElementById('admin-dist-entry');
+      target?.focus();
+    });
+    recheck.addEventListener('click', async () => {
+      if (busy) return;
+      setBusy(true);
+      await runVerification();
+      setBusy(false);
+      if (dialog.open && !input.disabled) input.focus();
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (busy || needsVerification || !currentUser?.is_distributor) return;
+      let name;
+      try { name = validateDistributorName(input.value); }
+      catch (error) { status.textContent = error.message; input.focus(); return; }
+      if (name === currentUser.distributor_name) { dialog.close(); return; }
+      attemptedName = name;
+      attemptedRevision = currentUser.distributor_revision;
+      writeError = '';
+      writeRejected = false;
+      setBusy(true);
+      status.textContent = '正在保存并核对…';
+      try {
+        const result = await renameRequest('/user/distributor/rename', { method: 'POST', data: {
+          id: userId, distributor_name: name, expected_distributor_revision: attemptedRevision,
+        } });
+        if (dataOf(result) !== true) throw new Error('保存响应无效');
+      } catch (error) {
+        writeError = error.message;
+        writeRejected = [400, 401, 403, 404, 405, 409, 419, 422, 429].includes(error.status);
+      }
+      // A timed-out response can still mean the server committed. Never retry the write here.
+      await runVerification();
+      setBusy(false);
+      if (dialog.open && !input.disabled) input.focus();
+    });
+    setBusy(true);
+    status.textContent = '正在读取当前名称…';
+    dialog.showModal();
+    await runVerification();
+    setBusy(false);
+    if (dialog.open && !input.disabled) { input.focus(); input.select(); }
   }
 
   async function toggleUser(id, current) {
@@ -902,6 +1138,8 @@
       }
       const toggle = event.target.closest('[data-user-toggle]');
       if (toggle) await toggleUser(toggle.dataset.userToggle, toggle.dataset.current === '1');
+      const rename = event.target.closest('[data-distributor-rename]');
+      if (rename) await openDistributorNameEditor(rename.dataset.distributorRename, rename);
       const detail = event.target.closest('[data-order-detail]');
       if (detail) await showOrderDetail(detail.dataset.orderDetail);
       const remark = event.target.closest('[data-edit-remark]');

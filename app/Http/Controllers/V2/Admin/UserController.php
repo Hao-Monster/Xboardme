@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\V2\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\DistributorRename;
 use App\Http\Requests\Admin\UserGenerate;
 use App\Http\Requests\Admin\UserSendMail;
 use App\Http\Requests\Admin\UserUpdate;
@@ -22,6 +23,7 @@ use Illuminate\Http\JsonResponse;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class UserController extends Controller
 {
@@ -230,6 +232,32 @@ class UserController extends Controller
         return $this->success($user);
     }
 
+    public function renameDistributor(DistributorRename $request): JsonResponse
+    {
+        $params = $request->validated();
+        $query = User::notInternalSubscriber()
+            ->whereKey($params['id'])
+            ->where('is_distributor', true);
+        if ($params['expected_distributor_revision'] === null) {
+            $query->whereNull('distributor_revision');
+        } else {
+            $query->where('distributor_revision', $params['expected_distributor_revision']);
+        }
+
+        // Checking the version inside this one write fences delayed requests on both SQLite and MySQL.
+        // Query updates bypass model events, so this path must rotate the version explicitly.
+        $updated = $query->update([
+            'distributor_name' => $params['distributor_name'],
+            'distributor_revision' => (string) Str::uuid(),
+            'updated_at' => now()->timestamp,
+        ]);
+        if ($updated !== 1) {
+            return $this->fail([409, '分销商名称或身份已变更，请重新读取当前名称后再保存']);
+        }
+
+        return $this->success(true);
+    }
+
     public function update(UserUpdate $request)
     {
         $params = $request->validated();
@@ -238,17 +266,19 @@ class UserController extends Controller
         if (!$user) {
             return $this->fail([400202, '用户不存在']);
         }
-        $isDistributor = array_key_exists('is_distributor', $params)
-            ? (bool) $params['is_distributor']
-            : (bool) $user->is_distributor;
-        if ($isDistributor) {
-            $distributorName = trim((string) ($params['distributor_name'] ?? $user->distributor_name));
-            if ($distributorName === '') {
-                return $this->fail([422, '启用分销商时必须填写分销商名称']);
+        if (array_key_exists('is_distributor', $params) || array_key_exists('distributor_name', $params)) {
+            $isDistributor = array_key_exists('is_distributor', $params)
+                ? (bool) $params['is_distributor']
+                : (bool) $user->is_distributor;
+            if ($isDistributor) {
+                $distributorName = trim((string) ($params['distributor_name'] ?? $user->distributor_name));
+                if ($distributorName === '') {
+                    return $this->fail([422, '启用分销商时必须填写分销商名称']);
+                }
+                $params['distributor_name'] = $distributorName;
+            } else {
+                $params['distributor_name'] = null;
             }
-            $params['distributor_name'] = $distributorName;
-        } else {
-            $params['distributor_name'] = null;
         }
         if (isset($params['email'])) {
             if (User::byEmail($params['email'])->first() && $user->email !== $params['email']) {

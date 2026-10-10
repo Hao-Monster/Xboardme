@@ -1,5 +1,12 @@
 {
+  "private": true,
+  "scripts": {
+    "test:browser:distributor-rename": "node --test --test-timeout=20000 tests/Browser/admin-distributor-rename.cjs tests/Browser/admin-distributor-rename-native.cjs"
+  },
   "dependencies": {
     "chokidar": "^4.0.3"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
   }
 }
