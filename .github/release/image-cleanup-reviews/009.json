@@ -1,0 +1,221 @@
+{
+  "active_release_id": "37503793113-1",
+  "active_release_sha": "17bad07edbbf1da2b8c1263fc5bb33499e22affc",
+  "approval_expires_at_epoch": 1791898031,
+  "audit_completed_at_epoch": 1791811631,
+  "containers": [],
+  "images": [
+    {
+      "evidence": {
+        "startup_reference_review_sha256": "35d5e4641d0e185b88610ab8cac703315405001161e2255ae8d908ddf4cb8412"
+      },
+      "id": "sha256:e4f0badb84a29db7a2c0862c1320c97a44f0fd33b11e9473a042d2b22a87c1c2",
+      "restore_digest": "ghcr.io/fenghaoyun-monster/xboardme@sha256:e4f0badb84a29db7a2c0862c1320c97a44f0fd33b11e9473a042d2b22a87c1c2",
+      "revision": "0253ad2abcd08c60acf646be1cf3b4b778b0ef8d",
+      "snapshot_sha256": "89c61695b248a9faa9d0befb20624be0f27af8c5771a40a2b19b4b905209913a"
+    }
+  ],
+  "max_image_size_bytes": 536870912,
+  "monitoring": {
+    "active_port": 7002,
+    "baseline_seconds": 120,
+    "caddy": {
+      "active_enter_monotonic_usec": 423074004,
+      "invocation_id": "23dfc7f2929a4237b6d131149a55db3f",
+      "main_pid": 4287,
+      "unit": "caddy.service"
+    },
+    "heartbeat_max_age_seconds": 30,
+    "mode": "passive_runtime_v1",
+    "post_delete_observe_seconds": 300,
+    "protected_containers": [
+      {
+        "id": "0e3288ff9686e918eb0efd36fd9e0c1352912944e1334cf01165ea4b922ebdca",
+        "restart_count": 0,
+        "started_at": "2026-10-01T15:00:32.519996351Z",
+        "status": "exited"
+      },
+      {
+        "id": "14cafe75da07c5dbbe7f9894b3b6a61a7b7a470dc47275a4742ebba3b962b81d",
+        "restart_count": 0,
+        "started_at": "2026-10-01T15:00:32.522842758Z",
+        "status": "exited"
+      },
+      {
+        "id": "278d9e9f23606a805688eb156cbfba9415fd79b4e3a67670e15106162ee6e855",
+        "restart_count": 0,
+        "started_at": "2026-09-23T17:31:13.037494632Z",
+        "status": "exited"
+      },
+      {
+        "id": "34b0fa045467ea12e63017198b81741e4413312c1716a70e6ff9ed3c760c0fae",
+        "restart_count": 0,
+        "started_at": "2026-09-23T17:31:30.818358115Z",
+        "status": "exited"
+      },
+      {
+        "id": "4b6bbf46fb7b471f0e99d31ac0a8e837128f81e9615f34e5fa65a19e3ab464f7",
+        "restart_count": 0,
+        "started_at": "2026-10-06T17:37:11.155869532Z",
+        "status": "running"
+      },
+      {
+        "id": "4d308c7877930a0e2869f16d3171abed96989214b1ce84e53ff2112016bff0ec",
+        "restart_count": 0,
+        "started_at": "2026-10-06T17:36:58.994534255Z",
+        "status": "running"
+      },
+      {
+        "id": "51ea9c0ad06276109c0fbc8229db101ecf1f2937628111025c0342477519d6ea",
+        "restart_count": 0,
+        "started_at": "2026-09-23T17:31:18.817706077Z",
+        "status": "exited"
+      },
+      {
+        "id": "53dab04c3738d82f8c4ffe76791e455e82fd34cea6b70d01c429943d9aef5369",
+        "restart_count": 0,
+        "started_at": "2026-09-01T19:49:41.678268249Z",
+        "status": "exited"
+      },
+      {
+        "id": "54d5fe09c51a52449eddee19cd7315230b91e4926a3b3ceecbaf4bc6748bf1a0",
+        "restart_count": 0,
+        "started_at": "2026-10-06T17:37:11.157015789Z",
+        "status": "running"
+      },
+      {
+        "id": "5b7f9f85f7d293f35108843e5fe014e19d4b3614b06b3658f7969178c8b6d65b",
+        "restart_count": 0,
+        "started_at": "2026-10-06T17:36:30.386706406Z",
+        "status": "running"
+      },
+      {
+        "id": "5d439ffd534b374b313765edaf71488e3021aab7e1c02409d5ca762047a2feb4",
+        "restart_count": 0,
+        "started_at": "2026-09-23T17:31:18.818924989Z",
+        "status": "exited"
+      },
+      {
+        "id": "5d7498a86794325a3fe909438a818968b8b0c764b113a58be0a361694bbe6db8",
+        "restart_count": 0,
+        "started_at": "2026-10-01T15:00:08.561767919Z",
+        "status": "exited"
+      },
+      {
+        "id": "5e16d1e24d482fdcd00045e4e45b647fb0b49f105e5b3e799140fd0aff854ab3",
+        "restart_count": 0,
+        "started_at": "2026-10-06T17:36:47.001903421Z",
+        "status": "running"
+      },
+      {
+        "id": "6e2d84d2ae7e7a31f6987e0e99cbc3e72af60325617962a11f873293563f6971",
+        "restart_count": 0,
+        "started_at": "2026-08-23T10:17:00.879420006Z",
+        "status": "exited"
+      },
+      {
+        "id": "844bb52d39edcd60127d22dc020bf6226c773c1af9414ed0f3a4f193bcbc19bf",
+        "restart_count": 0,
+        "started_at": "2026-09-01T19:49:13.880498976Z",
+        "status": "exited"
+      },
+      {
+        "id": "8c491a0f635701747842f485ca61d0bddafaad9f0bce2c551d36c0ed0de0177f",
+        "restart_count": 0,
+        "started_at": "2026-09-01T19:49:31.641921215Z",
+        "status": "exited"
+      },
+      {
+        "id": "9237cbb4a536213629d96769352a8541dfefb020fdf18fb819de12d7a8f5debd",
+        "restart_count": 0,
+        "started_at": "2026-10-01T15:00:02.745185146Z",
+        "status": "exited"
+      },
+      {
+        "id": "994f35a7e85005c7b1e781ef1330a8c8f4503487c3bf057621af999f509dc17a",
+        "restart_count": 0,
+        "started_at": "2026-10-01T15:00:08.560680539Z",
+        "status": "exited"
+      },
+      {
+        "id": "a7970a6e6bbb331063d09701508142776f76b5acc6b9752a5a5a3de3e97e5130",
+        "restart_count": 0,
+        "started_at": "2026-09-01T19:49:19.630568708Z",
+        "status": "exited"
+      },
+      {
+        "id": "aa552fe691e62128d3b19adc90aa4ca0a05f7936fe441335026291c5169d7a0b",
+        "restart_count": 0,
+        "started_at": "2026-10-06T17:36:41.22139551Z",
+        "status": "running"
+      },
+      {
+        "id": "b039593f25b99afdef496a1b4eba94b0ce5835dba287b5b3e8a8f3542dbc52dd",
+        "restart_count": 0,
+        "started_at": "2026-09-01T19:49:19.631546301Z",
+        "status": "exited"
+      },
+      {
+        "id": "cd09b67439c9b88f7c9827894d21b11dac24eed457c1886e1469332a6dca4b12",
+        "restart_count": 0,
+        "started_at": "2026-10-06T17:36:47.002887972Z",
+        "status": "running"
+      },
+      {
+        "id": "f399acf997df7f75953c8b3a8ea4e8aa31b3711d73fa816437786c9551bb4a91",
+        "restart_count": 0,
+        "started_at": "2026-10-01T15:00:20.587385866Z",
+        "status": "exited"
+      },
+      {
+        "id": "fcbd434186162124f5c7198b953fe66dc12b0c57f6458fe53f5b545d4028d5eb",
+        "restart_count": 0,
+        "started_at": "2026-09-01T19:49:41.679256556Z",
+        "status": "exited"
+      }
+    ],
+    "resources": {
+      "max_cpu_busy_percent": 85,
+      "max_cpu_iowait_percent": 10,
+      "max_cpu_some_avg10": 10,
+      "max_io_full_avg10": 1,
+      "min_mem_available_kib": 131072
+    },
+    "sample_interval_seconds": 10
+  },
+  "operation": "image_cleanup",
+  "protected_image_digests": [
+    "ghcr.io/fenghaoyun-monster/xboardme@sha256:409c4f12cbb08f8aebccc0dc8640973843efc6d4af69d602be3e7d8b6af2aecf",
+    "ghcr.io/hao-monster/xboardme@sha256:2cbd79887b6c9362a4f4782c0a912ed2edf2670c6358b62c9c86b6cabc7acae9",
+    "ghcr.io/hao-monster/xboardme@sha256:655f2976c99c17d091e4ca3a589db9afb6fa0c5cced9b170e5f08aebc41b95ba",
+    "ghcr.io/hao-monster/xboardme@sha256:670fbe88bba22b4da2fc70362f82b310a4d1d608143111e433e49810ebeb34ac",
+    "ghcr.io/hao-monster/xboardme@sha256:80e7cc7b1def4f561678dcddce53e94c76baf5140039aa2ac5ff440e2cb706aa",
+    "ghcr.io/hao-monster/xboardme@sha256:d51ab2f1da1bec0123551082044144988a98e6c71c7321c047d914c1f39ee785",
+    "ghcr.io/hao-monster/xboardme@sha256:f985a4d32fddd87e3627acecb4bea4ba869773400fb758e273b0873f41b68ab4"
+  ],
+  "protected_image_revisions": [
+    "0c29ed01bbdaaa33b10299aeaf011408b0dabb06",
+    "17bad07edbbf1da2b8c1263fc5bb33499e22affc",
+    "611fb3c8db60ca005ed6f46fb866edac4a613ccd",
+    "873e943cdd8b2a994a189558ef3b4aadb953bd34",
+    "ba89a8a4d9039e5f079f5beea17a15e287e6a6af",
+    "c078add837315ed23949437267843d21a130c854",
+    "d611ea1dceb37cf85e27b3cd5a9291c98b2ed9db",
+    "eced8e6ad551efe025dcbd6d6cd563be2e1557a0"
+  ],
+  "protection_fingerprint": "e3193761cad71b4bf98c6adcd54417c93238dfc3195e0dfe9b52297fc2c647ee",
+  "reason": "Reviewed sequential single-image content; offline formatting is not authorization. Exact-main CI, immutable restore, fresh locked inventory and predecessor post-verification remain required.",
+  "resource_fingerprint": "cc92eb3acc8afcc49c358556303f6a04bc8ee047b3b2e8f61e2ef25436a66f57",
+  "review_evidence": {
+    "isolated_docker_review_sha256": "ed17f73acf156b21b1f541030b169b63412da6765c2f72ca383de655ad5f47fe",
+    "scope_review_sha256": "00c4a0745bb59f44d8b51fa390834ed3d75e8a3e9e64b329c87ae8a515c85bbf"
+  },
+  "schema_version": 3,
+  "sequence": {
+    "audit_artifact_sha256": "2021439339a89449ef5fb97661ce613419b1ab4818733d36b82bbda01d458e2b",
+    "index": "009",
+    "predecessor_review_sha256": "283c2f739a63078458d0da03665aa98b4bb789d789dff8c388bad7bebc7d17e9",
+    "schema_version": 1
+  },
+  "status": "approved"
+}

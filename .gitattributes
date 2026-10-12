@@ -1,6 +1,8 @@
 * text=auto
 .githooks/* text eol=lf
 *.sh text eol=lf
+.github/release/image-cleanup-reviews/*.json text eol=lf
+.github/release/image-cleanup-sequence-2026-10-12.md text eol=lf
 Dockerfile text eol=lf
 *.css linguist-vendored
 *.scss linguist-vendored
