@@ -2,8 +2,10 @@
 set -Eeuo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/images-only-approval.sh"
+source "$script_dir/select-images-only-review.sh"
 before=${1:?cleanup log required}; after=${2:?independent audit log required}
-review=${3:-"$script_dir/../release/image-cleanup-review.json"}
+review=${3:-}
+if [[ -z "$review" ]]; then review=$(images_only_selected_review) || exit 1; fi
 fail() { echo "IMAGE_POST_AUDIT_FAIL=$1" >&2; exit 1; }
 retention_images_review_validate "$review" || fail review
 field() {

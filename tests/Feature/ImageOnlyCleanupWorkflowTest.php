@@ -11,8 +11,9 @@ class ImageOnlyCleanupWorkflowTest extends TestCase
     {
         $workflow = Yaml::parseFile(base_path('.github/workflows/production-image-cleanup.yml'));
         $this->assertSame(['workflow_dispatch'], array_keys($workflow['on']));
-        $this->assertSame(['audit', 'cleanup'], $workflow['on']['workflow_dispatch']['inputs']['action']['options']);
+        $this->assertSame(['audit', 'retirement-audit', 'cleanup'], $workflow['on']['workflow_dispatch']['inputs']['action']['options']);
         $this->assertSame('audit', $workflow['on']['workflow_dispatch']['inputs']['action']['default']);
+        $this->assertSame('default', $workflow['on']['workflow_dispatch']['inputs']['review_id']['default']);
         $this->assertSame('xboard-production-release', $workflow['concurrency']['group']);
         $this->assertFalse($workflow['concurrency']['cancel-in-progress']);
         $job = $workflow['jobs']['images-only'];
@@ -62,6 +63,37 @@ class ImageOnlyCleanupWorkflowTest extends TestCase
             $this->assertSame('cleanup-continuity-admission', $jobs[$job]['needs']);
         }
         $this->assertStringNotContainsString('cleanup-continuity-admission', json_encode($jobs['auto-rollback-failed-approved-release']));
+    }
+
+    public function test_retirement_audit_does_not_select_cleanup_or_post_mutations(): void
+    {
+        $steps = Yaml::parseFile(base_path('.github/workflows/production-image-cleanup.yml'))['jobs']['images-only']['steps'];
+        foreach ($steps as $step) {
+            if (in_array($step['id'] ?? null, ['restore', 'post-audit', 'post-identity', 'smoke'], true)
+                || in_array($step['name'], ['Bind independent post-verification evidence',
+                    'Accept post-verification only after all required evidence succeeded',
+                    'Persist HOLD on any unsuccessful cleanup or post-verification'], true)) {
+                $this->assertStringContainsString("inputs.action == 'cleanup'", $step['if']);
+            }
+        }
+        $transport = file_get_contents(base_path('.github/scripts/run-images-only-remote.sh'));
+        $this->assertStringContainsString('if [[ "$operation" == retirement-audit ]]; then cat "$script_dir/audit-retirement-readiness.sh"; fi', $transport);
+        $this->assertStringContainsString('if [[ "$operation" == cleanup ]]; then cat "$script_dir/cleanup-xboard-images-only.sh"; fi', $transport);
+    }
+
+    public function test_recovery_remains_a_cleanup_specific_admission_not_a_deployment_unlock(): void
+    {
+        $continuity = file_get_contents(base_path('.github/scripts/retention-continuity.sh'));
+        $start = strpos($continuity, 'retention_continuity_admit_deployment()');
+        $end = strpos($continuity, '_rc_http()', $start);
+        $admission = substr($continuity, $start, $end - $start);
+        $this->assertStringContainsString('.status=="COMPLETE"', $admission);
+        $this->assertStringContainsString('.post_verification=="passed"', $admission);
+        $this->assertStringNotContainsString('recovery', $admission);
+        $request = file_get_contents(base_path('.github/scripts/verify-images-only-request.sh'));
+        $this->assertStringContainsString('manual_first_attempt_required', $request);
+        $this->assertStringContainsString('sequence.predecessor_review_sha256==$previous', $request);
+        $this->assertStringContainsString('retention_predelete_recovery_schema_validate', $request);
     }
 
     public function test_passive_cleanup_verifies_restore_before_host_access_and_never_claims_authenticated_smoke(): void

@@ -7,8 +7,9 @@ set -Eeuo pipefail
 # switches. Schema 3 uses a loopback registry with genuine manifest digests;
 # only its registry-name eligibility is normalized to the GHCR fixture boundary.
 # Inventory, protected identity, approval, deletion and HOLD logic come from
-# the actual image-only executor. This is not production load, GHCR
-# signature, multiple-RepoDigest, daemon-timeout or SSH-loss acceptance.
+# the actual image-only executor, including the same-manifest/two-repository
+# RepoDigest topology. This is not production load, GHCR signature,
+# different-manifest/same-config, daemon-timeout or SSH-loss acceptance.
 [[ ${RETENTION_DOCKER_TEST_ALLOW_LOCAL:-false} == true ]] || {
   echo 'IMAGE_ONLY_DOCKER_TEST=NOT_RUN explicit_local_test_opt_in_required' >&2
   exit 2
@@ -30,11 +31,13 @@ source "$script_dir/retention-safety.sh"
 source "$script_dir/images-only-approval.sh"
 source "$script_dir/image-startup-references.sh"
 source "$script_dir/retention-continuity.sh"
+source "$script_dir/retention-predelete-recovery.sh"
+source "$script_dir/select-images-only-review.sh"
 
 test_root=$(mktemp -d /tmp/retention-images-docker.XXXXXXXX)
 test_label="retention-ci-$(date +%s)-$$-$RANDOM"
 test_namespace="ghcr.io/hao-monster/xboardme:$test_label"
-containers=() images=() registry_pids=() registry_references=() volume='' observer_pid=''
+containers=() images=() registry_pids=() registry_references=() fixture_manifest_digests=() volume='' observer_pid=''
 cases=0
 active_sha=$(printf 'a%.0s' {1..40})
 old_sha=$(printf 'b%.0s' {1..40})
@@ -74,7 +77,7 @@ cleanup() {
     }
     owned=true
     while IFS= read -r reference; do
-      [[ $reference == "$test_namespace"-* ]] || owned=false
+      [[ $reference == "$test_namespace"-* || " ${registry_references[*]} " == *" $reference "* ]] || owned=false
     done < <(docker image inspect "$id" | jq -r '.[0].RepoTags[]?')
     while IFS= read -r reference; do
       [[ " ${registry_references[*]} " == *" $reference "* ]] || owned=false
@@ -82,8 +85,9 @@ cleanup() {
     [[ $owned == true ]] || { result=1; continue; }
     while IFS= read -r reference; do
       docker image inspect "$reference" >/dev/null 2>&1 || continue
+      [[ $(docker image inspect -f '{{.Id}}' "$reference") == "$id" ]] || { result=1; continue; }
       docker image rm --no-prune "$reference" >/dev/null || result=1
-    done < <(docker image inspect "$id" | jq -r '.[0] | (.RepoTags // [])[]')
+    done < <(docker image inspect "$id" | jq -r '.[0] | ((.RepoTags // [])+(.RepoDigests // [])|unique)[]')
     if docker image inspect "$id" >/dev/null 2>&1; then
       docker image rm --no-prune "$id" >/dev/null || result=1
     fi
@@ -196,8 +200,11 @@ _ris_compose_metadata() {
 # let the real daemon verify and pull the manifest. No image inspect/delete
 # operation is replaced, and no registry or image is contacted outside localhost.
 fixture_add_manifest_digest() {
-  local registry_pid registry_port manifest_digest
-  python3 - "$test_root/archive" "$candidate_config" > "$case_root/registry.log" 2>&1 <<'FIXTURE_REGISTRY_PY' &
+  local registry_pid registry_port manifest_digest registry_index registry_log pull_log
+  registry_index=${#registry_pids[@]}
+  registry_log="$case_root/registry-$registry_index.log"
+  pull_log="$case_root/pull-$registry_index.log"
+  python3 - "$test_root/archive" "$candidate_config" > "$registry_log" 2>&1 <<'FIXTURE_REGISTRY_PY' &
 import gzip
 import hashlib
 import http.server
@@ -272,21 +279,22 @@ FIXTURE_REGISTRY_PY
   registry_pid=$!
   registry_pids+=("$registry_pid")
   for ((attempt=0;attempt<50;attempt++)); do
-    kill -0 "$registry_pid" 2>/dev/null || { cat "$case_root/registry.log" >&2; return 1; }
-    [[ ! -s "$case_root/registry.log" ]] || break
+    kill -0 "$registry_pid" 2>/dev/null || { cat "$registry_log" >&2; return 1; }
+    [[ ! -s "$registry_log" ]] || break
     sleep 0.1
   done
-  registry_port=$(jq -er '.port|select(type=="number" and .>0 and .<65536)' "$case_root/registry.log")
-  manifest_digest=$(jq -er '.digest|select(test("^sha256:[a-f0-9]{64}$"))' "$case_root/registry.log")
+  registry_port=$(jq -er '.port|select(type=="number" and .>0 and .<65536)' "$registry_log")
+  manifest_digest=$(jq -er '.digest|select(test("^sha256:[a-f0-9]{64}$"))' "$registry_log")
   fixture_restore_prefix="localhost:$registry_port/hao-monster/xboardme@"
   fixture_restore_digest="$fixture_restore_prefix$manifest_digest"
   registry_references+=("$fixture_restore_digest")
-  timeout --signal=TERM --kill-after=5s 60s docker image pull "$fixture_restore_digest" > "$case_root/pull.log" 2>&1 || {
-    cat "$case_root/pull.log" >&2; return 1;
+  timeout --signal=TERM --kill-after=5s 60s docker image pull "$fixture_restore_digest" > "$pull_log" 2>&1 || {
+    cat "$pull_log" >&2; return 1;
   }
   [[ $(docker image inspect -f '{{.Id}}' "$fixture_restore_digest") == "$candidate" ]]
   docker image inspect "$candidate" | jq -e --arg digest "$fixture_restore_digest" \
     '.[0].RepoDigests|index($digest)!=null' >/dev/null
+  fixture_manifest_digests+=("$fixture_restore_digest")
 }
 
 # Production approval still validates every schema field. Only the actual
@@ -319,23 +327,26 @@ retention_images_review_validate() {
 # revision, labels, exact synthetic namespace and fresh Docker snapshot must
 # match. Nothing is patched into the production helper or workflow interface.
 retention_image_eligible() {
-  local snapshot=$1 manifest=$2 now=$3 age=$4 id created inspected
+  local snapshot=$1 manifest=$2 now=$3 age=$4 id created inspected fixture_digests
   id=$(jq -r .id <<< "$snapshot")
   [[ $id == "$candidate" && $age -ge 604800 ]] || return 1
   inspected=$(docker image inspect "$id") || return 1
+  fixture_digests=$(printf '%s\n' "${fixture_manifest_digests[@]}" | jq -Rsc 'split("\n")|map(select(length>0))')
   jq -e --arg label "$test_label" --arg prefix "$test_namespace-" --arg revision "$old_sha" \
+    --argjson fixture_digests "$fixture_digests" \
     '.[0] | .Config.Labels["codex.retention.test"]==$label and
       .Config.Labels["org.opencontainers.image.source"]=="https://github.com/Hao-Monster/Xboardme" and
       .Config.Labels["org.opencontainers.image.revision"]==$revision and
-      (.RepoTags|length)>0 and all(.RepoTags[];startswith($prefix))' <<< "$inspected" >/dev/null || return 1
+      (.RepoTags|length)>0 and all(.RepoTags[];startswith($prefix) or
+        (. as $reference|$fixture_digests|index($reference)!=null))' <<< "$inspected" >/dev/null || return 1
   [[ $(retention_image_snapshot "$id") == "$snapshot" ]] || return 1
   jq -e --slurpfile review "$manifest" --arg workflow "$EXPECTED_WORKFLOW_SHA" \
-    --arg fixture_prefix "${fixture_restore_prefix:-unused-fixture-prefix}" '
+    --argjson fixture_digests "$fixture_digests" '
     .revision!=$workflow and
     (.revision as $r|$review[0].protected_image_revisions|index($r)==null) and
     ([.digests[] as $d|$review[0].protected_image_digests|index($d)|select(.!=null)]|length==0) and
     all(.digests[];test("^ghcr\\.io/hao-monster/xboardme@sha256:[a-f0-9]{64}$") or
-      (startswith($fixture_prefix) and test("@sha256:[a-f0-9]{64}$")))
+      (. as $reference|$fixture_digests|index($reference)!=null))
   ' <<< "$snapshot" >/dev/null || return 1
   created=$(date -u -d "$(jq -r .created_at <<< "$snapshot")" +%s) || return 1
   ((now>=created && now-created >= age))
@@ -390,6 +401,7 @@ retention_continuity_check() {
 make_case() {
   case_name=$1
   fixture_restore_prefix='' fixture_restore_digest=''
+  fixture_manifest_digests=()
   case_root="$test_root/$case_name"
   workdir=$case_root
   mkdir -p "$case_root/.codex-v2-release/333-1" "$case_root/parent" "$case_root/child"
@@ -552,7 +564,9 @@ pass real_container_template_accepts_absent_health
 run_case
 if ((status != 0)); then cat "$case_root/result.log" >&2; exit 1; fi
 grep -q '^IMAGE_CLEANUP=PASS result=complete ' "$case_root/result.log"
-! docker image inspect "$candidate" >/dev/null 2>&1
+if docker image inspect "$candidate" >/dev/null 2>&1; then
+  echo 'IMAGE_ONLY_DOCKER_TEST=FAIL candidate_still_present' >&2; exit 1
+fi
 docker image inspect "$parent_image" >/dev/null
 docker image inspect "$base_image" >/dev/null
 jq -e '.status=="COMPLETE" and .cleanup_validated==true and .post_verification=="pending"' \
@@ -596,8 +610,10 @@ make_passive_case passive_success
 run_case
 if ((status != 0)); then cat "$case_root/result.log" >&2; exit 1; fi
 grep -q '^IMAGE_CLEANUP=PASS result=complete ' "$case_root/result.log"
-! docker image inspect "$candidate" >/dev/null 2>&1
-! docker image inspect "$fixture_restore_digest" >/dev/null 2>&1
+if docker image inspect "$candidate" >/dev/null 2>&1 ||
+   docker image inspect "$fixture_restore_digest" >/dev/null 2>&1; then
+  echo 'IMAGE_ONLY_DOCKER_TEST=FAIL passive_candidate_or_digest_still_present' >&2; exit 1
+fi
 docker image inspect "$parent_image" >/dev/null
 docker image inspect "$base_image" >/dev/null
 jq -e '.schema_version==2 and .monitoring_mode=="passive_runtime_v1" and
@@ -606,6 +622,129 @@ jq -e '.schema_version==2 and .monitoring_mode=="passive_runtime_v1" and
   "$case_root/.codex-v2-release/image-cleanup-gate.json" >/dev/null
 cmp "$active_state_file" "$case_root/state.before.json"
 pass passive_real_digest_removed_shared_layers_and_stopped_historical_unhealthy_preserved
+
+# The production candidate topology includes one tag plus the same manifest
+# under two repository prefixes. Pull through two distinct live loopback
+# registries to make the real daemon create those references for one config ID.
+make_passive_case passive_multiple_repository_digests
+multi_primary_prefix=$fixture_restore_prefix
+multi_primary_digest=$fixture_restore_digest
+multi_tag="$test_namespace-$case_name-a"
+docker image rm --no-prune "$test_namespace-$case_name-b" >/dev/null
+fixture_add_manifest_digest
+multi_secondary_digest=$fixture_restore_digest
+fixture_restore_prefix=$multi_primary_prefix
+fixture_restore_digest=$multi_primary_digest
+[[ ${multi_primary_digest%@*} != "${multi_secondary_digest%@*}" &&
+   ${multi_primary_digest#*@} == "${multi_secondary_digest#*@}" ]]
+multi_aliases=$(jq -cn --arg tag "$multi_tag" --arg first "$multi_primary_digest" \
+  --arg second "$multi_secondary_digest" '[$tag,$first,$second]|sort')
+docker image inspect "$candidate" | jq '.[0]|{Id,RepoTags,RepoDigests}' > "$case_root/multi-inspect.before.json"
+jq -e --arg id "$candidate" --arg tag "$multi_tag" --arg first "$multi_primary_digest" \
+  --arg second "$multi_secondary_digest" --argjson aliases "$multi_aliases" '
+    .Id==$id and (.RepoDigests|sort)==([$first,$second]|sort) and
+    ([.RepoTags[]|select(contains("@")|not)]==[$tag]) and
+    ((.RepoTags+.RepoDigests|unique|sort)==$aliases)
+  ' "$case_root/multi-inspect.before.json" >/dev/null
+for reference in "$multi_tag" "$multi_primary_digest" "$multi_secondary_digest"; do
+  [[ $(docker image inspect -f '{{.Id}}' "$reference") == "$candidate" ]]
+done
+
+# Keep the exact Docker snapshot, including a digest also reported in RepoTags.
+# Only the fixture registry eligibility is adapted; production snapshot fields,
+# reviewed hashes, plan comparisons and deletion code are never normalized.
+retention_all_snapshots > "$retention_snapshot_file"
+resource_fingerprint=$(retention_resource_fingerprint "$retention_snapshot_file")
+jq --arg fingerprint "$resource_fingerprint" \
+  --arg image_hash "$(retention_image_snapshot "$candidate" | retention_hash)" '
+    .resource_fingerprint=$fingerprint | .images[0].snapshot_sha256=$image_hash
+  ' "$review_file" > "$case_root/multi-review.json"
+mv -- "$case_root/multi-review.json" "$review_file"
+chmod 600 "$review_file"
+jq -e --arg digest "$multi_primary_digest" '.images[0].restore_digest==$digest' "$review_file" >/dev/null
+jq -e --arg id "$candidate" --slurpfile inspected "$case_root/multi-inspect.before.json" '
+  [.images[]|select(.id==$id)] as $selected |
+  ($selected|length)==1 and $selected[0].tags==($inspected[0].RepoTags|sort) and
+  $selected[0].digests==($inspected[0].RepoDigests|sort)
+  ' "$retention_snapshot_file" >/dev/null
+multi_events_started_at=$(date -u +'%Y-%m-%dT%H:%M:%S.%NZ')
+run_case
+multi_events_ended_at=$(date -u +'%Y-%m-%dT%H:%M:%S.%NZ')
+if ((status != 0)); then cat "$case_root/result.log" >&2; exit 1; fi
+[[ $(grep -Fc "IMAGE_CLEANUP=PASS result=complete id=$candidate images=1 " "$case_root/result.log") == 1 ]]
+for reference in "$candidate" "$multi_tag" "$multi_primary_digest" "$multi_secondary_digest"; do
+  if docker image inspect "$reference" >/dev/null 2>&1; then
+    echo 'IMAGE_ONLY_DOCKER_TEST=FAIL multi_repository_candidate_or_alias_still_present' >&2; exit 1
+  fi
+done
+# Read the real daemon's bounded event history, not an intercept of docker rm.
+# Alias untagging may remove additional names automatically; the image config
+# itself must have exactly one delete event and every approved name must be gone.
+timeout --signal=TERM --kill-after=2s 15s docker events --since "$multi_events_started_at" \
+  --until "$multi_events_ended_at" --filter type=image --format '{{json .}}' > "$case_root/multi-events.jsonl"
+jq -se --arg id "$candidate" '[.[]|select(.Type=="image" and
+  (.Action // .status)=="delete" and (.Actor.ID // .id)==$id)]|length==1' \
+  "$case_root/multi-events.jsonl" >/dev/null
+retention_all_snapshots > "$case_root/multi-inventory.after.json"
+jq -e --arg id "$candidate" --slurpfile before "$retention_snapshot_file" '
+  .containers==$before[0].containers and .images==[$before[0].images[]|select(.id!=$id)]
+  ' "$case_root/multi-inventory.after.json" >/dev/null
+docker image inspect "$parent_image" "$base_image" >/dev/null
+[[ $(docker exec "$active_container" /fixture-service --read-sentinels) == "$sentinels_before" ]]
+[[ $(sha256sum "$test_root/data/record") == "$data_before" ]]
+[[ $(docker volume inspect "$volume" | jq -cS '.[0]|{Name,Driver,Mountpoint,Labels}') == "$volume_before" ]]
+kill -0 "$observer_pid"
+jq -e --arg id "$candidate" '.image_id==$id and .status=="COMPLETE" and
+  .cleanup_validated==true and .post_verification=="pending" and
+  .baseline_completed_at_uptime-.baseline_started_at_uptime>=120 and
+  .observation_completed_at_uptime-.removed_at_uptime>=300' \
+  "$case_root/.codex-v2-release/image-cleanup-gate.json" >/dev/null
+cmp "$active_state_file" "$case_root/state.before.json"
+pass passive_same_manifest_two_repository_digests_one_tag_one_image_delete_all_other_resources_preserved
+
+# Recovery exercises the actual HOLD -> archived HOLD + fresh RUNNING path with
+# a real unchanged Docker inventory. Only the existing test clock and external
+# probes are synthetic. The production validator/archive code is not replaced.
+make_passive_case passive_predelete_recovery
+chmod 600 "$retention_snapshot_file" "$retention_startup_file"
+before=$(retention_image_snapshot "$candidate")
+touch "$case_root/probe-failure"
+run_case
+if ! expect_hold; then cat "$case_root/result.log" >&2; exit 1; fi
+[[ $(retention_image_snapshot "$candidate") == "$before" ]]
+recovery_gate="$case_root/.codex-v2-release/image-cleanup-gate.json"
+recovery_gate_hash=$(retention_hash < "$recovery_gate")
+recovery_session=$(jq -er .session_id "$recovery_gate")
+recovery_old_review=$(jq -er .review_sha256 "$recovery_gate")
+recovery_plan="$case_root/.codex-v2-release/image-cleanup-plan-$recovery_old_review.json"
+recovery_plan_hash=$(retention_hash < "$recovery_plan")
+[[ $(stat -c '%a:%h' "$recovery_plan") == 600:1 ]]
+if retention_continuity_admit_deployment "$workdir" > "$case_root/admission.log" 2>&1; then exit 1; fi
+jq --arg gate "$recovery_gate_hash" --arg plan "$recovery_plan_hash" --arg session "$recovery_session" \
+  --arg old_workflow "$workflow_sha" --arg old_review "$recovery_old_review" '
+  .recovery={schema_version:1,mode:"predelete_hold_v1",gate_sha256:$gate,plan_sha256:$plan,
+    session_id:$session,workflow_sha:$old_workflow,review_sha256:$old_review,image_id:.images[0].id} |
+  .sequence={schema_version:1,index:"001",predecessor_review_sha256:null,audit_artifact_sha256:("f"*64)}
+  ' "$review_file" > "$case_root/recovery-review.json"
+mv -- "$case_root/recovery-review.json" "$review_file"
+chmod 600 "$review_file"
+saved_workflow_sha=$workflow_sha
+workflow_sha=$(printf 'd%.0s' {1..40})
+rm -f -- "$case_root/probe-failure"
+run_case
+if ((status != 0)); then cat "$case_root/result.log" >&2; exit 1; fi
+workflow_sha=$saved_workflow_sha
+if docker image inspect "$candidate" >/dev/null 2>&1; then
+  echo 'IMAGE_ONLY_DOCKER_TEST=FAIL recovered_candidate_still_present' >&2; exit 1
+fi
+[[ $(retention_hash < "$case_root/.codex-v2-release/image-cleanup-gate-history-$recovery_session.json") == "$recovery_gate_hash" ]]
+[[ $(retention_hash < "$recovery_plan") == "$recovery_plan_hash" ]]
+jq -e --arg session "$recovery_session" '.status=="COMPLETE" and .post_verification=="pending" and
+  .session_id!=$session and .baseline_completed_at_uptime-.baseline_started_at_uptime>=120 and
+  .observation_completed_at_uptime-.removed_at_uptime>=300' "$recovery_gate" >/dev/null
+if retention_continuity_admit_deployment "$workdir" > "$case_root/admission.log" 2>&1; then exit 1; fi
+cmp "$active_state_file" "$case_root/state.before.json"
+pass passive_predelete_hold_recovered_with_new_baseline_original_evidence_preserved_and_deployment_still_denied
 
 make_passive_case passive_restore_mismatch
 jq --arg digest "${fixture_restore_prefix}sha256:$(printf 'd%.0s' {1..64})" \
@@ -640,7 +779,9 @@ fault=protected_identity
 run_case
 if ! expect_hold; then cat "$case_root/result.log" >&2; exit 1; fi
 [[ -f "$case_root/fault-fired" && -f "$case_root/container-probe-failed" ]]
-! docker image inspect "$test_namespace-$case_name-a" >/dev/null 2>&1
+if docker image inspect "$test_namespace-$case_name-a" >/dev/null 2>&1; then
+  echo 'IMAGE_ONLY_DOCKER_TEST=FAIL first_alias_not_removed' >&2; exit 1
+fi
 docker image inspect "$test_namespace-$case_name-b" >/dev/null
 docker image inspect "$fixture_restore_digest" >/dev/null
 before=$(retention_image_snapshot "$candidate")
@@ -696,4 +837,4 @@ cat "$test_root/observer.log"
 after=$(for id in $(jq -r '.[].id' <<< "$protected_before"); do retention_container_snapshot "$id"; done | jq -csS 'sort_by(.id)')
 [[ $after == "$protected_before" ]]
 pass all_protected_and_rollback_containers_mounts_data_and_tcp_connection_preserved
-printf 'IMAGE_ONLY_DOCKER_TEST=PASS cases=%s real_docker=true loopback_registry=true schema3_real_digest=true schema3_real_container_probes=true synthetic_discovery=true synthetic_provenance=true fixture_clock=true production_load=false daemon_timeout=false ssh_loss=false\n' "$cases"
+printf 'IMAGE_ONLY_DOCKER_TEST=PASS cases=%s real_docker=true loopback_registry=true schema3_real_digest=true schema3_multi_repo_digest=true schema3_real_container_probes=true synthetic_discovery=true synthetic_provenance=true fixture_clock=true production_load=false daemon_timeout=false ssh_loss=false\n' "$cases"

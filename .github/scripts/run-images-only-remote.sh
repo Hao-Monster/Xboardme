@@ -4,10 +4,11 @@ set -Eeuo pipefail
 # All payloads are from the admitted checkout. There is no arbitrary path,
 # target, command or maintenance-action input.
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-operation=${1:?audit, cleanup, post-success or post-failure required}
-case "$operation" in audit|cleanup|post-success|post-failure) ;; *) exit 1 ;; esac
-bash "$script_dir/verify-images-only-request.sh"
-review="$script_dir/../release/image-cleanup-review.json"
+operation=${1:?audit, retirement-audit, cleanup, post-success or post-failure required}
+case "$operation" in audit|retirement-audit|cleanup|post-success|post-failure) ;; *) exit 1 ;; esac
+source "$script_dir/select-images-only-review.sh"
+review=$(images_only_selected_review) || exit 1
+bash "$script_dir/verify-images-only-request.sh" "$review"
 if [[ "$IMAGE_CLEANUP_ACTION" == cleanup && "$operation" != post-failure && "$(jq -er .schema_version "$review")" == 3 ]]; then
   # A same-run, immutable registry recovery proof must exist before host access.
   # This check reads runner evidence only; it never carries registry auth remote.
@@ -28,8 +29,11 @@ if [[ "$IMAGE_CLEANUP_ACTION" == cleanup ]]; then
   remote_env+=" EXPECTED_ACTIVE_RELEASE_ID='$active_id' EXPECTED_ACTIVE_RELEASE_SHA='$active_sha'"
   remote_env+=" EXPECTED_RETENTION_REVIEW_SHA256='$review_hash' EXPECTED_RETENTION_RESOURCE_FINGERPRINT='$resource'"
 fi
-if [[ "$operation" != audit && "$IMAGE_CLEANUP_ACTION" != cleanup ]]; then exit 1; fi
+if [[ "$operation" == retirement-audit ]]; then
+  [[ "$IMAGE_CLEANUP_ACTION" == retirement-audit ]] || exit 1
+elif [[ "$operation" != audit && "$IMAGE_CLEANUP_ACTION" != cleanup ]]; then exit 1; fi
 deadline=300
+if [[ "$operation" == retirement-audit ]]; then deadline=600; fi
 if [[ "$operation" == cleanup ]]; then
   deadline=2700
   manifest=$(base64 -w0 "$review")
@@ -44,9 +48,11 @@ payload() {
   printf 'set -Eeuo pipefail\numask 077\n'
   cat "$script_dir/production-runtime-discovery.sh" "$script_dir/release-state.sh" \
     "$script_dir/retention-safety.sh" "$script_dir/image-startup-references.sh" \
-    "$script_dir/images-only-approval.sh" "$script_dir/retention-continuity.sh"
-  if [[ "$operation" == audit || "$operation" == cleanup ]]; then
+    "$script_dir/images-only-approval.sh" "$script_dir/retention-continuity.sh" \
+    "$script_dir/select-images-only-review.sh" "$script_dir/retention-predelete-recovery.sh"
+  if [[ "$operation" == audit || "$operation" == retirement-audit || "$operation" == cleanup ]]; then
     cat "$script_dir/audit-xboard-images-only.sh"
+    if [[ "$operation" == retirement-audit ]]; then cat "$script_dir/audit-retirement-readiness.sh"; fi
     if [[ "$operation" == cleanup ]]; then cat "$script_dir/cleanup-xboard-images-only.sh"; fi
   else
     # Failure recording must not depend on a successful current-runtime audit.
@@ -66,7 +72,7 @@ POST
     fi
   fi
 }
-payload | bash "$script_dir/ssh-with-password.sh" \
+payload | timeout --signal=TERM --kill-after=30s "$((deadline+60))s" bash "$script_dir/ssh-with-password.sh" \
   -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
   -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
   "$remote_env timeout --signal=TERM --kill-after=30s ${deadline}s bash -se"

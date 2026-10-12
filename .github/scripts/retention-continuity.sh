@@ -173,19 +173,69 @@ _rc_update() (
   _rc_run mv -f -- "$temporary" "$RC_GATE"
 )
 
+# Resolve recovery inputs from the locked audit and the old gate, never from an
+# arbitrary caller path or a skip/force environment option. This is deliberately
+# separate from deployment admission: a recovered attempt starts RUNNING.
+_rc_recovery_validate_current() {
+  local old_review old_plan protection
+  declare -F retention_predelete_recovery_validate >/dev/null || return 1
+  [[ -n "${RC_REVIEW:-}" && -f "${retention_snapshot_file:-}" &&
+     -f "${retention_startup_file:-}" && -f "${active_state_file:-}" ]] || return 1
+  _rc_assert_deploy_lock || return 1
+  old_review=$(_rc_jq -er .review_sha256 "$RC_GATE") || return 1
+  [[ "$old_review" =~ ^[a-f0-9]{64}$ ]] || return 1
+  old_plan="$RC_ROOT/image-cleanup-plan-$old_review.json"
+  protection=$(retention_live_protection) || return 1
+  retention_predelete_recovery_validate "$RC_REVIEW" "$RC_GATE" "$old_plan" \
+    "$retention_snapshot_file" "$retention_startup_file" "$active_state_file" \
+    "$protection" "$EXPECTED_WORKFLOW_SHA"
+}
+
 # A new reviewed single-image operation may follow a fully validated operation.
-# Archive before replacing, never reset a RUNNING/HOLD or reuse an old approval.
+# The only HOLD replacement is independently reviewed, exact pre-deletion
+# recovery. Archive the old bytes before replacement; RUNNING is still denied.
 _rc_create_gate() (
   local temporary=$1 old_session old_hash history archive_tmp=''
   _rc_secure_file "$RC_GATE_LOCK" || return 1
   exec 8>"$RC_GATE_LOCK" || return 1
   _rc_run flock -w 2 8 || return 1
+  _rc_gate_validate "$temporary" || return 1
+  [[ "$(_rc_hash < "$RC_REVIEW")" == "$RC_REVIEW_HASH" ]] || return 1
+  _rc_jq -e --slurpfile review "$RC_REVIEW" --arg workflow "$EXPECTED_WORKFLOW_SHA" \
+    --arg hash "$RC_REVIEW_HASH" --arg session "$RC_SESSION" '
+      .status=="RUNNING" and .workflow_sha==$workflow and .review_sha256==$hash and
+      .session_id==$session and .active_release_id==$review[0].active_release_id and
+      .active_release_sha==$review[0].active_release_sha and
+      .protection_fingerprint==$review[0].protection_fingerprint and .image_id==$review[0].images[0].id and
+      .schema_version==(if $review[0].schema_version==3 then 2 else 1 end) and
+      .baseline_seconds==$review[0].monitoring.baseline_seconds and
+      .observe_seconds==$review[0].monitoring.post_delete_observe_seconds and
+      .sample_interval_seconds==$review[0].monitoring.sample_interval_seconds and
+      (. as $fresh | ["failure_reason","last_heartbeat_uptime","baseline_started_at_uptime","baseline_completed_at_uptime",
+        "intent_at_uptime","removed_at_uptime","observation_completed_at_uptime",
+        "completed_at_uptime","post_evidence_sha256","post_verified_at_uptime"] |
+        all(.[]; . as $key | $fresh | has($key))) and
+      .sample_count==0 and .cleanup_validated==false and .failure_reason==null and .post_verification=="pending" and
+      .last_heartbeat_uptime==null and .baseline_started_at_uptime==null and .baseline_completed_at_uptime==null and
+      .intent_at_uptime==null and .removed_at_uptime==null and .observation_completed_at_uptime==null and
+      .completed_at_uptime==null and .post_evidence_sha256==null and .post_verified_at_uptime==null
+    ' "$temporary" >/dev/null || return 1
   if [[ -e "$RC_GATE" || -L "$RC_GATE" ]]; then
     _rc_gate_validate "$RC_GATE" || return 1
-    _rc_jq -e --slurpfile fresh "$temporary" '
+    _rc_jq -e --slurpfile fresh "$temporary" '.session_id!=$fresh[0].session_id' "$RC_GATE" >/dev/null || return 1
+    if [[ $(_rc_jq -r .status "$RC_GATE") == HOLD ]]; then
+      _rc_recovery_validate_current || return 1
+    else
+      _rc_jq -e --slurpfile fresh "$temporary" '
       .status=="COMPLETE" and .cleanup_validated==true and .post_verification=="passed" and
       .review_sha256!=$fresh[0].review_sha256 and .image_id!=$fresh[0].image_id and
       .session_id!=$fresh[0].session_id' "$RC_GATE" >/dev/null || return 1
+      _rc_jq -e 'has("recovery")|not' "$RC_REVIEW" >/dev/null || return 1
+    fi
+    if _rc_jq -e 'has("sequence")' "$RC_REVIEW" >/dev/null; then
+      declare -F images_only_sequence_predecessor >/dev/null || return 1
+      images_only_sequence_predecessor "$RC_REVIEW" "$RC_GATE" || return 1
+    fi
     old_session=$(_rc_jq -r .session_id "$RC_GATE") || return 1
     old_hash=$(_rc_hash < "$RC_GATE") || return 1
     history="$RC_ROOT/image-cleanup-gate-history-$old_session.json"
@@ -589,11 +639,6 @@ retention_continuity_begin() {
   RC_ARMED=false
   _rc_paths "${workdir:?workdir required}" || { _rc_fail unsafe_gate_path; return 1; }
   _rc_assert_deploy_lock || { _rc_fail deployment_lock_required; return 1; }
-  if [[ -e "$RC_GATE" || -L "$RC_GATE" ]]; then
-    _rc_gate_validate "$RC_GATE" && _rc_jq -e '.status=="COMPLETE"' "$RC_GATE" >/dev/null || {
-      _rc_fail existing_gate_requires_review; return 1;
-    }
-  fi
   [[ -f "$review" && ! -L "$review" ]] || { _rc_fail invalid_review_path; return 1; }
   retention_continuity_validate_review "$review" || { _rc_fail invalid_monitoring_review; return 1; }
   [[ "${EXPECTED_WORKFLOW_SHA:-}" =~ ^[a-f0-9]{40}$ && "${EXPECTED_RETENTION_REVIEW_SHA256:-}" =~ ^[a-f0-9]{64}$ ]] || {
@@ -602,6 +647,24 @@ retention_continuity_begin() {
   RC_REVIEW=$review
   RC_REVIEW_HASH=$(_rc_hash < "$review") || return 1
   [[ "$RC_REVIEW_HASH" == "$EXPECTED_RETENTION_REVIEW_SHA256" ]] || { _rc_fail review_hash_mismatch; return 1; }
+  if [[ -e "$RC_GATE" || -L "$RC_GATE" ]]; then
+    _rc_gate_validate "$RC_GATE" || { _rc_fail existing_gate_requires_review; return 1; }
+    if [[ $(_rc_jq -r .status "$RC_GATE") == HOLD ]]; then
+      _rc_recovery_validate_current || { _rc_fail existing_gate_requires_review; return 1; }
+    elif ! _rc_jq -e '.status=="COMPLETE"' "$RC_GATE" >/dev/null; then
+      _rc_fail existing_gate_requires_review; return 1
+    elif _rc_jq -e 'has("recovery")' "$review" >/dev/null; then
+      _rc_fail recovery_not_applicable; return 1
+    fi
+  elif _rc_jq -e 'has("recovery") or has("sequence")' "$review" >/dev/null; then
+    _rc_fail recovery_predecessor_missing; return 1
+  fi
+  if _rc_jq -e 'has("sequence")' "$review" >/dev/null; then
+    declare -F images_only_sequence_predecessor >/dev/null &&
+      images_only_sequence_predecessor "$review" "$RC_GATE" || {
+        _rc_fail sequence_predecessor_not_verified; return 1;
+      }
+  fi
   # This is derived only from the validated, hash-bound review. There is no
   # production environment or dispatch switch that skips the legacy probes.
   RC_MONITORING_MODE=$(_rc_jq -r 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' "$review") || return 1

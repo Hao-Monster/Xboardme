@@ -392,6 +392,9 @@ jobs:
           for resource_script in .github/scripts/*resource-diagnostic*.sh .github/scripts/*retention-resource*.sh; do
             bash -n "$resource_script"
           done
+          for retirement_script in .github/scripts/*retirement-readiness*.sh .github/scripts/*retention-predelete-recovery*.sh .github/scripts/*select-images-only-review*.sh; do
+            bash -n "$retirement_script"
+          done
           bash -n .github/scripts/verify-retention-request.sh
           bash -n .github/scripts/test-verify-retention-request.sh
           bash -n .github/scripts/verify-retention-post-audit.sh
@@ -435,6 +438,9 @@ jobs:
           bash .github/scripts/test-retention-resource-sampling.sh
           bash .github/scripts/test-resource-diagnostic-request.sh
           bash .github/scripts/test-resource-diagnostic-remote.sh
+          bash .github/scripts/test-retention-predelete-recovery.sh
+          bash .github/scripts/test-select-images-only-review.sh
+          bash .github/scripts/test-audit-retirement-readiness.sh
           bash .github/scripts/test-cleanup-xboard-images-only.sh
           bash .github/scripts/test-audit-xboard-images-only.sh
           bash .github/scripts/test-deploy-admin-assets-admission.sh
