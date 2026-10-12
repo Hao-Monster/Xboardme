@@ -318,31 +318,137 @@ _rc_caddy() {
     .monitoring.caddy.active_enter_monotonic_usec==($since|tonumber)' "$RC_REVIEW" >/dev/null
 }
 
-_rc_resources() {
-  local label user nice system idle iowait irq softirq steal unused total busy delta wait_delta
-  local key value unit memory='' io='' cpu='' line
-  read -r label user nice system idle iowait irq softirq steal unused < /proc/stat || return 1
-  [[ "$label" == cpu && "$user $nice $system $idle $iowait $irq $softirq $steal" =~ ^[0-9\ ]+$ ]] || return 1
-  total=$((user+nice+system+idle+iowait+irq+softirq+steal))
-  busy=$((total-idle-iowait))
-  while read -r key value unit; do [[ "$key" != MemAvailable: ]] || memory=$value; done < /proc/meminfo
-  while read -r label line; do [[ "$label" != full ]] || { io=${line#avg10=}; io=${io%% *}; }; done < /proc/pressure/io
-  while read -r label line; do [[ "$label" != some ]] || { cpu=${line#avg10=}; cpu=${cpu%% *}; }; done < /proc/pressure/cpu
-  [[ "$memory" =~ ^[0-9]+$ && "$io" =~ ^[0-9]+\.[0-9]+$ && "$cpu" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
-  _rc_jq -e --argjson memory "$memory" --argjson io "$io" --argjson cpu "$cpu" '
-    .monitoring.resources | $memory>=.min_mem_available_kib and $io<=.max_io_full_avg10 and $cpu<=.max_cpu_some_avg10' \
-    "$RC_REVIEW" >/dev/null || return 1
+# These six resource-only functions are also serialized by the independent
+# diagnostic transport. Keep their dependency closure free of lifecycle/gate
+# functions, arbitrary paths, files written on the host and external probes.
+_rc_resource_read() {
+  case "$1" in
+    stat) _rc_run head -n 1 /proc/stat ;;
+    memory) _rc_run head -c 65536 /proc/meminfo ;;
+    io) _rc_run head -c 4096 /proc/pressure/io ;;
+    cpu) _rc_run head -c 4096 /proc/pressure/cpu ;;
+    *) return 2 ;;
+  esac
+}
+
+_rc_resource_error() {
+  RC_RESOURCE_REASON=$1
+  printf 'RETENTION_RESOURCE_ERROR=%s source=%s exit_code=%s\n' "$1" "$2" "$3" >&2
+  return 1
+}
+
+_rc_resource_limits_valid() {
+  # Preserve the legacy contract. The diagnostic admission additionally enforces
+  # the stricter passive limits from the fixed, committed schema-3 review.
+  _rc_jq -ne --argjson limits "$1" '
+    def positive: type=="number" and .>0;
+    $limits | type=="object" and
+    keys==["max_cpu_busy_percent","max_cpu_iowait_percent","max_cpu_some_avg10","max_io_full_avg10","min_mem_available_kib"] and
+    (.max_cpu_busy_percent|positive and floor==. and .<=95) and
+    (.max_cpu_iowait_percent|positive and floor==. and .<=20) and
+    (.min_mem_available_kib|positive and floor==. and .>=65536 and .<=9007199254740991) and
+    (.max_io_full_avg10|positive and .<=5) and
+    (.max_cpu_some_avg10|positive and .<=20)' >/dev/null
+}
+
+_rc_resource_sample() {
+  local limits=${1:?resource limits required} snapshot status field
+  local label user nice system idle iowait irq softirq steal unused total busy
+  local key value unit rest memory='' io='' cpu='' matches
+  local delta=null busy_delta=null wait_delta=null phase=initial comparison outcome
+  RC_RESOURCE_REASON=''
+  RC_MEMORY_AVAILABLE_KIB='' RC_IO_FULL_AVG10='' RC_CPU_SOME_AVG10=''
+  RC_CPU_BUSY_PERCENT='' RC_CPU_IOWAIT_PERCENT=''
+  if _rc_resource_limits_valid "$limits"; then :; else
+    status=$?; _rc_resource_error invalid_limits limits "$status"; return 1
+  fi
+  if snapshot=$(_rc_resource_read stat); then :; else
+    status=$?; _rc_resource_error proc_read_failed stat "$status"; return 1
+  fi
+  read -r label user nice system idle iowait irq softirq steal unused <<< "${snapshot%%$'\n'*}"
+  [[ "$label" == cpu ]] || { _rc_resource_error invalid_cpu_stat stat 1; return 1; }
+  # Check each field: an all-whitespace concatenation previously admitted
+  # missing fields as zero. The bound also prevents shell-integer overflow.
+  for field in "$user" "$nice" "$system" "$idle" "$iowait" "$irq" "$softirq" "$steal"; do
+    [[ "$field" =~ ^[0-9]{1,15}$ ]] || { _rc_resource_error invalid_cpu_stat stat 1; return 1; }
+  done
+  total=$((10#$user+10#$nice+10#$system+10#$idle+10#$iowait+10#$irq+10#$softirq+10#$steal))
+  iowait=$((10#$iowait)); busy=$((total-10#$idle-iowait))
+  if snapshot=$(_rc_resource_read memory); then :; else
+    status=$?; _rc_resource_error proc_read_failed memory "$status"; return 1
+  fi
+  matches=0
+  while read -r key value unit rest; do
+    if [[ "$key" == MemAvailable: ]]; then
+      matches=$((matches+1)); memory=$value
+      [[ "$unit" == kB && -z "$rest" ]] || { _rc_resource_error invalid_mem_available memory 1; return 1; }
+    fi
+  done <<< "$snapshot"
+  [[ "$matches" == 1 && "$memory" =~ ^[0-9]{1,15}$ ]] || { _rc_resource_error invalid_mem_available memory 1; return 1; }
+  memory=$((10#$memory))
+  if snapshot=$(_rc_resource_read io); then :; else
+    status=$?; _rc_resource_error proc_read_failed io "$status"; return 1
+  fi
+  matches=0
+  while read -r label value rest; do
+    if [[ "$label" == full ]]; then
+      [[ "$value" == avg10=* ]] || { _rc_resource_error invalid_io_pressure io 1; return 1; }
+      matches=$((matches+1)); io=${value#avg10=}
+    fi
+  done <<< "$snapshot"
+  [[ "$matches" == 1 && "$io" =~ ^[0-9]{1,3}\.[0-9]{1,6}$ ]] || { _rc_resource_error invalid_io_pressure io 1; return 1; }
+  if snapshot=$(_rc_resource_read cpu); then :; else
+    status=$?; _rc_resource_error proc_read_failed cpu "$status"; return 1
+  fi
+  matches=0
+  while read -r label value rest; do
+    if [[ "$label" == some ]]; then
+      [[ "$value" == avg10=* ]] || { _rc_resource_error invalid_cpu_pressure cpu 1; return 1; }
+      matches=$((matches+1)); cpu=${value#avg10=}
+    fi
+  done <<< "$snapshot"
+  [[ "$matches" == 1 && "$cpu" =~ ^[0-9]{1,3}\.[0-9]{1,6}$ ]] || { _rc_resource_error invalid_cpu_pressure cpu 1; return 1; }
   if [[ -n "${RC_CPU_TOTAL:-}" ]]; then
-    delta=$((total-RC_CPU_TOTAL)); wait_delta=$((iowait-RC_CPU_IOWAIT))
-    ((delta>0 && busy>=RC_CPU_BUSY && wait_delta>=0)) || return 1
-    _rc_jq -e --argjson busy "$((busy-RC_CPU_BUSY))" --argjson delta "$delta" --argjson waiting "$wait_delta" '
-      .monitoring.resources | $busy*100/$delta<=.max_cpu_busy_percent and $waiting*100/$delta<=.max_cpu_iowait_percent' \
-      "$RC_REVIEW" >/dev/null || return 1
-    RC_CPU_BUSY_PERCENT=$(( (busy-RC_CPU_BUSY)*100/delta ))
-    RC_CPU_IOWAIT_PERCENT=$(( wait_delta*100/delta ))
+    phase=delta
+    delta=$((total-RC_CPU_TOTAL)); wait_delta=$((iowait-RC_CPU_IOWAIT)); busy_delta=$((busy-RC_CPU_BUSY))
+    ((delta>0 && busy_delta>=0 && wait_delta>=0)) || { _rc_resource_error cpu_counter_regressed stat 1; return 1; }
+  fi
+  if comparison=$(_rc_jq -nr --argjson limits "$limits" --arg phase "$phase" \
+    --argjson memory "$memory" --argjson io "$io" --argjson cpu "$cpu" \
+    --argjson delta "$delta" --argjson busy "$busy_delta" --argjson waiting "$wait_delta" '
+      (if $delta==null then null else $busy*100/$delta end) as $busy_percent |
+      (if $delta==null then null else $waiting*100/$delta end) as $wait_percent |
+      [if $memory<$limits.min_mem_available_kib then "min_mem_available_kib" else empty end,
+       if $io>$limits.max_io_full_avg10 then "max_io_full_avg10" else empty end,
+       if $cpu>$limits.max_cpu_some_avg10 then "max_cpu_some_avg10" else empty end,
+       if $busy_percent!=null and $busy_percent>$limits.max_cpu_busy_percent then "max_cpu_busy_percent" else empty end,
+       if $wait_percent!=null and $wait_percent>$limits.max_cpu_iowait_percent then "max_cpu_iowait_percent" else empty end] as $violations |
+      {schema_version:1,result:(if $violations==[] then "PASS" else "FAIL" end),phase:$phase,
+       mem_available_kib:$memory,io_full_avg10:$io,cpu_some_avg10:$cpu,
+       cpu_busy_percent:$busy_percent,cpu_iowait_percent:$wait_percent,
+       thresholds:$limits,violations:$violations} | .result, tojson'); then :; else
+    status=$?; _rc_resource_error comparison_command_failed comparison "$status"; return 1
+  fi
+  outcome=${comparison%%$'\n'*}
+  [[ "$outcome" == PASS || "$outcome" == FAIL ]] || { _rc_resource_error comparison_command_failed comparison 1; return 1; }
+  printf 'RETENTION_RESOURCE_SAMPLE=%s\n' "${comparison#*$'\n'}"
+  if [[ "$outcome" == FAIL ]]; then RC_RESOURCE_REASON=threshold_exceeded; return 1; fi
+  if [[ "$phase" == delta ]]; then
+    RC_CPU_BUSY_PERCENT=$((busy_delta*100/delta)); RC_CPU_IOWAIT_PERCENT=$((wait_delta*100/delta))
   fi
   RC_CPU_TOTAL=$total RC_CPU_BUSY=$busy RC_CPU_IOWAIT=$iowait
   RC_MEMORY_AVAILABLE_KIB=$memory RC_IO_FULL_AVG10=$io RC_CPU_SOME_AVG10=$cpu
+}
+
+_rc_resources() {
+  local limits status
+  RC_RESOURCE_REASON=''
+  RC_MEMORY_AVAILABLE_KIB='' RC_IO_FULL_AVG10='' RC_CPU_SOME_AVG10=''
+  RC_CPU_BUSY_PERCENT='' RC_CPU_IOWAIT_PERCENT=''
+  if limits=$(_rc_jq -ce '.monitoring.resources' "$RC_REVIEW"); then :; else
+    status=$?; _rc_resource_error invalid_limits limits "$status"; return 1
+  fi
+  _rc_resource_sample "$limits"
 }
 
 # A separately reviewed live producer must atomically refresh this fixed file.
