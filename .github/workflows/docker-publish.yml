@@ -204,6 +204,12 @@ jobs:
           echo 'Only this repository develop branch may target main.' >&2
           exit 1
 
+      - name: Validate the local continuity observer before integration tests
+        run: python3 .github/scripts/fixtures/images-only-docker/test_observe_service.py
+
+      - name: Exercise image-only cleanup with isolated real Docker resources
+        run: RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-images-only-docker.sh
+
       - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
         with:
@@ -417,7 +423,6 @@ jobs:
           bash .github/scripts/test-audit-xboard-images-only.sh
           bash .github/scripts/test-deploy-admin-assets-admission.sh
           bash .github/scripts/test-verify-images-only-post-audit.sh
-          RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-images-only-docker.sh
           RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-retention-docker-protocol.sh
           bash .github/scripts/test-audit-xboard-network-debt.sh
           bash .github/scripts/test-cleanup-xboard-network-debt.sh

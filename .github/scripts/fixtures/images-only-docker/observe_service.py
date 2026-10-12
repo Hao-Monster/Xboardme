@@ -35,14 +35,14 @@ def main() -> int:
                 response += part
             if response != b"PONG":
                 raise RuntimeError("synthetic persistent TCP reply mismatch")
-            http = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+            http_connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
             try:
-                http.request("GET", "/health")
-                reply = http.getresponse()
+                http_connection.request("GET", "/health")
+                reply = http_connection.getresponse()
                 if reply.status != 200 or reply.read() != b"synthetic-service-ok\r\n":
                     raise RuntimeError("synthetic HTTP content mismatch")
             finally:
-                http.close()
+                http_connection.close()
             samples += 1
             if samples == 1:
                 print("SYNTHETIC_OBSERVER_READY=true", flush=True)
