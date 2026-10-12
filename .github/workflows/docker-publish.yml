@@ -207,6 +207,9 @@ jobs:
       - name: Validate the local continuity observer before integration tests
         run: python3 .github/scripts/fixtures/images-only-docker/test_observe_service.py
 
+      - name: Verify smoke-session cleanup with isolated local and CI context
+        run: bash .github/scripts/test-smoke-distributor-session.sh
+
       - name: Exercise image-only cleanup with isolated real Docker resources
         run: sudo -n env RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-images-only-docker.sh
 
@@ -428,7 +431,6 @@ jobs:
           bash .github/scripts/test-cleanup-xboard-network-debt.sh
           bash .github/scripts/test-resolve-xboard-v2-port.sh
           bash .github/scripts/test-run-distributor-smoke-bounded.sh
-          bash .github/scripts/test-smoke-distributor-session.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
           bash .github/scripts/test-release-state.sh

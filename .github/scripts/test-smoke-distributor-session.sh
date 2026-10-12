@@ -23,9 +23,23 @@ run_case() (
   scenario=$1
   expected_status=$2
   expected_cleanup=$3
+  context=${4:-local}
+  case_label=$scenario
+  # Each fixture owns its workflow identity. CI's inherited run identifiers
+  # must not change local-fallback assertions or leak into another case.
+  unset GITHUB_RUN_ID GITHUB_RUN_ATTEMPT
+  case "$context" in
+    local) expected_reconcile_context='run_id=local attempt=local' ;;
+    ci)
+      export GITHUB_RUN_ID=98765432109 GITHUB_RUN_ATTEMPT=3
+      expected_reconcile_context='run_id=98765432109 attempt=3'
+      case_label="$scenario-ci"
+      ;;
+    *) printf 'Unknown session fixture context: %s\n' "$context" >&2; return 1 ;;
+  esac
   timeout_seconds=30
   [[ "$scenario" != timeout ]] || timeout_seconds=1
-  case_dir="$work_dir/$scenario"
+  case_dir="$work_dir/$case_label"
   mkdir -p "$case_dir/tmp"
   printf '%s\n' preexisting > "$case_dir/sessions"
   : > "$case_dir/revocations.log"
@@ -43,11 +57,11 @@ run_case() (
   result=$?
   set -e
   if [[ "$result" != "$expected_status" ]]; then
-    printf 'Unexpected status: case=%s expected=%s actual=%s\n' "$scenario" "$expected_status" "$result" >&2
+    printf 'Unexpected status: case=%s expected=%s actual=%s\n' "$case_label" "$expected_status" "$result" >&2
     return 1
   fi
   if ! grep -Fq "DISTRIBUTOR_SMOKE_SESSION_CLEANUP=$expected_cleanup" "$case_dir/output"; then
-    printf 'Missing session cleanup result: case=%s expected=%s\n' "$scenario" "$expected_cleanup" >&2
+    printf 'Missing session cleanup result: case=%s expected=%s\n' "$case_label" "$expected_cleanup" >&2
     return 1
   fi
   grep -qx preexisting "$case_dir/sessions"
@@ -76,9 +90,9 @@ run_case() (
     ! grep -Fq 'Distributor production smoke test passed.' "$case_dir/output"
   fi
   if [[ "$expected_cleanup" == INCOMPLETE ]]; then
-    grep -Fq 'DISTRIBUTOR_SMOKE_SESSION_RECONCILE run_id=local attempt=local login_started_at=' "$case_dir/output"
+    grep -Fq "DISTRIBUTOR_SMOKE_SESSION_RECONCILE $expected_reconcile_context login_started_at=" "$case_dir/output"
   fi
-  printf 'SMOKE_SESSION_CASE=%s PASS\n' "$scenario"
+  printf 'SMOKE_SESSION_CASE=%s PASS\n' "$case_label"
 )
 
 run_case success 0 PASS
@@ -92,4 +106,6 @@ run_case revoke-not-effective 1 INCOMPLETE
 run_case both-failed 42 INCOMPLETE
 run_case login-response-lost 28 INCOMPLETE
 run_case timeout 124 PASS
-echo 'DISTRIBUTOR_SMOKE_SESSION_TEST=PASS cases=11'
+run_case revoke-failed 1 INCOMPLETE ci
+run_case both-failed 42 INCOMPLETE ci
+echo 'DISTRIBUTOR_SMOKE_SESSION_TEST=PASS cases=13'
