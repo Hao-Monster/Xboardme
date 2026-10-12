@@ -5,6 +5,7 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/images-only-approval.sh"
 source "$script_dir/retention-continuity.sh"
 source "$script_dir/select-images-only-review.sh"
+source "$script_dir/retention-sampled-recovery.sh"
 source "$script_dir/retention-predelete-recovery.sh"
 fail() { echo "IMAGE_REQUEST_FAIL=$1" >&2; exit 1; }
 review=${1:-}
@@ -42,7 +43,8 @@ if [[ "$IMAGE_CLEANUP_ACTION" == cleanup ]]; then
     [[ "$review" == "$selected_review" ]] || fail invalid_review_selection
     jq -e --arg index "$IMAGE_CLEANUP_REVIEW_ID" '.sequence.index==$index' "$review" >/dev/null || fail invalid_review_sequence
     if [[ "$IMAGE_CLEANUP_REVIEW_ID" == 001 ]]; then
-      jq -e '.recovery.mode=="predelete_hold_v1"' "$review" >/dev/null || fail recovery_review_required
+      jq -e '(.recovery.schema_version==1 and .recovery.mode=="predelete_hold_v1") or
+        (.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2")' "$review" >/dev/null || fail recovery_review_required
     else
       printf -v previous '%03d' "$((10#$IMAGE_CLEANUP_REVIEW_ID-1))"
       previous_review=$(IMAGE_CLEANUP_REVIEW_ID=$previous images_only_selected_review) || fail predecessor_review_missing

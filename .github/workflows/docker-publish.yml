@@ -207,6 +207,10 @@ jobs:
       - name: Validate the local continuity observer before integration tests
         run: python3 .github/scripts/fixtures/images-only-docker/test_observe_service.py
 
+      - name: Verify sampled HOLD proof and runner evidence without host access
+        run: |
+          node --test .github/scripts/test-sampled-recovery-proof.mjs .github/scripts/test-sampled-recovery-runner.mjs
+
       - name: Verify smoke-session cleanup with isolated local and CI context
         run: bash .github/scripts/test-smoke-distributor-session.sh
 
@@ -439,6 +443,8 @@ jobs:
           bash .github/scripts/test-resource-diagnostic-request.sh
           bash .github/scripts/test-resource-diagnostic-remote.sh
           bash .github/scripts/test-retention-predelete-recovery.sh
+          bash .github/scripts/test-retention-sampled-recovery.sh
+          bash .github/scripts/test-images-only-inventory.sh
           bash .github/scripts/test-select-images-only-review.sh
           bash .github/scripts/test-audit-retirement-readiness.sh
           bash .github/scripts/test-cleanup-xboard-images-only.sh

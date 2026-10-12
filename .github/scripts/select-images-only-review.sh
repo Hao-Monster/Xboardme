@@ -40,7 +40,8 @@ images_only_sequence_predecessor() {
   if [[ $(jq -er .sequence.index "$review") == 001 ]]; then
     # The first manifest must use the separately verified pre-deletion recovery
     # path; it must not become a generic sequence reset after partial cleanup.
-    jq -e '.recovery.mode=="predelete_hold_v1"' "$review" >/dev/null
+    jq -e '(.recovery.schema_version==1 and .recovery.mode=="predelete_hold_v1") or
+      (.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2")' "$review" >/dev/null
   else
     [[ -f "$gate" && ! -L "$gate" ]] || return 1
     _rc_gate_validate "$gate" || return 1

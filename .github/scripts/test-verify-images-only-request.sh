@@ -7,7 +7,7 @@ script_dir="$test_root/scripts"
 mkdir -p "$test_root/bin" "$script_dir" "$test_root/release/image-cleanup-reviews"
 cd -- "$test_root"
 for file in verify-images-only-request.sh images-only-approval.sh retention-continuity.sh \
-  select-images-only-review.sh retention-predelete-recovery.sh; do
+  select-images-only-review.sh retention-predelete-recovery.sh retention-sampled-recovery.sh; do
   cp -- "$source_dir/$file" "$script_dir/$file"
 done
 # Even audit/default selection must resolve a private fixture, never the real

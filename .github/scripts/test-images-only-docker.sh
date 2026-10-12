@@ -28,6 +28,7 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 fixture_dir="$script_dir/fixtures/images-only-docker"
 source "$script_dir/release-state.sh"
 source "$script_dir/retention-safety.sh"
+source "$script_dir/images-only-inventory.sh"
 source "$script_dir/images-only-approval.sh"
 source "$script_dir/image-startup-references.sh"
 source "$script_dir/retention-continuity.sh"

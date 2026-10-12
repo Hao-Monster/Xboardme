@@ -7,7 +7,7 @@ script_dir="$test_root/scripts"
 mkdir -p "$test_root/bin" "$script_dir" "$test_root/release/image-cleanup-reviews"
 cd -- "$test_root"
 for file in verify-image-restore.sh verify-images-only-request.sh images-only-approval.sh \
-  retention-continuity.sh select-images-only-review.sh retention-predelete-recovery.sh; do
+  retention-continuity.sh select-images-only-review.sh retention-predelete-recovery.sh retention-sampled-recovery.sh; do
   cp -- "$source_dir/$file" "$script_dir/$file"
 done
 cat > "$test_root/bin/git" <<'GIT'

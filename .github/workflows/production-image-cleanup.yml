@@ -27,6 +27,7 @@ on:
 permissions:
   contents: read
   packages: read
+  actions: read
 defaults:
   run:
     shell: bash --noprofile --norc -e -o pipefail {0}
@@ -63,7 +64,14 @@ jobs:
             echo "active_sha=$(jq -er .active_release_sha "$review")" >> "$GITHUB_OUTPUT"
             echo "active_id=$(jq -er .active_release_id "$review")" >> "$GITHUB_OUTPUT"
             echo "monitoring_mode=$(jq -er 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' "$review")" >> "$GITHUB_OUTPUT"
+            echo "sampled_recovery=$(jq -r '.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2"' "$review")" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Verify exact historical sampled-HOLD evidence on the runner
+        if: ${{ success() && inputs.action == 'cleanup' && steps.admission.outputs.sampled_recovery == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/verify-sampled-recovery-runner.sh
 
       - name: Verify immutable image recovery on the runner before host access
         id: restore
@@ -157,6 +165,10 @@ jobs:
             "$RUNNER_TEMP/images-only-post-result.txt" > "$RUNNER_TEMP/images-only-evidence.sha256"
           if [[ "$mode" == passive_runtime_v1 ]]; then
             sha256sum "$RUNNER_TEMP/images-only-restore.json" >> "$RUNNER_TEMP/images-only-evidence.sha256"
+            if jq -e '.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2"' "$review" >/dev/null; then
+              bash .github/scripts/verify-sampled-recovery-runner.sh --check-evidence
+              sha256sum "$RUNNER_TEMP/images-only-sampled-proof.json" "$RUNNER_TEMP/images-only-sampled-proof-verified.json" >> "$RUNNER_TEMP/images-only-evidence.sha256"
+            fi
           fi
 
       - name: Preserve evidence even for failed or cancelled operations

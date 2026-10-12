@@ -8,6 +8,9 @@ set -Eeuo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/release-state.sh"
 source "$script_dir/retention-safety.sh"
+# This audit suite keeps its existing fake Docker boundary. The new inventory
+# implementation and process-group watchdog have separate direct tests.
+images_only_all_snapshots() { retention_all_snapshots; }
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
 passed=0

@@ -225,6 +225,9 @@ _rc_create_gate() (
     _rc_jq -e --slurpfile fresh "$temporary" '.session_id!=$fresh[0].session_id' "$RC_GATE" >/dev/null || return 1
     if [[ $(_rc_jq -r .status "$RC_GATE") == HOLD ]]; then
       _rc_recovery_validate_current || return 1
+      if _rc_jq -e '.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2"' "$RC_REVIEW" >/dev/null; then
+        _rc_jq -e --slurpfile old "$RC_GATE" '.started_at_uptime>$old[0].last_heartbeat_uptime' "$temporary" >/dev/null || return 1
+      fi
     else
       _rc_jq -e --slurpfile fresh "$temporary" '
       .status=="COMPLETE" and .cleanup_validated==true and .post_verification=="passed" and
@@ -650,6 +653,11 @@ retention_continuity_begin() {
   if [[ -e "$RC_GATE" || -L "$RC_GATE" ]]; then
     _rc_gate_validate "$RC_GATE" || { _rc_fail existing_gate_requires_review; return 1; }
     if [[ $(_rc_jq -r .status "$RC_GATE") == HOLD ]]; then
+      if _rc_jq -e '.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2"' "$review" >/dev/null; then
+        declare -F retention_sampled_proof_install >/dev/null && retention_sampled_proof_install "$review" || {
+          _rc_fail sampled_proof_not_verified; return 1;
+        }
+      fi
       _rc_recovery_validate_current || { _rc_fail existing_gate_requires_review; return 1; }
     elif ! _rc_jq -e '.status=="COMPLETE"' "$RC_GATE" >/dev/null; then
       _rc_fail existing_gate_requires_review; return 1
