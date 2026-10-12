@@ -61,6 +61,51 @@ if ! xboard_find_compose_anchor; then
 fi
 workdir=$XBOARD_ANCHOR_WORKDIR
 
+# Asset hotfixes mutate the active container, so they share the same admission
+# gate and lock as full releases. Never let this historical route bypass a
+# failed or unfinished image-cleanup observation.
+if ! declare -F release_assert_cleanup_admission >/dev/null; then
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  # shellcheck disable=SC1091
+  source "$script_dir/release-state.sh"
+fi
+[[ "$workdir" == /* && "$workdir" != / && -d "$workdir" && ! -L "$workdir" &&
+   "$(realpath -e -- "$workdir")" == "$workdir" ]] || {
+  echo 'ADMIN_ASSET_HOTFIX_FAIL=invalid_workdir'; exit 1;
+}
+lock_root="$workdir/.codex-v2-release"
+if [[ ! -e "$lock_root" && ! -L "$lock_root" ]]; then
+  mkdir -m 700 -- "$lock_root"
+fi
+[[ -d "$lock_root" && ! -L "$lock_root" &&
+   "$(realpath -e -- "$lock_root")" == "$lock_root" &&
+   "$(stat -Lc '%u:%a' -- "$lock_root")" == "$EUID:700" ]] || {
+  echo 'ADMIN_ASSET_HOTFIX_FAIL=invalid_lock_root'; exit 1;
+}
+lock_file="$lock_root/deploy.lock"
+if [[ ! -e "$lock_file" && ! -L "$lock_file" ]]; then
+  (umask 077; set -o noclobber; : > "$lock_file") || {
+    echo 'ADMIN_ASSET_HOTFIX_FAIL=lock_create_failed'; exit 1;
+  }
+fi
+[[ -f "$lock_file" && ! -L "$lock_file" &&
+   "$(stat -Lc '%u:%a:%h' -- "$lock_file")" == "$EUID:600:1" ]] || {
+  echo 'ADMIN_ASSET_HOTFIX_FAIL=invalid_deploy_lock'; exit 1;
+}
+exec 9<>"$lock_file"
+flock -n 9 || { echo 'ADMIN_ASSET_HOTFIX_FAIL=deployment_locked'; exit 1; }
+release_assert_cleanup_admission "$workdir"
+# Discovery before obtaining the lock is not authoritative for a mutation.
+xboard_find_compose_anchor && xboard_find_caddy_upstream &&
+  xboard_resolve_active_runtime "$XBOARD_ACTIVE_PORT" || {
+    echo 'ADMIN_ASSET_HOTFIX_FAIL=post_lock_discovery_failed'; exit 1;
+  }
+[[ "$XBOARD_ANCHOR_WORKDIR" == "$workdir" ]] || {
+  echo 'ADMIN_ASSET_HOTFIX_FAIL=post_lock_workdir_changed'; exit 1;
+}
+active=$XBOARD_ACTIVE_WEB
+active_port=$XBOARD_ACTIVE_PORT
+
 hotfix_root="$workdir/.codex-admin-hotfix"
 hotfix_dir="$hotfix_root/$HOTFIX_ID"
 case "$hotfix_dir" in

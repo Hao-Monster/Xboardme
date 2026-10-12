@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Authentication responses and temporary credentials must never enter xtrace or
+# the checkout/artifacts. Login still updates the dedicated account's last login
+# and invokes configured hooks; operational review of those hooks is required.
+set +x
+umask 077
 
 : "${DEPLOY_HOST:?DEPLOY_HOST is required}"
 : "${DEPLOY_PORT:?DEPLOY_PORT is required}"
@@ -79,19 +84,122 @@ fi
 }
 ((TARGET_PORT >= 1 && TARGET_PORT <= 65535))
 
+command -v setsid >/dev/null
+command -v timeout >/dev/null
+tunnel_timeout_seconds=${SMOKE_TIMEOUT_SECONDS:-300}
+[[ "$tunnel_timeout_seconds" =~ ^[0-9]+$ ]] && \
+  ((tunnel_timeout_seconds >= 1 && tunnel_timeout_seconds <= 900)) || {
+    echo 'Invalid smoke tunnel lifetime.' >&2
+    exit 2
+  }
+tunnel_timeout_seconds=$((tunnel_timeout_seconds + 15))
 asset_work_dir=$(mktemp -d)
-bash "$ssh_with_password" -N \
+tunnel_pid=''
+login_started=false
+login_started_at=''
+login_status=''
+smoke_passed=false
+auth_header="$asset_work_dir/auth.header"
+login_response="$asset_work_dir/login.json"
+
+smoke_api_curl() {
+  # Never inherit a curlrc proxy/redirect/debug setting or send this token to a
+  # public-origin fallback. Only the original loopback tunnel is authenticated.
+  [[ -n "$tunnel_pid" ]] && kill -0 "$tunnel_pid" 2>/dev/null || return 1
+  curl --disable --noproxy '*' --silent --show-error \
+    --connect-timeout 3 --max-time 30 "$@"
+}
+
+capture_smoke_session() {
+  local token
+  [[ -s "$login_response" ]] || return 1
+  token=$(jq -er '.data.auth_data | strings | select(test("^Bearer [A-Za-z0-9._~-]{40,}$"))' \
+    "$login_response" 2>/dev/null) || return 1
+  printf 'Authorization: %s\n' "$token" > "$auth_header"
+}
+
+cleanup_smoke() {
+  local original_status=$1
+  local cleanup_status=NOT_CREATED
+  local reason=''
+  local revoke_status=''
+  local check_status=''
+  local workflow_run=${GITHUB_RUN_ID:-local}
+  local workflow_attempt=${GITHUB_RUN_ATTEMPT:-local}
+  trap - EXIT
+  trap '' HUP INT TERM
+  set +e
+
+  # Capture a token even if a successful login is followed by invalid role data,
+  # a later assertion failure, or interrupted response-status processing.
+  if [[ -s "$auth_header" ]] || capture_smoke_session; then
+    cleanup_status=INCOMPLETE
+    reason=revoke_request_failed
+    if revoke_status=$(smoke_api_curl --max-time 5 \
+      --output "$asset_work_dir/logout.json" --write-out '%{http_code}' \
+      --request POST --header "@$auth_header" \
+      'http://127.0.0.1:17001/api/v1/user/logout'); then
+      if [[ "$revoke_status" == 200 ]] && \
+        jq -e '(.status == "success") and (.data == true)' "$asset_work_dir/logout.json" >/dev/null 2>&1; then
+        reason=revocation_not_verified
+        if check_status=$(smoke_api_curl --max-time 5 \
+          --output "$asset_work_dir/logged-out.json" --write-out '%{http_code}' \
+          --header "@$auth_header" \
+          'http://127.0.0.1:17001/api/v1/user/checkLogin') && \
+          [[ "$check_status" == 401 || "$check_status" == 403 ]]; then
+          cleanup_status=PASS
+          reason=''
+        fi
+      fi
+    fi
+  elif [[ "$login_started" == true ]]; then
+    case "$login_status" in
+      400|401|403|422|429) ;;
+      *) cleanup_status=INCOMPLETE; reason=login_token_unavailable ;;
+    esac
+  fi
+  printf 'DISTRIBUTOR_SMOKE_SESSION_CLEANUP=%s%s\n' "$cleanup_status" "${reason:+ reason=$reason}"
+  if [[ "$cleanup_status" == INCOMPLETE ]]; then
+    [[ "$workflow_run" =~ ^[0-9]+$ ]] || workflow_run=local
+    [[ "$workflow_attempt" =~ ^[0-9]+$ ]] || workflow_attempt=local
+    printf 'DISTRIBUTOR_SMOKE_SESSION_RECONCILE run_id=%s attempt=%s login_started_at=%s original_status=%s\n' \
+      "$workflow_run" "$workflow_attempt" "${login_started_at:-not_started}" "$original_status" >&2
+  fi
+  if [[ "$cleanup_status" == INCOMPLETE && "$original_status" == 0 ]]; then
+    original_status=1
+  fi
+  # A lost connection, SIGKILL, or lost runner cannot guarantee remote revocation.
+  # Do not compensate by logging out other sessions or revealing the token.
+  if [[ -n "$tunnel_pid" ]]; then
+    kill "$tunnel_pid" >/dev/null 2>&1 || true
+    # The isolated timeout supervisor escalates its entire process group after
+    # two seconds, including a transport which ignores TERM.
+    wait "$tunnel_pid" 2>/dev/null || true
+  fi
+  if ! rm -rf -- "$asset_work_dir"; then
+    echo 'DISTRIBUTOR_SMOKE_PRIVATE_FILES_CLEANUP=INCOMPLETE' >&2
+    [[ "$original_status" != 0 ]] || original_status=1
+  fi
+  if [[ "$original_status" == 0 && "$smoke_passed" == true ]]; then
+    echo 'Distributor production smoke test passed.'
+  fi
+  exit "$original_status"
+}
+trap 'cleanup_smoke $?' EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
+# Keep the tunnel alive while the bounded runner sends TERM to the smoke process
+# group. EXIT revokes the new session before it stops this isolated transport.
+# Its own deadline also bounds a leftover tunnel if the parent is forcibly killed.
+setsid timeout --signal=TERM --kill-after=2s "${tunnel_timeout_seconds}s" \
+  bash "$ssh_with_password" -N \
   -p "$DEPLOY_PORT" \
   -o ExitOnForwardFailure=yes \
   -L "17001:127.0.0.1:$TARGET_PORT" \
   "$DEPLOY_USER@$DEPLOY_HOST" &
 tunnel_pid=$!
-cleanup_tunnel() {
-  kill "$tunnel_pid" >/dev/null 2>&1 || true
-  wait "$tunnel_pid" 2>/dev/null || true
-  rm -rf -- "$asset_work_dir"
-}
-trap cleanup_tunnel EXIT
 
 required_theme_assets=(
   auth-session.js
@@ -188,49 +296,54 @@ if [[ "$SMOKE_VALIDATION_MODE" == release ]]; then
   verify_release_assets 'http://127.0.0.1:17001' candidate
 fi
 
-login_status=$(curl --silent --show-error \
-  --output login.json --write-out '%{http_code}' \
+printf '%s' "$DISTRIBUTOR_EMAIL" > "$asset_work_dir/login.email"
+printf '%s' "$DISTRIBUTOR_PASSWORD" > "$asset_work_dir/login.password"
+login_started=true
+login_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+login_status=$(smoke_api_curl \
+  --output "$login_response" --write-out '%{http_code}' \
   --request POST 'http://127.0.0.1:17001/api/v1/passport/auth/login' \
-  --data-urlencode "email=$DISTRIBUTOR_EMAIL" \
-  --data-urlencode "password=$DISTRIBUTOR_PASSWORD")
+  --data-urlencode "email@$asset_work_dir/login.email" \
+  --data-urlencode "password@$asset_work_dir/login.password")
+capture_smoke_session || true
 test "$login_status" = '200'
-jq -e '(.status == "success") and (.data.is_distributor == true) and (.data.auth_data | type == "string")' login.json >/dev/null
-auth_data=$(jq -r '.data.auth_data' login.json)
+jq -e '(.status == "success") and (.data.is_distributor == true) and (.data.auth_data | type == "string")' "$login_response" >/dev/null
+test -s "$auth_header"
 
-info_status=$(curl --silent --show-error \
-  --output info.json --write-out '%{http_code}' \
-  --header "Authorization: $auth_data" \
+info_status=$(smoke_api_curl \
+  --output "$asset_work_dir/info.json" --write-out '%{http_code}' \
+  --header "@$auth_header" \
   'http://127.0.0.1:17001/api/v1/user/info')
 test "$info_status" = '200'
-jq -e '(.status == "success") and (.data.is_distributor == true) and (.data | has("distributor_name"))' info.json >/dev/null
+jq -e '(.status == "success") and (.data.is_distributor == true) and (.data | has("distributor_name"))' "$asset_work_dir/info.json" >/dev/null
 
-plans_status=$(curl --silent --show-error \
-  --output plans.json --write-out '%{http_code}' \
-  --header "Authorization: $auth_data" \
+plans_status=$(smoke_api_curl \
+  --output "$asset_work_dir/plans.json" --write-out '%{http_code}' \
+  --header "@$auth_header" \
   'http://127.0.0.1:17001/api/v1/user/plan/fetch')
 test "$plans_status" = '200'
 
-orders_status=$(curl --silent --show-error \
-  --output orders.json --write-out '%{http_code}' \
-  --header "Authorization: $auth_data" \
+orders_status=$(smoke_api_curl \
+  --output "$asset_work_dir/orders.json" --write-out '%{http_code}' \
+  --header "@$auth_header" \
   'http://127.0.0.1:17001/api/v1/user/order/fetch')
 test "$orders_status" = '200'
-jq -e 'all(.data[]; has("remark") and has("order_type_label") and has("subscription_trade_no"))' orders.json >/dev/null
+jq -e 'all(.data[]; has("remark") and has("order_type_label") and has("subscription_trade_no"))' "$asset_work_dir/orders.json" >/dev/null
 
-knowledge_status=$(curl --silent --show-error \
-  --output knowledge.json --write-out '%{http_code}' \
-  --header "Authorization: $auth_data" \
+knowledge_status=$(smoke_api_curl \
+  --output "$asset_work_dir/knowledge.json" --write-out '%{http_code}' \
+  --header "@$auth_header" \
   'http://127.0.0.1:17001/api/v1/user/knowledge/fetch?language=zh-CN')
 test "$knowledge_status" = '200'
-jq -e '.status == "success"' knowledge.json >/dev/null
+jq -e '.status == "success"' "$asset_work_dir/knowledge.json" >/dev/null
 
-clients_status=$(curl --silent --show-error \
-  --output clients.json --write-out '%{http_code}' \
-  --header "Authorization: $auth_data" \
+clients_status=$(smoke_api_curl \
+  --output "$asset_work_dir/clients.json" --write-out '%{http_code}' \
+  --header "@$auth_header" \
   'http://127.0.0.1:17001/api/v1/user/client-catalog')
 test "$clients_status" = '200'
 jq -e '((.data[0:4] | map(.id)) == ["karing", "happ", "clash-mi", "koalaclash"])
-  and all(.data[]; all(.downloads[]; has("download_url") and has("cloud_url") and has("tutorial_url")))' clients.json >/dev/null
+  and all(.data[]; all(.downloads[]; has("download_url") and has("cloud_url") and has("tutorial_url")))' "$asset_work_dir/clients.json" >/dev/null
 
 curl --silent --show-error --fail --output admin-client-catalog.js \
   'http://127.0.0.1:17001/assets/admin-client-catalog.js'
@@ -282,30 +395,30 @@ curl --silent --show-error --fail --output distributor-message-guard.js \
   "http://127.0.0.1:17001/theme/Xboard/assets/distributor-message-guard.js$asset_version_query"
 grep -q 'DISTRIBUTOR_ACCESS_DENIED' distributor-message-guard.js
 
-order_count=$(jq '.data | length' orders.json)
-export_status=$(curl --silent --show-error \
-  --dump-header export.headers \
-  --output distributor-orders.xlsx --write-out '%{http_code}' \
-  --header "Authorization: $auth_data" \
+order_count=$(jq '.data | length' "$asset_work_dir/orders.json")
+export_status=$(smoke_api_curl \
+  --dump-header "$asset_work_dir/export.headers" \
+  --output "$asset_work_dir/distributor-orders.xlsx" --write-out '%{http_code}' \
+  --header "@$auth_header" \
   'http://127.0.0.1:17001/api/v1/user/order/export')
 if [ "$order_count" -gt 0 ]; then
   test "$export_status" = '200'
-  grep -qi 'content-type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' export.headers
-  grep -qi 'content-disposition: attachment' export.headers
-  unzip -t distributor-orders.xlsx >/dev/null
-  unzip -p distributor-orders.xlsx xl/worksheets/sheet1.xml > distributor-orders-sheet.xml
-  grep -q '备注' distributor-orders-sheet.xml
+  grep -qi 'content-type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' "$asset_work_dir/export.headers"
+  grep -qi 'content-disposition: attachment' "$asset_work_dir/export.headers"
+  unzip -t "$asset_work_dir/distributor-orders.xlsx" >/dev/null
+  unzip -p "$asset_work_dir/distributor-orders.xlsx" xl/worksheets/sheet1.xml > "$asset_work_dir/distributor-orders-sheet.xml"
+  grep -q '备注' "$asset_work_dir/distributor-orders-sheet.xml"
 else
   test "$export_status" = '422'
-  jq -e '(.status == "fail") and (.message == "当前筛选条件下没有可导出的订单")' distributor-orders.xlsx >/dev/null
+  jq -e '(.status == "fail") and (.message == "当前筛选条件下没有可导出的订单")' "$asset_work_dir/distributor-orders.xlsx" >/dev/null
 fi
 
-restricted_status=$(curl --silent --show-error \
-  --output restricted.json --write-out '%{http_code}' \
-  --header "Authorization: $auth_data" \
+restricted_status=$(smoke_api_curl \
+  --output "$asset_work_dir/restricted.json" --write-out '%{http_code}' \
+  --header "@$auth_header" \
   'http://127.0.0.1:17001/api/v1/user/getSubscribe')
 test "$restricted_status" = '403'
-jq -e '.message == "分销商账号无权访问该功能"' restricted.json >/dev/null
+jq -e '.message == "分销商账号无权访问该功能"' "$asset_work_dir/restricted.json" >/dev/null
 
 if [[ "$SMOKE_VERIFY_PUBLIC_ROUTE" == true ]]; then
   public_url=$(bash "$ssh_with_password" -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -334,4 +447,4 @@ if [[ "$SMOKE_VERIFY_PUBLIC_ROUTE" == true ]]; then
   fi
 fi
 
-echo 'Distributor production smoke test passed.'
+smoke_passed=true

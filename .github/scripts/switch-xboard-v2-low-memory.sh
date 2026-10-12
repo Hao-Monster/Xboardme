@@ -14,6 +14,7 @@ fi
 
 v2_require_tools
 v2_open_release
+release_assert_cleanup_admission "$V2_WORKDIR"
 [[ "$TRAFFIC_STATE" == ready ]] || v2_fail "invalid_switch_state:$TRAFFIC_STATE"
 for service in redis web ws edge horizon scheduler; do
   v2_service_healthy "$service" || v2_fail "pre_switch_service_unhealthy:$service"

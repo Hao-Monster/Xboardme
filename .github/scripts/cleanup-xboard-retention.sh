@@ -1,261 +1,249 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# This script is concatenated after production-runtime-discovery.sh,
-# release-state.sh, and audit-xboard-retention.sh in one locked SSH process.
-
-: "${EXPECTED_RETENTION_RESOURCE_FINGERPRINT:?EXPECTED_RETENTION_RESOURCE_FINGERPRINT is required}"
-: "${EXPECTED_ACTIVE_RELEASE_ID:?EXPECTED_ACTIVE_RELEASE_ID is required}"
-: "${EXPECTED_ACTIVE_RELEASE_SHA:?EXPECTED_ACTIVE_RELEASE_SHA is required}"
+# Stream after discovery, release-state, retention-safety and the locked audit.
+# A workflow-reviewed exact list is mandatory. This executor never adopts
+# candidates from a later Docker listing, including after a partial failure.
+: "${EXPECTED_RETENTION_RESOURCE_FINGERPRINT:?required}"
+: "${EXPECTED_ACTIVE_RELEASE_ID:?required}"
+: "${EXPECTED_ACTIVE_RELEASE_SHA:?required}"
 : "${RETENTION_IMAGE_MIN_AGE_SECONDS:=604800}"
+: "${RETENTION_MAX_OBJECTS_PER_RUN:=1}"
+: "${RETENTION_OBSERVE_SECONDS:=60}"
 
-cleanup_fail() {
-  echo "RETENTION_CLEANUP_FAIL=$1" >&2
-  return 1
-}
+cleanup_fail() { echo "RETENTION_CLEANUP_FAIL=$1" >&2; return 1; }
 
 [[ "$EXPECTED_RETENTION_RESOURCE_FINGERPRINT" =~ ^[a-f0-9]{64}$ ]] || cleanup_fail invalid_resource_fingerprint
 [[ "$EXPECTED_ACTIVE_RELEASE_ID" =~ ^[0-9]+-[0-9]+$ ]] || cleanup_fail invalid_release_id
 [[ "$EXPECTED_ACTIVE_RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]] || cleanup_fail invalid_release_sha
 [[ "$RETENTION_IMAGE_MIN_AGE_SECONDS" =~ ^[0-9]+$ ]] || cleanup_fail invalid_image_min_age
 ((RETENTION_IMAGE_MIN_AGE_SECONDS >= 604800)) || cleanup_fail image_min_age_below_seven_days
-[[ "${RETENTION_REQUIRE_FINALIZED:-false}" == true ]] || cleanup_fail finalized_audit_required
-[[ "${RETENTION_ACQUIRE_LOCK:-false}" == true ]] || cleanup_fail deployment_lock_required
-[[ "${active_release_id:-}" == "$EXPECTED_ACTIVE_RELEASE_ID" ]] || cleanup_fail active_release_id_mismatch
-[[ "${active_revision:-}" == "$EXPECTED_ACTIVE_RELEASE_SHA" ]] || cleanup_fail active_release_sha_mismatch
-[[ "${active_project:-}" == "xboard-v2-$EXPECTED_ACTIVE_RELEASE_ID" ]] || cleanup_fail active_project_mismatch
-[[ "${active_traffic_state:-}" == finalized ]] || cleanup_fail active_release_not_finalized
-[[ "${active_rollback_supported:-}" == false ]] || cleanup_fail rollback_support_not_closed
-[[ -z "${direct_previous_project:-}" ]] || cleanup_fail direct_rollback_still_present
-[[ -n "${active_state_file:-}" && -f "$active_state_file" ]] || cleanup_fail active_state_missing
-[[ -n "${inventory:-}" && -f "$inventory" ]] || cleanup_fail audit_inventory_missing
-
-for tool in caddy date docker grep jq sed sort stat tr; do
+[[ "$RETENTION_MAX_OBJECTS_PER_RUN" =~ ^[1-5]$ ]] || cleanup_fail invalid_batch_limit
+[[ "$RETENTION_OBSERVE_SECONDS" =~ ^[0-9]+$ ]] || cleanup_fail invalid_observation_seconds
+((RETENTION_OBSERVE_SECONDS >= 60 && RETENTION_OBSERVE_SECONDS <= 300)) || cleanup_fail invalid_observation_seconds
+[[ "${RETENTION_REQUIRE_FINALIZED:-false}" == true && "${RETENTION_ACQUIRE_LOCK:-false}" == true ]] || cleanup_fail locked_finalized_audit_required
+[[ "${active_release_id:-}" == "$EXPECTED_ACTIVE_RELEASE_ID" && "${active_revision:-}" == "$EXPECTED_ACTIVE_RELEASE_SHA" &&
+   "${active_project:-}" == "xboard-v2-$EXPECTED_ACTIVE_RELEASE_ID" ]] || cleanup_fail active_identity_mismatch
+[[ "${active_traffic_state:-}" == finalized && "${active_rollback_supported:-}" == false &&
+   -z "${direct_previous_project:-}" ]] || cleanup_fail rollback_support_not_closed
+[[ -f "${active_state_file:-}" && ! -L "$active_state_file" && -f "${retention_snapshot_file:-}" ]] || cleanup_fail audit_context_missing
+release_assert_cleanup_admission "$workdir"
+for tool in base64 date docker jq mktemp sha256sum sleep sort timeout; do
   command -v "$tool" >/dev/null || cleanup_fail "missing_tool:$tool"
 done
+declare -F release_state_set_many >/dev/null || cleanup_fail atomic_state_helper_missing
 
-recorded_cleanup_fingerprint=$(release_state_get_optional "$active_state_file" retention_cleanup_source_fingerprint)
-recorded_cleanup_status=$(release_state_get_optional "$active_state_file" retention_cleanup_status)
-if [[ -z "$recorded_cleanup_fingerprint" ]]; then
-  [[ "${resource_fingerprint:-}" == "$EXPECTED_RETENTION_RESOURCE_FINGERPRINT" ]] || cleanup_fail resource_fingerprint_mismatch
-else
-  [[ "$recorded_cleanup_fingerprint" == "$EXPECTED_RETENTION_RESOURCE_FINGERPRINT" ]] || cleanup_fail cleanup_retry_fingerprint_mismatch
-fi
-case "$recorded_cleanup_status" in
-  ''|running|failed|complete) ;;
-  *) cleanup_fail invalid_cleanup_retry_status ;;
-esac
-if [[ "$recorded_cleanup_status" == complete ]]; then
-  echo "RETENTION_CLEANUP=PASS id=$EXPECTED_ACTIVE_RELEASE_ID result=already_complete volumes=preserved directories=preserved"
-  exit 0
-fi
+cleanup_dir=$(dirname -- "$active_state_file")
+[[ "$(realpath -e -- "$cleanup_dir")" == "$workdir/.codex-v2-release/$EXPECTED_ACTIVE_RELEASE_ID" ]] || cleanup_fail unsafe_plan_directory
+plan_file="$cleanup_dir/retention-cleanup-plan.json"
+progress_file="$cleanup_dir/retention-cleanup-progress.json"
+review_file=$(mktemp "$cleanup_dir/retention-review.XXXXXX")
+current_file=$(mktemp "$cleanup_dir/retention-current.XXXXXX")
+chmod 600 "$review_file" "$current_file"
+cleanup_started=false
 
-cleanup_state_started=false
-cleanup_on_error() {
+cleanup_finish() {
   local status=$?
-  trap - ERR
-  if [[ "$cleanup_state_started" == true ]]; then
-    release_state_set "$active_state_file" retention_cleanup_status failed || true
-    release_state_set "$active_state_file" retention_cleanup_failed_at "$(date -u +%FT%TZ)" || true
+  trap - EXIT ERR HUP INT TERM
+  if [[ "$cleanup_started" == true && "$status" != 0 ]]; then
+    release_state_set_many "$active_state_file" retention_cleanup_status failed \
+      retention_cleanup_failed_at "$(date -u +%FT%TZ)" || true
+    # This is only a read-only identity check. Workflow post-verification also
+    # runs after failure; public/DB acceptance is not inferred from this result.
+    if live=$(retention_live_protection) &&
+       [[ "$(printf '%s\n' "$live" | retention_hash)" == "$baseline_protection_hash" ]]; then
+      echo 'RETENTION_FAILURE_PROTECTION=PASS'
+    else
+      echo 'RETENTION_FAILURE_PROTECTION=FAIL' >&2
+    fi
+    [[ ! -f "$progress_file" ]] || jq -c '{plan_sha256,attempts,completed}' "$progress_file"
   fi
+  rm -f -- "$review_file" "$current_file" "${inventory:-}" "${retention_snapshot_file:-}"
   exit "$status"
 }
-trap cleanup_on_error ERR
+trap cleanup_finish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-if [[ -z "$recorded_cleanup_fingerprint" ]]; then
-  release_state_set "$active_state_file" retention_cleanup_source_fingerprint "$EXPECTED_RETENTION_RESOURCE_FINGERPRINT"
-  release_state_set "$active_state_file" retention_cleanup_workflow_sha "$EXPECTED_WORKFLOW_SHA"
+retention_load_review "$review_file" retention_cleanup || cleanup_fail reviewed_manifest_required
+baseline_protection_hash=$(jq -r .protection_fingerprint "$review_file")
+live=$(retention_live_protection) || cleanup_fail live_protection_invalid
+[[ "$(printf '%s\n' "$live" | retention_hash)" == "$baseline_protection_hash" ]] || cleanup_fail live_protection_changed
+
+recorded_plan_hash=$(release_state_get_optional "$active_state_file" retention_cleanup_plan_sha256)
+recorded_status=$(release_state_get_optional "$active_state_file" retention_cleanup_status)
+case "$recorded_status" in ''|running|failed|pending_batch|complete) ;; *) cleanup_fail invalid_cleanup_retry_status ;; esac
+
+if [[ -z "$recorded_plan_hash" ]]; then
+  # Old v1 attempts lack an exact allowlist and cannot be resumed safely.
+  [[ -z "$(release_state_get_optional "$active_state_file" retention_cleanup_source_fingerprint)" ]] || cleanup_fail legacy_retry_plan_missing
+  [[ "${resource_fingerprint:-}" == "$EXPECTED_RETENTION_RESOURCE_FINGERPRINT" ]] || cleanup_fail resource_fingerprint_mismatch
+  [[ ! -e "$plan_file" && ! -e "$progress_file" && ! -L "$plan_file" && ! -L "$progress_file" ]] || cleanup_fail unbound_cleanup_evidence
+  retention_verify_reviewed_containers "$review_file" "$(jq -r '.containers[].id' "$review_file")" || cleanup_fail container_review_mismatch
+  containers=$(jq -c --slurpfile review "$review_file" '[.containers[] | . as $c | select(any($review[0].containers[];.id==$c.id))]' "$retention_snapshot_file")
+  images=$(jq -c --slurpfile review "$review_file" '[.images[] | . as $i | select(any($review[0].images[];.id==$i.id))]' "$retention_snapshot_file")
+  [[ $(jq length <<< "$containers") == $(jq '.containers|length' "$review_file") &&
+     $(jq length <<< "$images") == $(jq '.images|length' "$review_file") ]] || cleanup_fail reviewed_object_missing
+  now=$(date -u +%s)
+  while IFS= read -r selected; do
+    id=$(jq -r .id <<< "$selected")
+    expected_hash=$(jq -r --arg id "$id" '.images[]|select(.id==$id)|.snapshot_sha256' "$review_file")
+    [[ "$(printf '%s\n' "$selected" | retention_hash)" == "$expected_hash" ]] || cleanup_fail "image_review_mismatch:$id"
+    retention_image_eligible "$selected" "$review_file" "$now" "$RETENTION_IMAGE_MIN_AGE_SECONDS" || cleanup_fail "image_not_eligible:$id"
+    jq -e --arg id "$id" 'all(.containers[];.image_id!=$id)' "$retention_snapshot_file" >/dev/null || cleanup_fail "reviewed_image_referenced:$id"
+  done < <(jq -cS '.[]' <<< "$images")
+  jq -e --argjson protection "$live" 'all(.[];.id as $id | all($protection.containers[];.id!=$id))' \
+    <<< "$containers" >/dev/null || cleanup_fail protected_container_in_plan
+  temporary=$(mktemp "$cleanup_dir/retention-plan.XXXXXX")
+  jq -cnS --slurpfile review "$review_file" --slurpfile inventory_snapshot "$retention_snapshot_file" \
+    --arg manifest_sha "$EXPECTED_RETENTION_REVIEW_SHA256" --arg workflow_sha "$EXPECTED_WORKFLOW_SHA" \
+    --argjson protection "$live" --argjson containers "$containers" --argjson images "$images" \
+    '{schema_version:1,manifest_sha256:$manifest_sha,workflow_sha:$workflow_sha,review:$review[0],
+      inventory:$inventory_snapshot[0],protection:$protection,containers:$containers,images:$images}' > "$temporary"
+  chmod 600 "$temporary"
+  mv -- "$temporary" "$plan_file"
+  recorded_plan_hash=$(retention_hash < "$plan_file")
+  temporary=$(mktemp "$cleanup_dir/retention-progress.XXXXXX")
+  jq -cnS --arg hash "$recorded_plan_hash" '{schema_version:1,plan_sha256:$hash,attempts:[],completed:[]}' > "$temporary"
+  chmod 600 "$temporary"
+  mv -- "$temporary" "$progress_file"
+  release_state_set_many "$active_state_file" retention_cleanup_plan_sha256 "$recorded_plan_hash" \
+    retention_cleanup_source_fingerprint "$EXPECTED_RETENTION_RESOURCE_FINGERPRINT" \
+    retention_cleanup_review_sha256 "$EXPECTED_RETENTION_REVIEW_SHA256" retention_cleanup_workflow_sha "$EXPECTED_WORKFLOW_SHA" \
+    retention_cleanup_status running
+else
+  [[ -f "$plan_file" && ! -L "$plan_file" && -f "$progress_file" && ! -L "$progress_file" ]] || cleanup_fail retry_plan_missing
+  [[ "$(retention_hash < "$plan_file")" == "$recorded_plan_hash" ]] || cleanup_fail retry_plan_integrity_mismatch
+  jq -e --arg manifest "$EXPECTED_RETENTION_REVIEW_SHA256" --arg fingerprint "$EXPECTED_RETENTION_RESOURCE_FINGERPRINT" \
+    --arg workflow "$EXPECTED_WORKFLOW_SHA" '.manifest_sha256==$manifest and .workflow_sha==$workflow and
+      .review.resource_fingerprint==$fingerprint' "$plan_file" >/dev/null || cleanup_fail retry_approval_changed
 fi
-release_state_set "$active_state_file" retention_cleanup_status running
-release_state_set "$active_state_file" retention_cleanup_started_at "$(date -u +%FT%TZ)"
-cleanup_state_started=true
+jq -e --arg hash "$recorded_plan_hash" --slurpfile plan "$plan_file" '
+  . as $progress | .schema_version==1 and .plan_sha256==$hash and
+  (.attempts|type=="array") and (.completed|type=="array") and
+  (.attempts|length== (unique_by(.kind,.id)|length)) and
+  (.completed|length== (unique_by(.kind,.id)|length)) and
+  all(.attempts[]; . as $entry |
+    ((.kind=="container" and any($plan[0].containers[];.id==$entry.id)) or
+     (.kind=="image" and any($plan[0].images[];.id==$entry.id)))) and
+  all(.completed[]; . as $entry | any($progress.attempts[];.==$entry))
+' "$progress_file" >/dev/null || cleanup_fail invalid_progress_ledger
 
-baseline_active_id=$active_container
-baseline_active_upstream=$XBOARD_ACTIVE_UPSTREAM
-baseline_app_data_id=$active_app_data_id
-baseline_redis_volume=$active_redis_volume
-anchor_id=$(docker inspect -f '{{.Id}}' "$XBOARD_ANCHOR_CONTAINER")
-anchor_image_id=$(docker inspect -f '{{.Image}}' "$anchor_id")
+cleanup_check() {
+  local actual entry candidate_id project history_file
+  actual=$(retention_live_protection) || cleanup_fail live_protection_invalid
+  [[ "$(printf '%s\n' "$actual" | retention_hash)" == "$baseline_protection_hash" ]] || cleanup_fail live_protection_changed
+  retention_all_snapshots > "$current_file" || cleanup_fail live_inventory_failed
+  retention_inventory_within_plan "$plan_file" "$current_file" || cleanup_fail inventory_outside_frozen_plan
+  # Missing/untagged objects are idempotent only after a durable deletion intent.
+  jq -e --slurpfile live "$current_file" --slurpfile progress "$progress_file" '
+    all(.containers[]; . as $old |
+      any($live[0].containers[];.id==$old.id) or any($progress[0].attempts[];.kind=="container" and .id==$old.id)) and
+    all(.images[]; . as $old |
+      any($live[0].images[];.==$old) or any($progress[0].attempts[];.kind=="image" and .id==$old.id))
+  ' "$plan_file" >/dev/null || cleanup_fail unaccounted_resource_disappearance
+  jq -e --slurpfile live "$current_file" 'all(.completed[]; . as $entry |
+    if .kind=="container" then all($live[0].containers[];.id!=$entry.id)
+    else all($live[0].images[];.id!=$entry.id) end)' "$progress_file" >/dev/null || cleanup_fail completed_object_present
+  # A later run must not reuse an old manual history review after the relevant
+  # release state has changed, even if Docker labels happen to stay identical.
+  while IFS= read -r entry; do
+    candidate_id=$(jq -r .id <<< "$entry")
+    project=$(jq -r --arg id "$candidate_id" '.containers[]|select(.id==$id)|.project' "$current_file")
+    [[ -n "$project" ]] || continue
+    [[ "$project" =~ ^xboard-v2-([0-9]+-[0-9]+)$ ]] || cleanup_fail candidate_history_project_invalid
+    history_file="$workdir/.codex-v2-release/${BASH_REMATCH[1]}/state.json"
+    [[ -f "$history_file" && ! -L "$history_file" && "$(realpath -e -- "$history_file")" == "$history_file" &&
+       "$(retention_hash < "$history_file")" == "$(jq -r .evidence.release_state_sha256 <<< "$entry")" ]] || cleanup_fail candidate_history_changed
+  done < <(jq -c '.review.containers[]' "$plan_file")
+}
 
-retention_field() {
-  local line=$1 key=$2
-  if [[ "$line" =~ (^|[[:space:]])${key}=([^[:space:]]+) ]]; then
-    printf '%s\n' "${BASH_REMATCH[2]}"
+cleanup_progress() {
+  local field=$1 kind=$2 id=$3 temporary
+  temporary=$(mktemp "$cleanup_dir/retention-progress.XXXXXX")
+  if ! jq -cS --arg field "$field" --arg kind "$kind" --arg id "$id" \
+    '.[$field] = ((.[$field]+[{kind:$kind,id:$id}])|unique_by(.kind,.id))' "$progress_file" > "$temporary"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$progress_file"
+}
+
+cleanup_check
+cleanup_started=true
+release_state_set_many "$active_state_file" retention_cleanup_status running retention_cleanup_started_at "$(date -u +%FT%TZ)"
+processed=0
+processed_containers=0
+limit=$RETENTION_MAX_OBJECTS_PER_RUN
+# First batch is a single canary, regardless of a larger requested ceiling.
+if [[ $(jq '.attempts|length' "$progress_file") == 0 ]]; then limit=1; fi
+
+while IFS= read -r selected; do
+  ((processed < limit && processed_containers < 2)) || break
+  id=$(jq -r .id <<< "$selected")
+  jq -e --arg id "$id" 'any(.completed[];.kind=="container" and .id==$id)' "$progress_file" >/dev/null && continue
+  cleanup_check
+  if jq -e --arg id "$id" 'any(.containers[];.id==$id)' "$current_file" >/dev/null; then
+    cleanup_progress attempts container "$id"
+    timeout --signal=TERM --kill-after=10s 90s docker container rm "$id" >/dev/null
+    cleanup_check
+    jq -e --arg id "$id" 'all(.containers[];.id!=$id)' "$current_file" >/dev/null || cleanup_fail container_still_present
+    echo "RETENTION_CLEANUP_CONTAINER id=$id result=removed force=false volume_removal=false"
   else
-    cleanup_fail "audit_field_missing:$key"
+    echo "RETENTION_CLEANUP_CONTAINER id=$id result=absent_after_recorded_intent"
   fi
-}
+  cleanup_progress completed container "$id"
+  ((processed+=1,processed_containers+=1))
+done < <(jq -cS '.containers[]' "$plan_file")
 
-retention_current_container_row() {
-  docker inspect "$1" | jq -r '.[0] | [
-    (.Name | ltrimstr("/")),
-    .State.Status,
-    (.Config.Labels["org.opencontainers.image.revision"] // "none"),
-    (.Config.Labels["com.docker.compose.project"] // "none"),
-    (.Config.Labels["com.docker.compose.service"] // "none"),
-    (.Config.Labels["codex.xboard.v2.release"] // "none"),
-    (.Image // ""),
-    ([.NetworkSettings.Ports // {} | to_entries[] | .value[]? | ((.HostIp // "") + ":" + (.HostPort // ""))] | join(",") | if . == "" then "none" else . end),
-    ([.Mounts[]? | ((.Type // "") + ":" + (.Destination // ""))] | sort | join(",") | if . == "" then "none" else . end)
-  ] | @tsv'
-}
-
-removed_containers=0
-removed_running_maintenance=0
-while IFS= read -r line; do
-  [[ "$line" == 'RETENTION_CONTAINER '* ]] || continue
-  classification=$(retention_field "$line" classification)
-  case "$classification" in
-    retired_v2_candidate|retired_legacy_candidate) ;;
-    *) continue ;;
-  esac
-
-  id=$(retention_field "$line" id)
-  name=$(retention_field "$line" name)
-  status=$(retention_field "$line" status)
-  revision=$(retention_field "$line" revision)
-  project=$(retention_field "$line" project)
-  service=$(retention_field "$line" service)
-  maintenance_release=$(retention_field "$line" maintenance_release)
-  image_id=$(retention_field "$line" image_id)
-  ports=$(retention_field "$line" ports)
-  mounts=$(retention_field "$line" mounts)
-
-  [[ -z "${protected_ids[$id]:-}" ]] || cleanup_fail "candidate_became_protected:$name"
-  [[ "$id" != "$baseline_active_id" && "$id" != "$anchor_id" ]] || cleanup_fail "protected_identity_in_candidates:$name"
-  docker container inspect "$id" >/dev/null 2>&1 || continue
-
-  current_row=$(retention_current_container_row "$id")
-  IFS=$'\t' read -r current_name current_status current_revision current_project current_service \
-    current_maintenance current_image current_ports current_mounts <<< "$current_row"
-  [[ "$current_name" == "$name" && "$current_status" == "$status" &&
-     "$current_revision" == "$revision" && "$current_project" == "$project" &&
-     "$current_service" == "$service" && "$current_maintenance" == "$maintenance_release" &&
-     "$current_image" == "$image_id" && "$current_ports" == "$ports" &&
-     "$current_mounts" == "$mounts" ]] || cleanup_fail "candidate_identity_changed:$name"
-
-  case "$status" in
-    exited|created) ;;
-    running)
-      [[ "$classification" == retired_v2_candidate &&
-         "$project" == none && "$service" == none &&
-         "$maintenance_release" =~ ^[0-9]+-[0-9]+$ &&
-         "$ports" =~ ^127\.0\.0\.1:([0-9]+)$ ]] || cleanup_fail "running_candidate_not_maintenance:$name"
-      candidate_port=${BASH_REMATCH[1]}
-      ((candidate_port >= 7003 && candidate_port <= 7010)) || cleanup_fail "maintenance_port_out_of_range:$name"
-      [[ "127.0.0.1:$candidate_port" != "$baseline_active_upstream" ]] || cleanup_fail "maintenance_uses_active_port:$name"
-      caddy_references=$(grep -Ec "127\\.0\\.0\\.1:${candidate_port}([^0-9]|$)" "$XBOARD_CADDY_FILE" || true)
-      [[ "$caddy_references" == 0 ]] || cleanup_fail "maintenance_referenced_by_caddy:$name"
-      docker stop --time 10 "$id" >/dev/null
-      ((removed_running_maintenance += 1))
-      ;;
-    *) cleanup_fail "candidate_status_not_removable:$name:$status" ;;
-  esac
-
-  docker container rm "$id" >/dev/null
-  docker container inspect "$id" >/dev/null 2>&1 && cleanup_fail "container_still_present:$name"
-  ((removed_containers += 1))
-  echo "RETENTION_CLEANUP_CONTAINER name=$name id=$id classification=$classification volume_removal=false"
-done < "$inventory"
-
-declare -A remaining_image_refs=()
-while IFS= read -r remaining_container; do
-  [[ -n "$remaining_container" ]] || continue
-  remaining_image=$(docker inspect -f '{{.Image}}' "$remaining_container")
-  remaining_image_refs["$remaining_image"]=$(( ${remaining_image_refs[$remaining_image]:-0} + 1 ))
-done < <(docker ps -aq --no-trunc | sort)
-
-now_epoch=$(date -u +%s)
-removed_images=0
-removed_image_bytes=0
-skipped_young_images=0
-while IFS= read -r candidate_image_id; do
-  [[ -n "$candidate_image_id" ]] || continue
-  [[ "$candidate_image_id" != "$active_image_id" && "$candidate_image_id" != "$anchor_image_id" ]] || continue
-  ((${remaining_image_refs[$candidate_image_id]:-0} == 0)) || continue
-
-  image_row=$(docker image inspect "$candidate_image_id" | jq -r '.[0] | [
-    (.Size | tostring),
-    (.Created // "none"),
-    (.Config.Labels["org.opencontainers.image.revision"] // "none"),
-    (.Config.Labels["org.opencontainers.image.source"] // "none"),
-    (.RepoTags // [] | sort | join(",") | if . == "" then "none" else . end),
-    (.RepoDigests // [] | sort | join(",") | if . == "" then "none" else . end)
-  ] | @tsv')
-  IFS=$'\t' read -r image_size image_created image_revision image_source image_tags image_digests <<< "$image_row"
-  case "$image_source" in
-    https://github.com/Hao-Monster/Xboardme)
-      [[ "$image_digests" == *'ghcr.io/hao-monster/xboardme@sha256:'* ]] || continue
-      ;;
-    https://github.com/FengHaoyun-MONSTER/Xboardme)
-      [[ "$image_digests" == *'ghcr.io/fenghaoyun-monster/xboardme@sha256:'* ]] || continue
-      ;;
-    *) continue ;;
-  esac
-  [[ "$image_revision" =~ ^[a-f0-9]{40}$ ]] || continue
-  image_references_allowed=true
-  while IFS= read -r image_reference; do
-    [[ -n "$image_reference" && "$image_reference" != none ]] || continue
-    case "$image_source" in
-      https://github.com/Hao-Monster/Xboardme)
-        case "$image_reference" in
-          ghcr.io/hao-monster/xboardme@sha256:*|ghcr.io/hao-monster/xboardme:*) ;;
-          *) image_references_allowed=false ;;
-        esac
-        ;;
-      https://github.com/FengHaoyun-MONSTER/Xboardme)
-        case "$image_reference" in
-          ghcr.io/fenghaoyun-monster/xboardme@sha256:*|ghcr.io/fenghaoyun-monster/xboardme:*|xboard-rollback@sha256:*|xboard-rollback:*) ;;
-          *) image_references_allowed=false ;;
-        esac
-        ;;
-    esac
-  done < <(printf '%s\n%s\n' "$image_tags" "$image_digests" | tr ',' '\n' | sort -u)
-  [[ "$image_references_allowed" == true ]] || continue
-  image_created_epoch=$(date -u -d "$image_created" +%s) || cleanup_fail "image_created_invalid:$candidate_image_id"
-  image_age_seconds=$((now_epoch - image_created_epoch))
-  ((image_age_seconds >= 0)) || cleanup_fail "image_created_in_future:$candidate_image_id"
-  if ((image_age_seconds < RETENTION_IMAGE_MIN_AGE_SECONDS)); then
-    ((skipped_young_images += 1))
-    continue
+while IFS= read -r selected; do
+  ((processed < limit)) || break
+  id=$(jq -r .id <<< "$selected")
+  jq -e --arg id "$id" 'any(.completed[];.kind=="image" and .id==$id)' "$progress_file" >/dev/null && continue
+  cleanup_check
+  cleanup_progress attempts image "$id"
+  # Aliases can disappear together. Inspect before EVERY reference and reject
+  # changed targets/new aliases. Names never confer deletion authority.
+  while IFS= read -r reference; do
+    cleanup_check
+    jq -e --arg id "$id" 'all(.containers[];.image_id!=$id)' "$current_file" >/dev/null || cleanup_fail image_gained_container_reference
+    if jq -e --arg id "$id" --arg reference "$reference" \
+      'any(.images[];.id==$id and ((.tags+.digests)|index($reference)!=null))' "$current_file" >/dev/null; then
+      resolved=$(docker image inspect -f '{{.Id}}' "$reference") || cleanup_fail image_reference_inspect_failed
+      [[ "$resolved" == "$id" ]] || cleanup_fail image_reference_retargeted
+      timeout --signal=TERM --kill-after=10s 90s docker image rm --no-prune "$reference" >/dev/null
+    else
+      jq -e --arg reference "$reference" 'all(.images[];((.tags+.digests)|index($reference)==null))' \
+        "$current_file" >/dev/null || cleanup_fail image_reference_retargeted
+      echo "RETENTION_CLEANUP_IMAGE_REFERENCE id=$id result=already_absent"
+    fi
+  done < <(jq -r '(.tags+.digests)|unique[]' <<< "$selected")
+  cleanup_check
+  if jq -e --arg id "$id" 'any(.images[];.id==$id)' "$current_file" >/dev/null; then
+    jq -e --arg id "$id" 'all(.containers[];.image_id!=$id) and all(.images[]|select(.id==$id);(.tags+.digests|length)==0)' \
+      "$current_file" >/dev/null || cleanup_fail image_not_unreferenced
+    timeout --signal=TERM --kill-after=10s 90s docker image rm --no-prune "$id" >/dev/null
   fi
+  cleanup_check
+  jq -e --arg id "$id" 'all(.images[];.id!=$id)' "$current_file" >/dev/null || cleanup_fail image_still_present
+  cleanup_progress completed image "$id"
+  ((processed+=1))
+  echo "RETENTION_CLEANUP_IMAGE id=$id result=removed force=false"
+done < <(jq -cS '.images[]' "$plan_file")
 
-  while IFS= read -r image_reference; do
-    [[ -n "$image_reference" && "$image_reference" != none ]] || continue
-    docker image rm "$image_reference" >/dev/null
-  done < <(printf '%s\n%s\n' "$image_tags" "$image_digests" | tr ',' '\n' | sort -u)
-  if docker image inspect "$candidate_image_id" >/dev/null 2>&1; then
-    docker image rm "$candidate_image_id" >/dev/null
-  fi
-  ((removed_images += 1))
-  ((removed_image_bytes += image_size))
-  echo "RETENTION_CLEANUP_IMAGE id=$candidate_image_id revision=$image_revision source=$image_source age_seconds=$image_age_seconds size_bytes=$image_size force=false"
-done < <(docker image ls -q --no-trunc | sort -u)
-
-xboard_find_caddy_upstream || cleanup_fail "caddy_upstream_after_cleanup:$XBOARD_DISCOVERY_ERROR"
-[[ "$XBOARD_ACTIVE_UPSTREAM" == "$baseline_active_upstream" ]] || cleanup_fail active_upstream_changed
-xboard_resolve_active_runtime "$XBOARD_ACTIVE_PORT" || cleanup_fail "active_runtime_after_cleanup:$XBOARD_DISCOVERY_ERROR"
-[[ "$(docker inspect -f '{{.Id}}' "$XBOARD_ACTIVE_WEB")" == "$baseline_active_id" ]] || cleanup_fail active_container_changed
-[[ "$(docker image inspect -f '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$active_image_id")" == "$EXPECTED_ACTIVE_RELEASE_SHA" ]] || cleanup_fail active_image_revision_changed
-[[ "$(stat -c '%d:%i' "$active_app_data_path")" == "$baseline_app_data_id" ]] || cleanup_fail active_app_data_changed
-docker volume inspect "$baseline_redis_volume" >/dev/null || cleanup_fail active_redis_volume_missing
-docker container inspect "$anchor_id" >/dev/null || cleanup_fail compose_anchor_missing
-caddy validate --config "$XBOARD_CADDY_FILE" --adapter caddyfile >/dev/null
-
-while IFS= read -r active_id; do
-  [[ -n "$active_id" ]] || continue
-  active_status=$(docker inspect -f '{{.State.Status}}' "$active_id")
-  [[ "$active_status" == running ]] || cleanup_fail "active_service_not_running:$active_id:$active_status"
-  active_health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$active_id")
-  [[ "$active_health" == none || "$active_health" == healthy ]] || cleanup_fail "active_service_unhealthy:$active_id:$active_health"
-done < <(docker ps -aq --filter "label=com.docker.compose.project=$active_project")
-
-release_state_set "$active_state_file" retention_cleanup_status complete
-release_state_set "$active_state_file" retention_cleanup_completed_at "$(date -u +%FT%TZ)"
-release_state_set "$active_state_file" retention_cleanup_removed_containers "$removed_containers"
-release_state_set "$active_state_file" retention_cleanup_removed_images "$removed_images"
-release_state_set "$active_state_file" retention_cleanup_removed_image_bytes "$removed_image_bytes"
-cleanup_state_started=false
-trap - ERR
-
-echo "RETENTION_CLEANUP=PASS id=$EXPECTED_ACTIVE_RELEASE_ID removed_containers=$removed_containers removed_running_maintenance=$removed_running_maintenance removed_images=$removed_images removed_image_bytes=$removed_image_bytes skipped_young_images=$skipped_young_images volumes=preserved directories=preserved"
+# No unattended 135-image loop: a canary or <=5 reviewed objects, <=2 stopped
+# containers, then mandatory observation. Normal login/DB smoke is separate.
+for ((observed=0;observed<RETENTION_OBSERVE_SECONDS;observed+=10)); do
+  sleep 10
+  cleanup_check
+done
+remaining=$(jq --slurpfile progress "$progress_file" \
+  '((.containers|length)+(.images|length))-($progress[0].completed|length)' "$plan_file")
+status=pending_batch
+((remaining != 0)) || status=complete
+release_state_set_many "$active_state_file" retention_cleanup_status "$status" \
+  retention_cleanup_last_batch_at "$(date -u +%FT%TZ)" retention_cleanup_remaining "$remaining"
+cleanup_started=false
+echo "RETENTION_CLEANUP=PASS result=$status id=$EXPECTED_ACTIVE_RELEASE_ID processed=$processed remaining=$remaining plan_sha256=$recorded_plan_hash volumes=preserved directories=preserved"

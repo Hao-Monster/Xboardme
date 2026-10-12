@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# A closed fake HTTP boundary: unexpected URLs/mutations fail, never hit a server.
+output=/dev/null
+write_out=''
+headers=''
+method=GET
+authorization=''
+url=''
+while (($#)); do
+  case "$1" in
+    --output) output=$2; shift 2 ;;
+    --write-out) write_out=$2; shift 2 ;;
+    --dump-header) headers=$2; shift 2 ;;
+    --request) method=$2; shift 2 ;;
+    --header)
+      header=$2
+      if [[ "$header" == @* ]]; then
+        [[ "$(stat -c '%a' "${header#@}")" == 600 ]] || exit 93
+        [[ "$(stat -c '%a' "$(dirname "${header#@}")")" == 700 ]] || exit 93
+        header=$(< "${header#@}")
+      fi
+      [[ "$header" != Authorization:* ]] || authorization=${header#Authorization: }
+      shift 2
+      ;;
+    --data-urlencode|--connect-timeout|--max-time|--noproxy) shift 2 ;;
+    --silent|--show-error|--fail|--location|--disable) shift ;;
+    http://127.0.0.1:17001/*) url=$1; shift ;;
+    *) echo 'Unexpected fake curl argument.' >&2; exit 90 ;;
+  esac
+done
+[[ -n "$url" ]] || exit 90
+path=${url#http://127.0.0.1:17001}
+printf '%s %s\n' "$method" "$path" >> "$SMOKE_FIXTURE_ROOT/requests.log"
+token='Bearer syntheticSmokeTokenOnly000000000000000000000000000'
+status=200
+body='fixture'
+case "$path" in
+  /) body='distributor-message-guard.js' ;;
+  /api/v1/passport/auth/login)
+    [[ "$method" == POST ]] || exit 90
+    if [[ "$SMOKE_FIXTURE_CASE" == login-rejected ]]; then
+      status=400
+      body='{"status":"fail","message":"synthetic invalid login"}'
+    else
+      printf '%s\n' 'current' >> "$SMOKE_FIXTURE_ROOT/sessions"
+      body='{"status":"success","data":{"is_distributor":true,"auth_data":"'"$token"'"}}'
+      [[ "$SMOKE_FIXTURE_CASE" != wrong-role ]] || body=${body/true/false}
+      [[ "$SMOKE_FIXTURE_CASE" != login-response-lost ]] || body=''
+    fi
+    ;;
+  /api/v1/user/logout)
+    [[ "$method" == POST && "$authorization" == "$token" ]] || exit 90
+    kill -0 "$(< "$SMOKE_FIXTURE_ROOT/tunnel.pid")" || exit 91
+    printf '%s\n' 'only-current-token' >> "$SMOKE_FIXTURE_ROOT/revocations.log"
+    if [[ "$SMOKE_FIXTURE_CASE" == revoke-failed || "$SMOKE_FIXTURE_CASE" == both-failed ]]; then
+      status=503
+      body='{"status":"fail"}'
+    elif [[ "$SMOKE_FIXTURE_CASE" == revoke-false ]]; then
+      body='{"status":"success","data":false}'
+    elif [[ "$SMOKE_FIXTURE_CASE" == revoke-not-effective ]]; then
+      body='{"status":"success","data":true}'
+    else
+      sed -i '/^current$/d' "$SMOKE_FIXTURE_ROOT/sessions"
+      body='{"status":"success","data":true}'
+    fi
+    ;;
+  /api/v1/user/checkLogin)
+    [[ "$authorization" == "$token" ]] || exit 90
+    if grep -qx current "$SMOKE_FIXTURE_ROOT/sessions"; then
+      body='{"status":"success","data":{"is_login":true}}'
+    else
+      status=403
+      body='{"status":"fail","message":"synthetic expired login"}'
+    fi
+    ;;
+  /api/v1/user/info)
+    [[ "$authorization" == "$token" ]] || exit 90
+    case "$SMOKE_FIXTURE_CASE" in
+      postlogin-failed|both-failed) exit 42 ;;
+      timeout)
+        printf '%s\n' "$$" > "$SMOKE_FIXTURE_ROOT/request.pid"
+        exec sleep 300
+        ;;
+    esac
+    body='{"status":"success","data":{"is_distributor":true,"distributor_name":"synthetic"}}'
+    ;;
+  /api/v1/user/plan/fetch|/api/v1/user/order/fetch)
+    [[ "$authorization" == "$token" ]] || exit 90
+    body='{"status":"success","data":[]}'
+    ;;
+  '/api/v1/user/knowledge/fetch?language=zh-CN')
+    [[ "$authorization" == "$token" ]] || exit 90
+    body='{"status":"success"}'
+    ;;
+  /api/v1/user/client-catalog)
+    [[ "$authorization" == "$token" ]] || exit 90
+    body='{"data":[{"id":"karing","downloads":[]},{"id":"happ","downloads":[]},{"id":"clash-mi","downloads":[]},{"id":"koalaclash","downloads":[]}]}'
+    ;;
+  /api/v1/user/order/export)
+    [[ "$authorization" == "$token" ]] || exit 90
+    status=422
+    body='{"status":"fail","message":"当前筛选条件下没有可导出的订单"}'
+    ;;
+  /api/v1/user/getSubscribe)
+    [[ "$authorization" == "$token" ]] || exit 90
+    status=403
+    body='{"message":"分销商账号无权访问该功能"}'
+    ;;
+  /assets/admin-client-catalog.js) body='客户端管理' ;;
+  /assets/admin-distributor.js) body='下单时间 native-dist-settlement-month expected_total_amount' ;;
+  /assets/admin/manifest.json) body='{"index.html":{"file":"entry.js","css":["entry.css"]}}' ;;
+  /assets/admin/entry.js|/assets/admin/entry.css|/assets/admin/locales/en-US.js|/assets/admin/locales/zh-CN.js) ;;
+  /theme/Xboard/assets/client-center.js) body='网盘下载' ;;
+  /theme/Xboard/assets/distributor.js) body='/user/order/renew data-entitlement-toggle orderTime distributorAccountLabel' ;;
+  /theme/Xboard/assets/distributor-message-guard.js) body='DISTRIBUTOR_ACCESS_DENIED' ;;
+  *) echo 'Unexpected fake HTTP endpoint.' >&2; exit 90 ;;
+esac
+printf '%s\n' "$body" > "$output"
+[[ -z "$headers" ]] || printf '\r\n' > "$headers"
+[[ "$SMOKE_FIXTURE_CASE" != login-response-lost || "$path" != /api/v1/passport/auth/login ]] || exit 28
+[[ -z "$write_out" ]] || printf '%s' "$status"
+exit 0
