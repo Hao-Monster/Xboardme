@@ -11,6 +11,9 @@ set -Eeuo pipefail
   echo 'IMAGE_ONLY_DOCKER_TEST=NOT_RUN explicit_local_test_opt_in_required' >&2
   exit 2
 }
+# Real host mount inode checks need the same access as the production executor.
+# Docker-group membership alone cannot read /var/lib/docker/volumes metadata.
+((EUID == 0)) || { echo 'IMAGE_ONLY_DOCKER_TEST=NOT_RUN root_mount_metadata_access_required' >&2; exit 2; }
 [[ -z ${DOCKER_HOST:-} ]] || { echo 'IMAGE_ONLY_DOCKER_TEST=FAIL remote_override_forbidden' >&2; exit 2; }
 for tool in bash docker jq tar sha256sum gcc python3 flock timeout curl; do
   command -v "$tool" >/dev/null || { echo "IMAGE_ONLY_DOCKER_TEST=NOT_RUN missing_tool:$tool" >&2; exit 2; }

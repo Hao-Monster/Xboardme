@@ -208,7 +208,7 @@ jobs:
         run: python3 .github/scripts/fixtures/images-only-docker/test_observe_service.py
 
       - name: Exercise image-only cleanup with isolated real Docker resources
-        run: RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-images-only-docker.sh
+        run: sudo -n env RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-images-only-docker.sh
 
       - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
