@@ -37,7 +37,6 @@ check_failure checkout_mismatch env TEST_HEAD=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 check_failure dirty_checkout env TEST_DIRTY=true bash "$script_dir/verify-images-only-request.sh"
 check_failure dirty_submodule env TEST_SUBMODULE='+changed' bash "$script_dir/verify-images-only-request.sh"
 check_failure stale_main env TEST_REMOTE=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb bash "$script_dir/verify-images-only-request.sh"
-check_failure approved_fresh_review_required env IMAGE_CLEANUP_ACTION=cleanup bash "$script_dir/verify-images-only-request.sh"
 jq -n --argjson now "$(date +%s)" --arg sha "$GITHUB_SHA" '
   ("c"*64) as $h | {
     schema_version:2,status:"approved",operation:"image_cleanup",active_release_id:"123-1",active_release_sha:$sha,
@@ -55,6 +54,11 @@ jq -n --argjson now "$(date +%s)" --arg sha "$GITHUB_SHA" '
       evidence:{read_only_endpoints_sha256:$h,production_baseline_sha256:$h,long_connections_sha256:$h,natural_traffic_sha256:$h,resource_overhead_sha256:$h},
       live_signals:{transport:"host_json_v1",source_review_sha256:$h,max_age_seconds:20}}
   }' > "$test_root/valid.json"
+# Admission policy tests must not depend on the repository's current production
+# approval status or expiration. Change only status on an otherwise valid fixture.
+jq '.status="blocked"' "$test_root/valid.json" > "$test_root/blocked.json"
+check_failure approved_fresh_review_required env IMAGE_CLEANUP_ACTION=cleanup bash "$script_dir/verify-images-only-request.sh" "$test_root/blocked.json"
+check_failure approved_fresh_review_required env IMAGE_CLEANUP_ACTION=cleanup bash "$script_dir/verify-images-only-request.sh" "$test_root/missing-review.json"
 IMAGE_CLEANUP_ACTION=cleanup bash "$script_dir/verify-images-only-request.sh" "$test_root/valid.json"
 check_failure active_not_in_history env IMAGE_CLEANUP_ACTION=cleanup TEST_ANCESTOR=false bash "$script_dir/verify-images-only-request.sh" "$test_root/valid.json"
 jq '.monitoring.baseline_seconds=1' "$test_root/valid.json" > "$test_root/invalid.json"
@@ -76,4 +80,4 @@ jq '.monitoring.post_delete_observe_seconds=299' "$test_root/passive.json" > "$t
 check_failure monitoring_review_required env IMAGE_CLEANUP_ACTION=cleanup bash "$script_dir/verify-images-only-request.sh" "$test_root/invalid.json"
 jq '.schema_version=2' "$test_root/passive.json" > "$test_root/invalid.json"
 check_failure approved_fresh_review_required env IMAGE_CLEANUP_ACTION=cleanup bash "$script_dir/verify-images-only-request.sh" "$test_root/invalid.json"
-echo 'IMAGE_REQUEST_TEST=PASS cases=18 production_connections=0'
+echo 'IMAGE_REQUEST_TEST=PASS cases=19 production_connections=0'

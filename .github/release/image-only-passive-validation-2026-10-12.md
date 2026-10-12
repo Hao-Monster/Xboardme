@@ -57,7 +57,7 @@ started for this work.
 | Composer audit | No security advisories, Windows |
 | Legacy continuity | 41 cases, WSL Debian |
 | Passive monitoring | 84 cases, WSL Debian; final source rerun passed |
-| Approval / request | 35 / 18 cases, WSL Debian |
+| Approval / request | 35 / 19 cases, WSL Debian; request fixture is independent of the live approval |
 | Runner restore | 15 cases, mocked registry/CLI; not a real pull |
 | Precise executor | 46 cases, WSL Debian; final source rerun passed |
 | Independent post-audit | 22 cases, WSL Debian |
@@ -109,6 +109,18 @@ or network. The real Docker suite now explicitly tests no-healthcheck containers
 and requires the unhealthy rejection to have no template/inspect error. These
 14 scenarios must all pass the corrected exact PR CI; the failed run is not a
 successful rehearsal.
+
+The corrected CI [38220046401](https://github.com/Hao-Monster/Xboardme/actions/runs/38220046401)
+then passed all 14 real Docker cases, with 832 continuous synthetic TCP samples
+and zero reconnects. All four PHP/SQLite/MySQL combinations passed 322 tests /
+3734 assertions, and JavaScript/browser checks passed. The overall run still
+failed: a request-admission negative test implicitly used the now-approved
+repository review while expecting it to be blocked. That test was isolated by
+deriving a blocked review from its otherwise-valid temporary fixture and passing
+it explicitly; a missing-review rejection was added. Production admission was
+not changed. Request19/restore15/transport10 then passed locally. Full CI must
+pass at the final head; neither this real-Docker step nor these local results
+authorize ignoring the failed overall run.
 
 ## Independent review and remaining limits
 
