@@ -27,4 +27,9 @@ set -e
 if ((status == 124 || status == 137)); then
   echo "DISTRIBUTOR_SMOKE_TIMEOUT=FAIL timeout_seconds=$SMOKE_TIMEOUT_SECONDS" >&2
 fi
+if ((status == 137)); then
+  # SIGKILL cannot run the smoke's EXIT trap. Never infer remote revocation from
+  # the local process disappearing or recover by revoking the account's sessions.
+  echo 'DISTRIBUTOR_SMOKE_SESSION_CLEANUP=INCOMPLETE reason=forced_termination' >&2
+fi
 exit "$status"

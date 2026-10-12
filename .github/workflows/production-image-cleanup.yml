@@ -1,0 +1,152 @@
+name: Production Image-Only Cleanup
+run-name: Image ${{ inputs.action }} at ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact full workflow SHA currently at main
+        required: true
+        type: string
+      action:
+        description: Audit only by default; cleanup requires the fixed approved one-image manifest
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - cleanup
+
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash --noprofile --norc -e -o pipefail {0}
+concurrency:
+  group: xboard-production-release
+  cancel-in-progress: false
+
+jobs:
+  images-only:
+    if: ${{ github.ref == 'refs/heads/main' && github.repository == 'Hao-Monster/Xboardme' }}
+    runs-on: ubuntu-latest
+    # 45m remote hard deadline plus post-audit, bounded smoke and evidence.
+    timeout-minutes: 65
+    environment: distributor-server
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      IMAGE_CLEANUP_ACTION: ${{ inputs.action }}
+    steps:
+      - name: Checkout exact production workflow with submodules
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Admit exact main and the fixed fresh review before host access
+        id: admission
+        run: |
+          bash .github/scripts/verify-images-only-request.sh
+          if [[ "$IMAGE_CLEANUP_ACTION" == cleanup ]]; then
+            echo "active_sha=$(jq -er .active_release_sha .github/release/image-cleanup-review.json)" >> "$GITHUB_OUTPUT"
+            echo "active_id=$(jq -er .active_release_id .github/release/image-cleanup-review.json)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trust deployment host key
+        id: host-key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -T 10 -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Run the locked audit or one approved image-only operation
+        id: operation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          bash .github/scripts/run-images-only-remote.sh "$IMAGE_CLEANUP_ACTION" 2>&1 |
+            tee "$RUNNER_TEMP/images-only-operation.txt"
+
+      - name: Independently re-audit without database queries or container exec
+        id: post-audit
+        if: ${{ always() && inputs.action == 'cleanup' && steps.admission.outcome == 'success' && steps.host-key.outcome == 'success' }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          bash .github/scripts/run-images-only-remote.sh audit 2>&1 |
+            tee "$RUNNER_TEMP/images-only-post-audit.txt"
+
+      - name: Prove exactly one image changed and all protected resources survived
+        id: post-identity
+        if: ${{ success() && inputs.action == 'cleanup' }}
+        run: |
+          bash .github/scripts/verify-images-only-post-audit.sh \
+            "$RUNNER_TEMP/images-only-operation.txt" "$RUNNER_TEMP/images-only-post-audit.txt" |
+            tee "$RUNNER_TEMP/images-only-post-result.txt"
+
+      - name: Verify current public runtime and authenticated read-only flows
+        id: smoke
+        if: ${{ success() && inputs.action == 'cleanup' }}
+        uses: ./.github/actions/distributor-smoke
+        with:
+          validation_mode: release
+          verify_public_assets: true
+          expected_asset_version: ${{ steps.admission.outputs.active_sha }}
+          v2_release_id: ${{ steps.admission.outputs.active_id }}
+          timeout_seconds: '300'
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Bind independent post-verification evidence
+        if: ${{ success() && inputs.action == 'cleanup' }}
+        run: |
+          printf 'AUTHENTICATED_PUBLIC_SMOKE=PASS workflow=%s run=%s attempt=%s\n' \
+            "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$RUNNER_TEMP/images-only-post-result.txt"
+          sha256sum "$RUNNER_TEMP/images-only-operation.txt" "$RUNNER_TEMP/images-only-post-audit.txt" \
+            "$RUNNER_TEMP/images-only-post-result.txt" > "$RUNNER_TEMP/images-only-evidence.sha256"
+
+      - name: Preserve evidence even for failed or cancelled operations
+        if: ${{ always() && steps.admission.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-image-cleanup-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/images-only-*
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Accept post-verification only after all required evidence succeeded
+        if: ${{ success() && inputs.action == 'cleanup' }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          export POST_EVIDENCE_SHA256
+          POST_EVIDENCE_SHA256=$(sha256sum < "$RUNNER_TEMP/images-only-evidence.sha256" | awk '{print $1}')
+          bash .github/scripts/run-images-only-remote.sh post-success
+
+      - name: Persist HOLD on any unsuccessful cleanup or post-verification
+        if: ${{ (failure() || cancelled()) && inputs.action == 'cleanup' && steps.admission.outcome == 'success' && steps.host-key.outcome == 'success' }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: bash .github/scripts/run-images-only-remote.sh post-failure

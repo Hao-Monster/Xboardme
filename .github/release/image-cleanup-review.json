@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "status": "blocked",
+  "operation": "image_cleanup",
+  "reason": "Execution remains blocked until the exact one-image scope, fresh audit, restore evidence, live monitoring and isolated Docker rehearsal are independently reviewed.",
+  "active_release_id": "",
+  "active_release_sha": "",
+  "resource_fingerprint": "",
+  "protection_fingerprint": "",
+  "audit_completed_at_epoch": 0,
+  "approval_expires_at_epoch": 0,
+  "max_image_size_bytes": 536870912,
+  "protected_image_revisions": [
+    "873e943cdd8b2a994a189558ef3b4aadb953bd34"
+  ],
+  "protected_image_digests": [
+    "ghcr.io/hao-monster/xboardme@sha256:2cbd79887b6c9362a4f4782c0a912ed2edf2670c6358b62c9c86b6cabc7acae9"
+  ],
+  "review_evidence": {
+    "backup_review_sha256": "",
+    "monitoring_review_sha256": "",
+    "authentication_review_sha256": "",
+    "isolated_docker_review_sha256": ""
+  },
+  "containers": [],
+  "images": [],
+  "monitoring": {}
+}

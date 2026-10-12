@@ -24,7 +24,7 @@ if [[ -n "$RETENTION_REQUIRED_FREE_PORT" ]] &&
   exit 1
 fi
 
-for tool in awk basename caddy chmod df docker du find flock grep jq mktemp realpath sed sha256sum sort ss stat tee tr wc; do
+for tool in awk base64 basename caddy chmod df docker du find flock grep jq mktemp realpath sed sha256sum sort ss stat tee tr wc; do
   command -v "$tool" >/dev/null || {
     echo "RETENTION_AUDIT_FAIL=missing_tool:$tool"
     exit 1
@@ -33,7 +33,8 @@ done
 if ! declare -F xboard_find_compose_anchor >/dev/null ||
    ! declare -F xboard_find_caddy_upstream >/dev/null ||
    ! declare -F xboard_resolve_active_runtime >/dev/null ||
-   ! declare -F release_state_validate >/dev/null; then
+   ! declare -F release_state_validate >/dev/null ||
+   ! declare -F retention_all_snapshots >/dev/null; then
   echo 'RETENTION_AUDIT_FAIL=helpers_missing'
   exit 1
 fi
@@ -62,6 +63,16 @@ if [[ "$RETENTION_ACQUIRE_LOCK" == true ]]; then
   chmod 600 "$lock_root/deploy.lock"
   flock -n 9 || {
     echo 'RETENTION_AUDIT_FAIL=deployment_locked'
+    exit 1
+  }
+  # Discovery done before waiting for a lock is not a protected truth source.
+  xboard_find_compose_anchor && xboard_find_caddy_upstream &&
+    xboard_resolve_active_runtime "$XBOARD_ACTIVE_PORT" || {
+      echo 'RETENTION_AUDIT_FAIL=post_lock_discovery_failed'
+      exit 1
+    }
+  [[ "$(realpath -e -- "$XBOARD_ANCHOR_WORKDIR")" == "$workdir" ]] || {
+    echo 'RETENTION_AUDIT_FAIL=post_lock_workdir_changed'
     exit 1
   }
 fi
@@ -133,8 +144,11 @@ if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
   [[ -n "$active_finalize_reason" ]] || active_finalize_reason=none
   [[ -n "$active_superseded_by_sha" ]] || active_superseded_by_sha=none
   active_maintenance_container=$(release_state_get_optional "$active_state_file" maintenance_container)
-  if [[ -n "$active_maintenance_container" ]] &&
-     docker container inspect "$active_maintenance_container" >/dev/null 2>&1; then
+  if [[ -n "$active_maintenance_container" ]]; then
+    docker container inspect "$active_maintenance_container" >/dev/null || {
+      echo 'RETENTION_AUDIT_FAIL=current_maintenance_missing'
+      exit 1
+    }
     protected_ids["$(docker inspect -f '{{.Id}}' "$active_maintenance_container")"]=active
   fi
   active_redis_volume=$(release_state_get "$active_state_file" redis_volume_name)
@@ -173,14 +187,16 @@ if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
 fi
 
 inventory=$(mktemp)
-trap 'rm -f -- "$inventory"' EXIT
+retention_snapshot_file=$(mktemp)
+trap 'rm -f -- "$inventory" "$retention_snapshot_file"' EXIT
 chmod 600 "$inventory"
+chmod 600 "$retention_snapshot_file"
 
 emit() {
   printf '%s\n' "$*" | tee -a "$inventory"
 }
 
-emit 'RETENTION_AUDIT_SCHEMA=1'
+emit 'RETENTION_AUDIT_SCHEMA=2'
 emit "RETENTION_WORKFLOW_SHA=$EXPECTED_WORKFLOW_SHA"
 emit "RETENTION_ACTIVE_TOPOLOGY=$XBOARD_ACTIVE_TOPOLOGY"
 emit "RETENTION_ACTIVE_PROJECT=$active_project"
@@ -224,7 +240,7 @@ while IFS= read -r listed_id; do
     (.Config.Labels["codex.xboard.stage"] // "none"),
     (.Config.Labels["codex.xboard.stage.run"] // "none"),
     ([.NetworkSettings.Ports // {} | to_entries[] | .value[]? | ((.HostIp // "") + ":" + (.HostPort // ""))] | join(",") | if . == "" then "none" else . end),
-    ([.Mounts[]? | ((.Type // "") + ":" + (.Destination // ""))] | sort | join(",") | if . == "" then "none" else . end)
+    ([.Mounts[]? | {Type,Source,Destination,Name:(.Name // ""),RW,Mode:(.Mode // ""),Propagation:(.Propagation // "")}] | sort_by(.Destination) | @json | @base64)
   ] | @tsv')
   IFS=$'\t' read -r name status image image_id revision project service maintenance_release legacy_release legacy_release_run legacy_release_role stage stage_run ports mounts <<< "$row"
   protection=${protected_ids[$id]:-}
@@ -305,16 +321,18 @@ for root_and_kind in \
     size_kib=$(du -sk "$path" | awk '{print $1}')
     state=unknown
     revision=unknown
+    state_sha256=unknown
     secret_present=false
     state_file="$path/state.json"
     if [[ -f "$state_file" ]] && release_state_validate "$state_file" 2>/dev/null; then
       state=$(release_state_get_optional "$state_file" traffic_state)
       revision=$(release_state_get_optional "$state_file" release_sha)
+      state_sha256=$(retention_hash < "$state_file")
       [[ -n "$state" ]] || state=unknown
       [[ -n "$revision" ]] || revision=unknown
     fi
     [[ ! -f "$path/redis-password" ]] || secret_present=true
-    emit "RETENTION_DIRECTORY kind=$kind name=$name size_kib=$size_kib state=$state revision=$revision secret_present=$secret_present"
+    emit "RETENTION_DIRECTORY kind=$kind name=$name size_kib=$size_kib state=$state revision=$revision state_sha256=$state_sha256 secret_present=$secret_present"
   done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print | sort)
 done
 
@@ -331,7 +349,32 @@ while IFS= read -r image_id; do
   ] | @tsv')
   IFS=$'\t' read -r size created_at revision source tags digests <<< "$image_row"
   emit "RETENTION_IMAGE id=$image_id size_bytes=$size created_at=$created_at container_refs=$refs revision=$revision source=$source tags=$tags digests=$digests"
-done < <(docker image ls -q --no-trunc | sort -u)
+done < <(docker image ls -aq --no-trunc | sort -u)
+
+# The complete, secret-free immutable metadata is part of the reviewed resource
+# fingerprint. Exact JSON is emitted for offline review; cleanup freezes it and
+# never respecifies its allowed set from a later scan.
+retention_all_snapshots > "$retention_snapshot_file"
+while IFS= read -r snapshot; do
+  snapshot_id=$(jq -r .id <<< "$snapshot")
+  snapshot_hash=$(printf '%s\n' "$snapshot" | retention_hash)
+  emit "RETENTION_CONTAINER_SNAPSHOT id=$snapshot_id snapshot_sha256=$snapshot_hash snapshot_b64=$(printf '%s' "$snapshot" | base64 -w0)"
+done < <(jq -cS '.containers[]' "$retention_snapshot_file")
+while IFS= read -r snapshot; do
+  snapshot_id=$(jq -r .id <<< "$snapshot")
+  snapshot_hash=$(printf '%s\n' "$snapshot" | retention_hash)
+  emit "RETENTION_IMAGE_SNAPSHOT id=$snapshot_id snapshot_sha256=$snapshot_hash snapshot_b64=$(printf '%s' "$snapshot" | base64 -w0)"
+done < <(jq -cS '.images[]' "$retention_snapshot_file")
+protection_fingerprint=''
+if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
+  protection_snapshot=$(retention_live_protection) || {
+    echo 'RETENTION_AUDIT_FAIL=live_protection_invalid'
+    exit 1
+  }
+  protection_fingerprint=$(printf '%s\n' "$protection_snapshot" | retention_hash)
+  emit "RETENTION_PROTECTION_FINGERPRINT=$protection_fingerprint"
+  emit "RETENTION_PROTECTION_SNAPSHOT_B64=$(printf '%s' "$protection_snapshot" | base64 -w0)"
+fi
 
 identity_fingerprint=$(
   grep -E '^(RETENTION_ACTIVE_|RETENTION_DIRECT_PREVIOUS_PROJECT=|RETENTION_COMPOSE_ANCHOR=|RETENTION_CONTAINER |RETENTION_LISTENER )' "$inventory" |
@@ -340,11 +383,14 @@ identity_fingerprint=$(
     awk '{print $1}'
 )
 resource_fingerprint=$(
-  grep -E '^(RETENTION_ACTIVE_|RETENTION_DIRECT_PREVIOUS_|RETENTION_COMPOSE_ANCHOR=|RETENTION_CONTAINER |RETENTION_IMAGE )' "$inventory" |
+  grep -E '^(RETENTION_ACTIVE_|RETENTION_DIRECT_PREVIOUS_|RETENTION_COMPOSE_ANCHOR=|RETENTION_CONTAINER |RETENTION_IMAGE |RETENTION_CONTAINER_SNAPSHOT |RETENTION_IMAGE_SNAPSHOT |RETENTION_PROTECTION_)' "$inventory" |
     sort |
     sha256sum |
     awk '{print $1}'
 )
+if [[ "$XBOARD_ACTIVE_TOPOLOGY" == v2 ]]; then
+  resource_fingerprint=$(retention_resource_fingerprint "$retention_snapshot_file" "$protection_snapshot")
+fi
 fingerprint=$(sort "$inventory" | sha256sum | awk '{print $1}')
 echo "RETENTION_IDENTITY_FINGERPRINT=$identity_fingerprint"
 echo "RETENTION_RESOURCE_FINGERPRINT=$resource_fingerprint"

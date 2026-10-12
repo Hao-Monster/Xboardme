@@ -33,6 +33,11 @@ on:
         description: Exact post-finalize resource fingerprint required only for cleanup
         required: false
         type: string
+      cleanup_max_objects_per_run:
+        description: Maximum reviewed objects in one bounded batch (1-5, first batch always one)
+        required: true
+        default: 1
+        type: number
       network_cleanup_expected_fingerprint:
         description: Exact read-only orphan-network fingerprint required only for network cleanup
         required: false
@@ -60,6 +65,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  cleanup-continuity-admission:
+    if: >-
+      ${{ github.ref == 'refs/heads/main' &&
+          (inputs.maintenance_action == 'none' || inputs.maintenance_action == 'v2_finalize' ||
+           inputs.maintenance_action == 'retention_cleanup' || inputs.maintenance_action == 'network_cleanup') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: distributor-server
+    steps:
+      - name: Checkout exact production workflow
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Verify exact main before reading production cleanup gate
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Hao-Monster/Xboardme
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git ls-remote --exit-code origin refs/heads/main)" = "$EXPECTED_SHA"$'\trefs/heads/main'
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -T 10 -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+      - name: Reject unresolved cleanup even when the requested deployment SHA changed
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/admit-xboard-after-image-cleanup.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' timeout --signal=TERM --kill-after=5s 60s bash -se"
+
   retention-audit:
     if: >-
       ${{ github.ref == 'refs/heads/main' &&
@@ -104,6 +160,8 @@ jobs:
         run: |
           cat .github/scripts/production-runtime-discovery.sh \
               .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/retention-safety.sh \
               .github/scripts/audit-xboard-retention.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -162,6 +220,8 @@ jobs:
         run: |
           cat .github/scripts/production-runtime-discovery.sh \
               .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/retention-safety.sh \
               .github/scripts/audit-xboard-retention.sh \
               .github/scripts/audit-xboard-network-debt.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -178,6 +238,7 @@ jobs:
           retention-days: 90
 
   pre-network-debt-cleanup-smoke:
+    needs: cleanup-continuity-admission
     if: >-
       ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'network_cleanup' }}
@@ -269,6 +330,8 @@ jobs:
         run: |
           cat .github/scripts/production-runtime-discovery.sh \
               .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/retention-safety.sh \
               .github/scripts/audit-xboard-retention.sh \
               .github/scripts/audit-xboard-network-debt.sh \
               .github/scripts/cleanup-xboard-network-debt.sh |
@@ -326,6 +389,8 @@ jobs:
               "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s"
           cat .github/scripts/production-runtime-discovery.sh \
               .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/retention-safety.sh \
               .github/scripts/audit-xboard-retention.sh \
               .github/scripts/audit-xboard-network-debt.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -367,6 +432,7 @@ jobs:
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   pre-finalize-v2-smoke:
+    needs: cleanup-continuity-admission
     if: >-
       ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'v2_finalize' }}
@@ -386,12 +452,9 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
           RELEASE_ID: ${{ inputs.release_id }}
-        run: |
-          test "$GITHUB_REF" = refs/heads/main
-          test "$EXPECTED_SHA" = "$GITHUB_SHA"
-          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
-          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-          git merge-base --is-ancestor "$RELEASE_EXPECTED_SHA" "$GITHUB_SHA"
+          RETENTION_MAX_OBJECTS_PER_RUN: ${{ inputs.cleanup_max_objects_per_run }}
+          MAINTENANCE_ACTION: v2_finalize
+        run: bash .github/scripts/verify-retention-request.sh
 
       - name: Verify public production before retiring rollback assets
         uses: ./.github/actions/distributor-smoke
@@ -423,7 +486,9 @@ jobs:
           inputs.maintenance_action == 'v2_finalize' }}
     needs: pre-finalize-v2-smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    outputs:
+      disposition: ${{ steps.finalize.outputs.disposition }}
     environment: distributor-server
     permissions:
       contents: read
@@ -432,6 +497,15 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Verify exact maintenance workflow before host access
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RETENTION_MAX_OBJECTS_PER_RUN: ${{ inputs.cleanup_max_objects_per_run }}
+          MAINTENANCE_ACTION: v2_finalize
+        run: bash .github/scripts/verify-retention-request.sh
 
       - name: Trust deployment host key
         env:
@@ -444,6 +518,7 @@ jobs:
           chmod 600 "$HOME/.ssh/known_hosts"
 
       - name: Finalize only the exact active V2 release
+        id: finalize
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -451,19 +526,45 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           RELEASE_ID: ${{ inputs.release_id }}
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+          RETENTION_MAX_OBJECTS_PER_RUN: ${{ inputs.cleanup_max_objects_per_run }}
         run: |
-          cat .github/scripts/release-state.sh \
-              .github/scripts/v2-low-memory-common.sh \
-              .github/scripts/finalize-xboard-v2-low-memory.sh |
+          review=.github/release/retention-review.json
+          {
+            printf "RETENTION_REVIEW_MANIFEST_B64='%s'\nEXPECTED_RETENTION_REVIEW_SHA256='%s'\n" \
+              "$(base64 -w0 "$review")" "$(sha256sum "$review" | awk '{print $1}')"
+            cat .github/scripts/production-runtime-discovery.sh \
+                .github/scripts/release-state.sh \
+                .github/scripts/retention-continuity.sh \
+                .github/scripts/retention-safety.sh \
+                .github/scripts/v2-low-memory-common.sh \
+                .github/scripts/finalize-xboard-v2-low-memory.sh
+          } |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
+              "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_MAX_OBJECTS_PER_RUN='$RETENTION_MAX_OBJECTS_PER_RUN' timeout --signal=TERM --kill-after=30s 900s bash -s" |
+            tee "$RUNNER_TEMP/retention-finalize.txt"
+          result=$(sed -nE 's/^V2_FINALIZE=PASS result=(pending_batch|complete) .*/\1/p' "$RUNNER_TEMP/retention-finalize.txt")
+          [[ "$result" == pending_batch || "$result" == complete ]]
+          echo "disposition=$result" >> "$GITHUB_OUTPUT"
+          echo "Finalize batch: $result. A pending batch is not a completed retirement." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve finalize evidence even after partial failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-retention-finalize-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/retention-finalize.txt
+          if-no-files-found: warn
+          retention-days: 90
 
   verify-finalized-production:
     if: >-
-      ${{ github.ref == 'refs/heads/main' &&
+      ${{ always() && github.ref == 'refs/heads/main' &&
+          needs.pre-finalize-v2-smoke.result == 'success' &&
+          needs.finalize-v2-release.result != 'skipped' &&
           inputs.maintenance_action == 'v2_finalize' }}
-    needs: finalize-v2-release
+    needs: [pre-finalize-v2-smoke, finalize-v2-release]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: distributor-server
@@ -475,7 +576,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify exact maintenance workflow before host access
+        id: admission
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RETENTION_MAX_OBJECTS_PER_RUN: ${{ inputs.cleanup_max_objects_per_run }}
+          MAINTENANCE_ACTION: v2_finalize
+        run: bash .github/scripts/verify-retention-request.sh
+
       - name: Trust deployment host key
+        id: host-key
         env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -485,36 +597,62 @@ jobs:
           ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
+      - name: Read-only runtime preflight after finalize
+        id: post-preflight
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s" |
+            tee "$RUNNER_TEMP/post-finalize-preflight.txt"
+
       - name: Audit runtime and retained assets after finalize
+        id: post-audit
+        if: ${{ always() && steps.admission.outcome == 'success' && steps.host-key.outcome == 'success' }}
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
-          ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
-          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
-            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s"
           cat .github/scripts/production-runtime-discovery.sh \
               .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/retention-safety.sh \
               .github/scripts/audit-xboard-retention.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s" |
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=false RETENTION_ACQUIRE_LOCK=true bash -s" |
             tee "$RUNNER_TEMP/post-finalize-retention-audit.txt"
 
+      - name: Verify unchanged protected identity even after a failed finalize
+        id: post-identity
+        if: ${{ always() && steps.admission.outcome == 'success' && steps.post-audit.outcome == 'success' }}
+        env:
+          MUTATION_RESULT: ${{ needs.finalize-v2-release.result }}
+          BATCH_DISPOSITION: ${{ needs.finalize-v2-release.outputs.disposition }}
+        run: bash .github/scripts/verify-retention-post-audit.sh .github/release/retention-review.json "$RUNNER_TEMP/post-finalize-retention-audit.txt"
+
       - name: Preserve the post-finalize retention inventory
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: production-retention-post-finalize-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/post-finalize-retention-audit.txt
-          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/post-finalize-retention-audit.txt
+            ${{ runner.temp }}/post-finalize-preflight.txt
+          if-no-files-found: warn
           retention-days: 90
 
       - name: Verify public production after finalize
+        if: ${{ always() && steps.post-identity.outcome == 'success' && steps.post-preflight.outcome == 'success' }}
         uses: ./.github/actions/distributor-smoke
         with:
           verify_public_assets: true
@@ -529,6 +667,7 @@ jobs:
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
 
       - name: Verify live admin assets after finalize
+        if: ${{ always() && steps.post-identity.outcome == 'success' && steps.post-preflight.outcome == 'success' }}
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -539,6 +678,7 @@ jobs:
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   pre-retention-cleanup-smoke:
+    needs: cleanup-continuity-admission
     if: >-
       ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'retention_cleanup' }}
@@ -559,16 +699,10 @@ jobs:
           RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
           RELEASE_ID: ${{ inputs.release_id }}
           RESOURCE_FINGERPRINT: ${{ inputs.cleanup_expected_resource_fingerprint }}
-          IMAGE_MIN_AGE_SECONDS: ${{ inputs.cleanup_image_min_age_seconds }}
-        run: |
-          test "$GITHUB_REF" = refs/heads/main
-          test "$EXPECTED_SHA" = "$GITHUB_SHA"
-          test "$RELEASE_EXPECTED_SHA" = "$(printf '%s' "$RELEASE_EXPECTED_SHA" | grep -E '^[0-9a-f]{40}$')"
-          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-          test "$RESOURCE_FINGERPRINT" = "$(printf '%s' "$RESOURCE_FINGERPRINT" | grep -E '^[0-9a-f]{64}$')"
-          test "$IMAGE_MIN_AGE_SECONDS" = "$(printf '%s' "$IMAGE_MIN_AGE_SECONDS" | grep -E '^[0-9]+$')"
-          test "$IMAGE_MIN_AGE_SECONDS" -ge 604800
-          git merge-base --is-ancestor "$RELEASE_EXPECTED_SHA" "$GITHUB_SHA"
+          RETENTION_IMAGE_MIN_AGE_SECONDS: ${{ inputs.cleanup_image_min_age_seconds }}
+          RETENTION_MAX_OBJECTS_PER_RUN: ${{ inputs.cleanup_max_objects_per_run }}
+          MAINTENANCE_ACTION: retention_cleanup
+        run: bash .github/scripts/verify-retention-request.sh
 
       - name: Verify public production before exact retention cleanup
         uses: ./.github/actions/distributor-smoke
@@ -601,6 +735,8 @@ jobs:
     needs: pre-retention-cleanup-smoke
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      disposition: ${{ steps.cleanup.outputs.disposition }}
     environment: distributor-server
     permissions:
       contents: read
@@ -609,6 +745,17 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Verify exact maintenance workflow before host access
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RESOURCE_FINGERPRINT: ${{ inputs.cleanup_expected_resource_fingerprint }}
+          RETENTION_IMAGE_MIN_AGE_SECONDS: ${{ inputs.cleanup_image_min_age_seconds }}
+          RETENTION_MAX_OBJECTS_PER_RUN: ${{ inputs.cleanup_max_objects_per_run }}
+          MAINTENANCE_ACTION: retention_cleanup
+        run: bash .github/scripts/verify-retention-request.sh
 
       - name: Trust deployment host key
         env:
@@ -621,6 +768,7 @@ jobs:
           chmod 600 "$HOME/.ssh/known_hosts"
 
       - name: Remove only fingerprinted retired containers and aged Xboard images
+        id: cleanup
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -631,29 +779,44 @@ jobs:
           EXPECTED_ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
           EXPECTED_RETENTION_RESOURCE_FINGERPRINT: ${{ inputs.cleanup_expected_resource_fingerprint }}
           RETENTION_IMAGE_MIN_AGE_SECONDS: ${{ inputs.cleanup_image_min_age_seconds }}
+          RETENTION_MAX_OBJECTS_PER_RUN: ${{ inputs.cleanup_max_objects_per_run }}
         run: |
-          cat .github/scripts/production-runtime-discovery.sh \
-              .github/scripts/release-state.sh \
-              .github/scripts/audit-xboard-retention.sh \
-              .github/scripts/cleanup-xboard-retention.sh |
+          review=.github/release/retention-review.json
+          {
+            printf "RETENTION_REVIEW_MANIFEST_B64='%s'\nEXPECTED_RETENTION_REVIEW_SHA256='%s'\n" \
+              "$(base64 -w0 "$review")" "$(sha256sum "$review" | awk '{print $1}')"
+            cat .github/scripts/production-runtime-discovery.sh \
+                .github/scripts/release-state.sh \
+                .github/scripts/retention-continuity.sh \
+                .github/scripts/retention-safety.sh \
+                .github/scripts/audit-xboard-retention.sh \
+                .github/scripts/cleanup-xboard-retention.sh
+          } |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' EXPECTED_ACTIVE_RELEASE_ID='$EXPECTED_ACTIVE_RELEASE_ID' EXPECTED_ACTIVE_RELEASE_SHA='$EXPECTED_ACTIVE_RELEASE_SHA' EXPECTED_RETENTION_RESOURCE_FINGERPRINT='$EXPECTED_RETENTION_RESOURCE_FINGERPRINT' RETENTION_IMAGE_MIN_AGE_SECONDS='$RETENTION_IMAGE_MIN_AGE_SECONDS' RETENTION_REQUIRE_FINALIZED=true RETENTION_ACQUIRE_LOCK=true bash -s" |
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' EXPECTED_ACTIVE_RELEASE_ID='$EXPECTED_ACTIVE_RELEASE_ID' EXPECTED_ACTIVE_RELEASE_SHA='$EXPECTED_ACTIVE_RELEASE_SHA' EXPECTED_RETENTION_RESOURCE_FINGERPRINT='$EXPECTED_RETENTION_RESOURCE_FINGERPRINT' RETENTION_IMAGE_MIN_AGE_SECONDS='$RETENTION_IMAGE_MIN_AGE_SECONDS' RETENTION_MAX_OBJECTS_PER_RUN='$RETENTION_MAX_OBJECTS_PER_RUN' RETENTION_REQUIRE_FINALIZED=true RETENTION_ACQUIRE_LOCK=true timeout --signal=TERM --kill-after=30s 900s bash -s" |
             tee "$RUNNER_TEMP/retention-cleanup.txt"
+          result=$(sed -nE 's/^RETENTION_CLEANUP=PASS result=(pending_batch|complete) .*/\1/p' "$RUNNER_TEMP/retention-cleanup.txt")
+          [[ "$result" == pending_batch || "$result" == complete ]]
+          echo "disposition=$result" >> "$GITHUB_OUTPUT"
+          echo "Cleanup batch: $result. A pending batch is not a completed cleanup." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve exact cleanup evidence
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: production-retention-cleanup-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/retention-cleanup.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90
 
   verify-retention-cleanup:
     if: >-
-      ${{ github.ref == 'refs/heads/main' &&
+      ${{ always() && github.ref == 'refs/heads/main' &&
+          needs.pre-retention-cleanup-smoke.result == 'success' &&
+          needs.cleanup-retired-production-assets.result != 'skipped' &&
           inputs.maintenance_action == 'retention_cleanup' }}
-    needs: cleanup-retired-production-assets
+    needs: [pre-retention-cleanup-smoke, cleanup-retired-production-assets]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: distributor-server
@@ -665,7 +828,20 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify exact maintenance workflow before host access
+        id: admission
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_EXPECTED_SHA: ${{ inputs.release_expected_sha }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RESOURCE_FINGERPRINT: ${{ inputs.cleanup_expected_resource_fingerprint }}
+          RETENTION_IMAGE_MIN_AGE_SECONDS: ${{ inputs.cleanup_image_min_age_seconds }}
+          RETENTION_MAX_OBJECTS_PER_RUN: ${{ inputs.cleanup_max_objects_per_run }}
+          MAINTENANCE_ACTION: retention_cleanup
+        run: bash .github/scripts/verify-retention-request.sh
+
       - name: Trust deployment host key
+        id: host-key
         env:
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
@@ -675,36 +851,62 @@ jobs:
           ssh-keyscan -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
 
+      - name: Read-only runtime preflight after cleanup
+        id: post-preflight
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s" |
+            tee "$RUNNER_TEMP/post-cleanup-preflight.txt"
+
       - name: Audit finalized runtime and retained assets after cleanup
+        id: post-audit
+        if: ${{ always() && steps.admission.outcome == 'success' && steps.host-key.outcome == 'success' }}
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
-          ACTIVE_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
-          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
-            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
-              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s"
           cat .github/scripts/production-runtime-discovery.sh \
               .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/retention-safety.sh \
               .github/scripts/audit-xboard-retention.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true bash -s" |
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=false RETENTION_ACQUIRE_LOCK=true bash -s" |
             tee "$RUNNER_TEMP/post-cleanup-retention-audit.txt"
 
+      - name: Verify unchanged protected identity even after a failed cleanup
+        id: post-identity
+        if: ${{ always() && steps.admission.outcome == 'success' && steps.post-audit.outcome == 'success' }}
+        env:
+          MUTATION_RESULT: ${{ needs.cleanup-retired-production-assets.result }}
+          BATCH_DISPOSITION: ${{ needs.cleanup-retired-production-assets.outputs.disposition }}
+        run: bash .github/scripts/verify-retention-post-audit.sh .github/release/retention-review.json "$RUNNER_TEMP/post-cleanup-retention-audit.txt"
+
       - name: Preserve the post-cleanup retention inventory
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: production-retention-post-cleanup-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/post-cleanup-retention-audit.txt
-          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/post-cleanup-retention-audit.txt
+            ${{ runner.temp }}/post-cleanup-preflight.txt
+          if-no-files-found: warn
           retention-days: 90
 
       - name: Verify public production after exact retention cleanup
+        if: ${{ always() && steps.post-identity.outcome == 'success' && steps.post-preflight.outcome == 'success' }}
         uses: ./.github/actions/distributor-smoke
         with:
           verify_public_assets: true
@@ -719,6 +921,7 @@ jobs:
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
 
       - name: Verify live admin assets after exact retention cleanup
+        if: ${{ always() && steps.post-identity.outcome == 'success' && steps.post-preflight.outcome == 'success' }}
         env:
           SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
           DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
@@ -729,6 +932,7 @@ jobs:
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   resolve-signed-image:
+    needs: cleanup-continuity-admission
     if: >-
       ${{ github.ref == 'refs/heads/main' &&
           inputs.maintenance_action == 'none' }}
@@ -837,6 +1041,8 @@ jobs:
           slot_plan=$(
             cat .github/scripts/production-runtime-discovery.sh \
                 .github/scripts/release-state.sh \
+                .github/scripts/retention-continuity.sh \
+                .github/scripts/retention-safety.sh \
                 .github/scripts/audit-xboard-retention.sh \
                 .github/scripts/plan-xboard-release-slot.sh |
               bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1040,6 +1246,7 @@ jobs:
           MAINTENANCE_PORT: ${{ needs.plan-release-slot.outputs.stage_port }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/prepare-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1057,6 +1264,7 @@ jobs:
           EXPECTED_PREDECESSOR_SHA: ${{ needs.plan-release-slot.outputs.active_revision }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/verify-xboard-v2-prepared-release.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1154,7 +1362,9 @@ jobs:
           SUPERSEDING_RELEASE_SHA: ${{ inputs.expected_sha }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/retention-safety.sh \
               .github/scripts/finalize-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -1176,6 +1386,8 @@ jobs:
               "EXPECTED_WORKFLOW_SHA='$ACTIVE_RELEASE_SHA' bash -s"
           cat .github/scripts/production-runtime-discovery.sh \
               .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/retention-safety.sh \
               .github/scripts/audit-xboard-retention.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -1264,6 +1476,7 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/start-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1313,6 +1526,7 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/switch-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1407,6 +1621,7 @@ jobs:
         run: |
           rollback_output=$(
             cat .github/scripts/release-state.sh \
+                .github/scripts/retention-continuity.sh \
                 .github/scripts/v2-low-memory-common.sh \
                 .github/scripts/rollback-xboard-v2-low-memory.sh |
               bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1416,6 +1631,7 @@ jobs:
           printf '%s\n' "$rollback_output"
           rollback_port=$(
             cat .github/scripts/release-state.sh \
+                .github/scripts/retention-continuity.sh \
                 .github/scripts/v2-low-memory-common.sh \
                 .github/scripts/resolve-xboard-v2-port.sh |
               bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \

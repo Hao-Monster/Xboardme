@@ -128,6 +128,79 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertStringContainsString('tee "$RUNNER_TEMP/retention-cleanup.txt"', $workflow);
     }
 
+    public function test_retention_failure_still_runs_guarded_read_only_verification_and_keeps_evidence(): void
+    {
+        $workflow = Yaml::parseFile(base_path('.github/workflows/production-release.yml'));
+        foreach ([
+            ['pre-finalize-v2-smoke', 'finalize-v2-release', 'verify-finalized-production'],
+            ['pre-retention-cleanup-smoke', 'cleanup-retired-production-assets', 'verify-retention-cleanup'],
+        ] as [$precheck, $mutation, $verification]) {
+            $job = $workflow['jobs'][$verification];
+            $this->assertStringContainsString('always()', $job['if']);
+            $this->assertStringContainsString("needs.$precheck.result == 'success'", $job['if']);
+            $this->assertStringContainsString("needs.$mutation.result != 'skipped'", $job['if']);
+            $this->assertSame([$precheck, $mutation], $job['needs']);
+            $steps = collect($job['steps']);
+            $this->assertNotNull($steps->firstWhere('name', 'Verify exact maintenance workflow before host access'));
+            $inventory = $steps->first(fn ($step) => str_starts_with($step['name'] ?? '', 'Audit runtime and retained assets')
+                || ($step['name'] ?? '') === 'Audit finalized runtime and retained assets after cleanup');
+            $this->assertNotNull($inventory);
+            $this->assertStringContainsString('RETENTION_REQUIRE_FINALIZED=false', $inventory['run']);
+            $this->assertStringContainsString('RETENTION_ACQUIRE_LOCK=true', $inventory['run']);
+            $this->assertStringContainsString('always()', $inventory['if'] ?? '');
+            $this->assertStringContainsString("steps.admission.outcome == 'success'", $inventory['if'] ?? '');
+            $this->assertStringNotContainsString('preflight-xboard-compose.sh', $inventory['run']);
+            $preflight = $steps->firstWhere('id', 'post-preflight');
+            $this->assertNotNull($preflight);
+            $identity = $steps->firstWhere('id', 'post-identity');
+            $this->assertNotNull($identity);
+            $this->assertStringContainsString('verify-retention-post-audit.sh', $identity['run']);
+            $this->assertStringContainsString('always()', $identity['if']);
+            $smoke = $steps->firstWhere('uses', './.github/actions/distributor-smoke');
+            $this->assertStringContainsString("steps.post-identity.outcome == 'success'", $smoke['if'] ?? '');
+            $this->assertStringContainsString("steps.post-preflight.outcome == 'success'", $smoke['if'] ?? '');
+            foreach ($steps->filter(fn ($step) => str_starts_with($step['uses'] ?? '', 'actions/upload-artifact@')) as $upload) {
+                $this->assertSame('${{ always() }}', $upload['if'] ?? null);
+            }
+            $mutationSteps = collect($workflow['jobs'][$mutation]['steps']);
+            $upload = $mutationSteps->first(fn ($step) => str_starts_with($step['uses'] ?? '', 'actions/upload-artifact@'));
+            $this->assertNotNull($upload);
+            $this->assertSame('${{ always() }}', $upload['if'] ?? null);
+        }
+    }
+
+    public function test_manual_retention_requires_committed_review_before_authentication_and_is_bounded(): void
+    {
+        $workflow = Yaml::parseFile(base_path('.github/workflows/production-release.yml'));
+        foreach (['pre-finalize-v2-smoke', 'pre-retention-cleanup-smoke'] as $job) {
+            $steps = $workflow['jobs'][$job]['steps'];
+            $reviewIndex = null;
+            $authIndex = null;
+            foreach ($steps as $index => $step) {
+                if (str_contains($step['run'] ?? '', 'verify-retention-request.sh')) {
+                    $reviewIndex = $index;
+                }
+                if (($step['uses'] ?? '') === './.github/actions/distributor-smoke') {
+                    $authIndex = $index;
+                }
+            }
+            $this->assertNotNull($reviewIndex, $job);
+            $this->assertNotNull($authIndex, $job);
+            $this->assertLessThan($authIndex, $reviewIndex, $job);
+        }
+        $input = $workflow['on']['workflow_dispatch']['inputs']['cleanup_max_objects_per_run'] ?? null;
+        $this->assertIsArray($input);
+        $this->assertSame(1, $input['default']);
+        $script = file_get_contents(base_path('.github/scripts/verify-retention-request.sh'));
+        $this->assertStringContainsString('retention_review_validate', $script);
+        $this->assertStringContainsString('git ls-remote', $script);
+        $this->assertStringContainsString('current_main_changed', $script);
+        $release = file_get_contents(base_path('.github/workflows/production-release.yml'));
+        $this->assertStringContainsString('RETENTION_REVIEW_MANIFEST_B64', $release);
+        $this->assertStringContainsString('RETENTION_MAX_OBJECTS_PER_RUN', $release);
+        $this->assertStringContainsString('retention-safety.sh', $release);
+    }
+
     public function test_release_retention_lifecycle_is_guarded_and_does_not_rebuild_images(): void
     {
         $path = base_path('.github/workflows/production-release.yml');
@@ -183,13 +256,13 @@ class ProductionReleaseWorkflowTest extends TestCase
         $this->assertStringNotContainsString("inputs.production_release_action == 'v2_finalize'", $legacyWorkflow);
         $this->assertStringNotContainsString('finalize-v2-low-memory:', $legacyWorkflow);
         $this->assertSame(['pre-finalize-v2-smoke'], (array) ($parsed['jobs']['finalize-v2-release']['needs'] ?? []));
-        $this->assertSame(['finalize-v2-release'], (array) ($parsed['jobs']['verify-finalized-production']['needs'] ?? []));
+        $this->assertSame(['pre-finalize-v2-smoke', 'finalize-v2-release'], (array) ($parsed['jobs']['verify-finalized-production']['needs'] ?? []));
         $this->assertSame(
             ['pre-retention-cleanup-smoke'],
             (array) ($parsed['jobs']['cleanup-retired-production-assets']['needs'] ?? [])
         );
         $this->assertSame(
-            ['cleanup-retired-production-assets'],
+            ['pre-retention-cleanup-smoke', 'cleanup-retired-production-assets'],
             (array) ($parsed['jobs']['verify-retention-cleanup']['needs'] ?? [])
         );
         $this->assertStringContainsString('RETENTION_ACQUIRE_LOCK=true', $workflow);
@@ -275,6 +348,7 @@ class ProductionReleaseWorkflowTest extends TestCase
         foreach ([
             'candidate_matches_active',
             'active_v2:true',
+            'finalizing:false',
             'finalized:false',
             'incompatible_finalize_in_progress',
             'active_maintenance_port',
@@ -298,8 +372,9 @@ class ProductionReleaseWorkflowTest extends TestCase
             'V2_FINALIZE_REASON:=retention_window',
             'SUPERSEDING_RELEASE_SHA is required for superseded finalize',
             'superseding_release_matches_active',
-            'finalize_reason_changed_during_retry',
-            'superseding_release_changed_during_retry',
+            'finalize_retry_identity_changed',
+            '.reason == $reason and .superseding_sha == $sha',
+            '.protected == $protected and .legacy_ids == $ids',
             'superseded_by_sha',
         ] as $guard) {
             $this->assertStringContainsString($guard, $finalize);
@@ -310,25 +385,39 @@ class ProductionReleaseWorkflowTest extends TestCase
     {
         $path = base_path('.github/scripts/cleanup-xboard-retention.sh');
         $script = file_get_contents($path);
+        $safety = file_get_contents(base_path('.github/scripts/retention-safety.sh'));
 
         $this->assertFileExists($path);
         $this->assertIsString($script);
         foreach ([
-            'EXPECTED_RETENTION_RESOURCE_FINGERPRINT is required',
+            'EXPECTED_RETENTION_RESOURCE_FINGERPRINT:?required',
             'RETENTION_REQUIRE_FINALIZED',
             'RETENTION_ACQUIRE_LOCK',
             'resource_fingerprint_mismatch',
-            'active_release_not_finalized',
+            'locked_finalized_audit_required',
+            'active_identity_mismatch',
             'rollback_support_not_closed',
-            'direct_rollback_still_present',
-            'candidate_identity_changed',
-            'maintenance_referenced_by_caddy',
+            '-z "${direct_previous_project:-}"',
+            'inventory_outside_frozen_plan',
+            'legacy_retry_plan_missing',
+            'retry_plan_integrity_mismatch',
+            'retry_approval_changed',
+            'unaccounted_resource_disappearance',
+            'completed_object_present',
+            'image_reference_retargeted',
+            'candidate_history_changed',
+            'reviewed_image_referenced',
+            'protected_container_in_plan',
             'image_min_age_below_seven_days',
             'retention_cleanup_source_fingerprint',
             'retention_cleanup_status',
-            'active_app_data_changed',
-            'active_redis_volume_missing',
-            'compose_anchor_missing',
+            'live_protection_invalid',
+            'live_protection_changed',
+            'cleanup_progress attempts container "$id"',
+            'cleanup_progress attempts image "$id"',
+            'RETENTION_OBSERVE_SECONDS:=60',
+            'processed_containers < 2',
+            'result=$status',
             'volumes=preserved directories=preserved',
         ] as $guard) {
             $this->assertStringContainsString($guard, $script);
@@ -340,14 +429,24 @@ class ProductionReleaseWorkflowTest extends TestCase
             'docker volume prune',
             'docker container rm -v',
             'docker image rm -f',
+            'docker stop',
+            'docker compose down',
             'rm -rf',
         ] as $forbiddenMutation) {
             $this->assertStringNotContainsString($forbiddenMutation, $script, $forbiddenMutation);
         }
         $this->assertStringContainsString('docker container rm "$id"', $script);
-        $this->assertStringContainsString('docker image rm "$candidate_image_id"', $script);
-        $this->assertStringContainsString('https://github.com/Hao-Monster/Xboardme', $script);
-        $this->assertStringContainsString('https://github.com/FengHaoyun-MONSTER/Xboardme', $script);
+        $this->assertSame(2, preg_match_all('/docker image rm([^\n]*)/', $script, $removals));
+        foreach ($removals[1] as $options) {
+            $this->assertStringContainsString('--no-prune', $options);
+        }
+        $this->assertStringContainsString('https://github.com/Hao-Monster/Xboardme', $safety);
+        $this->assertStringContainsString('https://github.com/FengHaoyun-MONSTER/Xboardme', $safety);
+        foreach (['retention_inventory_within_plan', 'retention_verify_reviewed_containers',
+            'retention_load_review', 'retention_image_eligible'] as $sharedGuard) {
+            $this->assertStringContainsString($sharedGuard, $script);
+            $this->assertStringContainsString($sharedGuard . '()', $safety);
+        }
     }
 
     public function test_network_debt_cleanup_is_fingerprinted_and_never_uses_global_prune(): void

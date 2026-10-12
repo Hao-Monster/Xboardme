@@ -23,6 +23,7 @@ network_cleanup_fail() {
 [[ -n "${active_container:-}" && -n "${active_app_data_id:-}" &&
    -n "${active_app_data_path:-}" && -n "${active_redis_volume:-}" &&
    -n "${workdir:-}" ]] || network_cleanup_fail retention_context_missing
+release_assert_cleanup_admission "$workdir"
 case "${active_traffic_state:-}" in
   active_v2)
     if [[ "${active_rollback_supported:-}" == true ]]; then

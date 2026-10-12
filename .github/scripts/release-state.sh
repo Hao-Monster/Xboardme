@@ -8,6 +8,29 @@ release_state_require_tool() {
   }
 }
 
+# Call after acquiring deploy.lock, before a new production mutation. Recovery
+# and rollback deliberately do not use this gate. Old deployments without an
+# image-cleanup gate retain their existing behavior; a gate may never be ignored
+# just because a caller forgot to prepend the complete continuity validator.
+release_assert_cleanup_admission() {
+  local root=${1:?workdir required} gate
+  [[ "$root" == /* && "$root" != / && -d "$root" && ! -L "$root" &&
+     ! -L "$root/.codex-v2-release" ]] || {
+    echo 'RELEASE_STATE_FAIL=cleanup_admission_path_invalid' >&2
+    return 1
+  }
+  gate="$root/.codex-v2-release/image-cleanup-gate.json"
+  [[ ! -e "$gate" && ! -L "$gate" ]] && return 0
+  declare -F retention_continuity_admit_deployment >/dev/null || {
+    echo 'RELEASE_STATE_FAIL=cleanup_admission_helper_missing' >&2
+    return 1
+  }
+  retention_continuity_admit_deployment "$root" || {
+    echo 'RELEASE_STATE_FAIL=cleanup_admission_blocked' >&2
+    return 1
+  }
+}
+
 release_state_validate() {
   local state_file=$1
   release_state_require_tool || return 1
@@ -94,21 +117,51 @@ release_state_create() {
   release_state_validate "$state_file"
 }
 
-release_state_set() {
-  local state_file=$1 key=$2 value=$3 temporary
-  release_state_validate "$state_file" || return 1
-  [[ "$key" =~ ^[a-z][a-z0-9_]*$ && "$key" != schema_version ]] || {
-    echo 'RELEASE_STATE_FAIL=invalid_key' >&2
+release_state_set_many() {
+  local state_file=${1:?state_file is required} key temporary
+  shift
+  local -A seen=()
+  (($# >= 2 && $# % 2 == 0)) || {
+    echo 'RELEASE_STATE_FAIL=invalid_pairs' >&2
     return 1
   }
-  temporary=$(mktemp "${state_file}.XXXXXX")
-  if ! jq --arg key "$key" --arg value "$value" '. + {($key): $value}' "$state_file" > "$temporary"; then
+  release_state_validate "$state_file" || return 1
+  local -a pairs=("$@")
+  while (($# > 0)); do
+    key=$1
+    shift 2
+    [[ "$key" =~ ^[a-z][a-z0-9_]*$ && "$key" != schema_version ]] || {
+      echo 'RELEASE_STATE_FAIL=invalid_key' >&2
+      return 1
+    }
+    [[ -z "${seen[$key]:-}" ]] || {
+      echo 'RELEASE_STATE_FAIL=duplicate_key' >&2
+      return 1
+    }
+    seen[$key]=1
+  done
+
+  # Callers own the release lock. Write a complete validated replacement in
+  # the same directory so the rename is the only visible commit boundary.
+  temporary=$(mktemp "${state_file}.XXXXXX") || return 1
+  if ! jq --args '
+    reduce range(0; $ARGS.positional | length; 2) as $index
+      (.; .[$ARGS.positional[$index]] = $ARGS.positional[$index + 1])
+  ' -- "${pairs[@]}" < "$state_file" > "$temporary" ||
+      ! chmod 600 "$temporary" ||
+      ! release_state_validate "$temporary" ||
+      ! mv -f -- "$temporary" "$state_file"; then
     rm -f -- "$temporary"
     return 1
   fi
-  chmod 600 "$temporary"
-  mv -f -- "$temporary" "$state_file"
-  release_state_validate "$state_file"
+}
+
+release_state_set() {
+  (($# == 3)) || {
+    echo 'RELEASE_STATE_FAIL=invalid_pairs' >&2
+    return 1
+  }
+  release_state_set_many "$@"
 }
 
 release_state_decode_legacy_value() {

@@ -197,7 +197,19 @@ class DeploymentV2LowMemoryActivationTest extends TestCase
         $this->assertStringContainsString('candidate_runtime_cleanup_retry_failed', $rollback);
 
         $this->assertStringContainsString('V2_FINALIZE_MIN_AGE_SECONDS:=86400', $finalize);
-        $this->assertStringContainsString('traffic_state active_v2', $finalize);
+        $this->assertStringContainsString('traffic_state finalized', $finalize);
+        $this->assertStringContainsString('release_state_set_many "$V2_STATE_FILE"', $finalize);
+        $this->assertStringContainsString('finalize_plan_sha256', $finalize);
+        $this->assertStringContainsString('finalize_pending_id', $finalize);
+        $this->assertStringContainsString('finalize_completed_ids', $finalize);
+        $this->assertStringContainsString('finalize_retry_identity_changed', $finalize);
+        $this->assertStringContainsString('finalize_unexplained_missing_container', $finalize);
+        $this->assertStringContainsString('v2_finalize_assert_protected', $finalize);
+        $this->assertStringContainsString('retention_review_validate_finalize', $finalize);
+        $this->assertStringContainsString('current_maintenance_preserved', $finalize);
+        $this->assertStringContainsString('maintenance_config_sha256', $finalize);
+        $this->assertStringNotContainsString('docker rm -f', $finalize);
+        $this->assertStringNotContainsString('docker stop', $finalize);
         $this->assertStringContainsString('previous_release_retiring_id', $finalize);
         $this->assertStringContainsString('previous_maintenance_identity_mismatch', $finalize);
         $this->assertStringContainsString('maintenance_identity_mismatch', $finalize);

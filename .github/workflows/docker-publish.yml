@@ -355,6 +355,7 @@ jobs:
           bash -n .github/scripts/run-distributor-smoke-bounded.sh
           bash -n .github/scripts/test-run-distributor-smoke-bounded.sh
           bash -n .github/scripts/smoke-distributor-remote.sh
+          bash -n .github/scripts/test-smoke-distributor-session.sh
           bash -n .github/scripts/smoke-distributor-mobile-browser.sh
           bash -n .github/scripts/cleanup-xboard-live-release.sh
           bash -n .github/scripts/release-state.sh
@@ -371,6 +372,16 @@ jobs:
           bash -n .github/scripts/finalize-xboard-v2-low-memory.sh
           bash -n .github/scripts/plan-xboard-release-slot.sh
           bash -n .github/scripts/audit-xboard-retention.sh
+          bash -n .github/scripts/retention-safety.sh
+          for image_script in .github/scripts/*images-only*.sh .github/scripts/*image-startup*.sh .github/scripts/*retention-continuity*.sh .github/scripts/admit-xboard-after-image-cleanup.sh; do
+            bash -n "$image_script"
+          done
+          bash -n .github/scripts/verify-retention-request.sh
+          bash -n .github/scripts/test-verify-retention-request.sh
+          bash -n .github/scripts/verify-retention-post-audit.sh
+          bash -n .github/scripts/test-verify-retention-post-audit.sh
+          bash -n .github/scripts/test-retention-docker-protocol.sh
+          bash -n .github/scripts/test-retention-timeout.sh
           bash -n .github/scripts/cleanup-xboard-retention.sh
           bash -n .github/scripts/audit-xboard-network-debt.sh
           bash -n .github/scripts/cleanup-xboard-network-debt.sh
@@ -395,10 +406,24 @@ jobs:
           bash .github/scripts/test-plan-xboard-release-slot.sh
           bash .github/scripts/test-verify-xboard-v2-prepared-release.sh
           bash .github/scripts/test-cleanup-xboard-retention.sh
+          bash .github/scripts/test-verify-retention-request.sh
+          bash .github/scripts/test-verify-retention-post-audit.sh
+          bash .github/scripts/test-retention-timeout.sh
+          bash .github/scripts/test-images-only-approval.sh
+          bash .github/scripts/test-image-startup-references.sh
+          bash .github/scripts/test-verify-images-only-request.sh
+          bash .github/scripts/test-retention-continuity.sh
+          bash .github/scripts/test-cleanup-xboard-images-only.sh
+          bash .github/scripts/test-audit-xboard-images-only.sh
+          bash .github/scripts/test-deploy-admin-assets-admission.sh
+          bash .github/scripts/test-verify-images-only-post-audit.sh
+          RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-images-only-docker.sh
+          RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-retention-docker-protocol.sh
           bash .github/scripts/test-audit-xboard-network-debt.sh
           bash .github/scripts/test-cleanup-xboard-network-debt.sh
           bash .github/scripts/test-resolve-xboard-v2-port.sh
           bash .github/scripts/test-run-distributor-smoke-bounded.sh
+          bash .github/scripts/test-smoke-distributor-session.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
           bash -n .github/scripts/rollback-admin-assets-hotfix.sh
           bash .github/scripts/test-release-state.sh
@@ -420,6 +445,7 @@ jobs:
           fi
           test "$unknown_output" = 'PREFLIGHT_FAIL=redis_cluster_topology_unknown'
           bash .github/scripts/test-ssh-with-password.sh
+          test "$(git ls-files --stage .github/scripts/ssh-askpass.sh | cut -d' ' -f1)" = 100755
           bash .github/scripts/test-preflight-scheduler-reaper.sh
           bash .github/scripts/test-production-runtime-discovery.sh
           bash .github/scripts/test-resolve-production-image.sh
@@ -729,7 +755,8 @@ jobs:
           STAGE_RUN_ID: ${{ inputs.approved_stage_run_id }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          cat .github/scripts/production-runtime-discovery.sh .github/scripts/deploy-admin-assets-hotfix.sh |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh .github/scripts/deploy-admin-assets-hotfix.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
               "HOTFIX_ID='$HOTFIX_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' bash -s"
@@ -1107,7 +1134,7 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           RELEASE_PORT: ${{ inputs.candidate_target_port }}
         run: |
-          cat .github/scripts/release-state.sh .github/scripts/prepare-xboard-live-green.sh |
+          cat .github/scripts/release-state.sh .github/scripts/retention-continuity.sh .github/scripts/prepare-xboard-live-green.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' STAGE_RUN_ID='$STAGE_RUN_ID' RELEASE_SHA='$RELEASE_SHA' RELEASE_PORT='$RELEASE_PORT' bash -s"
@@ -1178,7 +1205,7 @@ jobs:
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           RELEASE_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          cat .github/scripts/release-state.sh .github/scripts/cleanup-xboard-live-release.sh |
+          cat .github/scripts/release-state.sh .github/scripts/retention-continuity.sh .github/scripts/cleanup-xboard-live-release.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' bash -s"
@@ -1244,7 +1271,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
           EXPECTED_RELEASE_SHA: ${{ inputs.expected_sha }}
         run: |
-          cat .github/scripts/release-state.sh .github/scripts/switch-xboard-live-green.sh |
+          cat .github/scripts/release-state.sh .github/scripts/retention-continuity.sh .github/scripts/switch-xboard-live-green.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
@@ -1308,7 +1335,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-          cat .github/scripts/release-state.sh .github/scripts/rollback-xboard-live-green.sh |
+          cat .github/scripts/release-state.sh .github/scripts/retention-continuity.sh .github/scripts/rollback-xboard-live-green.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' bash -s"
@@ -1380,7 +1407,7 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
           ALLOW_ROLE_REPAIR: ${{ inputs.production_release_action == 'repair_roles' }}
         run: |
-          cat .github/scripts/release-state.sh .github/scripts/activate-xboard-green-roles.sh |
+          cat .github/scripts/release-state.sh .github/scripts/retention-continuity.sh .github/scripts/activate-xboard-green-roles.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' ALLOW_ROLE_REPAIR='$ALLOW_ROLE_REPAIR' bash -s"
@@ -1424,7 +1451,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
-          cat .github/scripts/release-state.sh .github/scripts/retire-xboard-previous-release.sh |
+          cat .github/scripts/release-state.sh .github/scripts/retention-continuity.sh .github/scripts/retire-xboard-previous-release.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' EXPECTED_RELEASE_SHA='$EXPECTED_RELEASE_SHA' bash -s"
@@ -1458,7 +1485,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-          cat .github/scripts/release-state.sh .github/scripts/rollback-xboard-live-green.sh |
+          cat .github/scripts/release-state.sh .github/scripts/retention-continuity.sh .github/scripts/rollback-xboard-live-green.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' bash -s"
@@ -1517,7 +1544,7 @@ jobs:
           RELEASE_ID: ${{ inputs.release_id }}
         run: |
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
-          cat .github/scripts/release-state.sh .github/scripts/cleanup-xboard-live-release.sh |
+          cat .github/scripts/release-state.sh .github/scripts/retention-continuity.sh .github/scripts/cleanup-xboard-live-release.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
             -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             "RELEASE_ID='$RELEASE_ID' bash -s"
@@ -1594,6 +1621,7 @@ jobs:
           MAINTENANCE_PORT: ${{ inputs.stage_target_port }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/prepare-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1652,6 +1680,7 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/start-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1726,6 +1755,7 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/rollback-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1803,6 +1833,7 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/switch-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1877,6 +1908,7 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/rollback-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
@@ -1953,6 +1985,7 @@ jobs:
           EXPECTED_RELEASE_SHA: ${{ inputs.release_expected_sha }}
         run: |
           cat .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
               .github/scripts/v2-low-memory-common.sh \
               .github/scripts/rollback-xboard-v2-low-memory.sh |
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \

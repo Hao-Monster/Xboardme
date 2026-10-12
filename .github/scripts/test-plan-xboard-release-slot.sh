@@ -23,17 +23,19 @@ run_plan_case() (
   case "$scenario" in
     rotate)
       ;;
-    finalized)
+    finalized|finalized_no_free_slot)
       active_traffic_state=finalized
       active_rollback_supported=false
       ;;
     resume_rotation)
       active_traffic_state=finalizing
+      active_rollback_supported=false
       finalize_reason=superseded
       superseded_by_sha=$EXPECTED_CANDIDATE_SHA
       ;;
     incompatible_finalize)
       active_traffic_state=finalizing
+      active_rollback_supported=false
       finalize_reason=superseded
       superseded_by_sha=$(printf 'c%.0s' {1..40})
       ;;
@@ -42,6 +44,10 @@ run_plan_case() (
       ;;
     invalid_state)
       active_traffic_state=maintenance
+      ;;
+    inconsistent_finalize)
+      active_traffic_state=finalizing
+      active_rollback_supported=true
       ;;
     *)
       echo "RELEASE_SLOT_TEST_FAIL=unknown_scenario:$scenario" >&2
@@ -58,7 +64,11 @@ run_plan_case() (
     esac
   }
   release_slot_listener_count() {
-    [[ "$1" == 7003 ]] && printf '1\n' || printf '0\n'
+    if [[ "$scenario" == finalized_no_free_slot || "$1" == 7003 || "$1" == 7004 ]]; then
+      printf '1\n'
+    else
+      printf '0\n'
+    fi
   }
   release_slot_caddy_reference_count() {
     [[ "$1" == 7002 ]] && printf '1\n' || printf '0\n'
@@ -85,7 +95,7 @@ resume_output=$(run_plan_case resume_rotation)
 grep -qx 'RELEASE_SLOT_ROTATION_REQUIRED=true' <<<"$resume_output"
 grep -qx 'RELEASE_SLOT_STAGE_PORT=7005' <<<"$resume_output"
 
-for scenario in same_candidate invalid_state incompatible_finalize; do
+for scenario in same_candidate invalid_state incompatible_finalize finalized_no_free_slot inconsistent_finalize; do
   output=$(mktemp)
   trap 'rm -f -- "$output"' EXIT
   set +e
@@ -97,6 +107,8 @@ for scenario in same_candidate invalid_state incompatible_finalize; do
     same_candidate) grep -q 'RELEASE_SLOT_FAIL=candidate_matches_active' "$output" ;;
     invalid_state) grep -q 'RELEASE_SLOT_FAIL=unsupported_active_lifecycle' "$output" ;;
     incompatible_finalize) grep -q 'RELEASE_SLOT_FAIL=incompatible_finalize_in_progress' "$output" ;;
+    finalized_no_free_slot) grep -q 'RELEASE_SLOT_FAIL=no_free_stage_port' "$output" ;;
+    inconsistent_finalize) grep -q 'RELEASE_SLOT_FAIL=unsupported_active_lifecycle' "$output" ;;
   esac
   rm -f -- "$output"
   trap - EXIT

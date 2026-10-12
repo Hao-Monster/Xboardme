@@ -22,6 +22,7 @@ v2_validate_release_id
 
 v2_find_workdir
 v2_acquire_lock
+release_assert_cleanup_admission "$V2_WORKDIR"
 
 release_root="$V2_WORKDIR/.codex-v2-release"
 release_dir="$release_root/$RELEASE_ID"

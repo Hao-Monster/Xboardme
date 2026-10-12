@@ -26,7 +26,7 @@ release_slot_fail() {
 case "${active_traffic_state:-}:${active_rollback_supported:-}" in
   active_v2:true) rotation_required=true ;;
   finalized:false) rotation_required=false ;;
-  finalizing:true)
+  finalizing:false)
     active_finalize_reason=$(release_state_get_optional "$active_state_file" finalize_reason)
     active_superseding_sha=$(release_state_get_optional "$active_state_file" superseded_by_sha)
     [[ "$active_finalize_reason" == superseded && "$active_superseding_sha" == "$EXPECTED_CANDIDATE_SHA" ]] ||

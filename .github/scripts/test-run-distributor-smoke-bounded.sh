@@ -28,4 +28,18 @@ set -e
 test "$timeout_status" = 124
 grep -Fq 'DISTRIBUTOR_SMOKE_TIMEOUT=FAIL timeout_seconds=1' <<< "$timeout_output"
 
+cat > "$work_dir/forced-smoke.sh" <<'SH'
+#!/usr/bin/env bash
+kill -KILL "$$"
+SH
+set +e
+forced_output=$(
+  SMOKE_TIMEOUT_SECONDS=2 \
+    bash "$script_dir/run-distributor-smoke-bounded.sh" "$work_dir/forced-smoke.sh" 2>&1
+)
+forced_status=$?
+set -e
+test "$forced_status" = 137
+grep -Fq 'DISTRIBUTOR_SMOKE_SESSION_CLEANUP=INCOMPLETE reason=forced_termination' <<< "$forced_output"
+
 echo 'BOUNDED_DISTRIBUTOR_SMOKE_TEST=PASS'

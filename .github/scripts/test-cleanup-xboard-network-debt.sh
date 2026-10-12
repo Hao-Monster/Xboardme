@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$script_dir/release-state.sh"
 
 run_network_cleanup_case() (
   set -Eeuo pipefail
@@ -171,5 +172,15 @@ grep -q 'NETWORK_DEBT_CLEANUP=PASS id=333-1 removed_networks=1 containers=preser
 run_network_cleanup_case rollback-preserved >"$NETWORK_TEST_ROOT/rollback-preserved.out"
 grep -Fxq 'network-rm old-network-id' "$NETWORK_TEST_LOG"
 grep -q 'NETWORK_DEBT_CLEANUP=PASS id=333-1 removed_networks=1 containers=preserved volumes=preserved images=preserved directories=preserved' "$NETWORK_TEST_ROOT/rollback-preserved.out"
+
+: > "$NETWORK_TEST_LOG"
+printf '{"status":"HOLD"}\n' > "$NETWORK_TEST_WORKDIR/.codex-v2-release/image-cleanup-gate.json"
+set +e
+run_network_cleanup_case happy > "$NETWORK_TEST_ROOT/image-cleanup-hold.out" 2>&1
+hold_status=$?
+set -e
+((hold_status != 0))
+grep -q cleanup_admission_helper_missing "$NETWORK_TEST_ROOT/image-cleanup-hold.out"
+[[ ! -s "$NETWORK_TEST_LOG" ]]
 
 echo 'NETWORK_DEBT_CLEANUP_TEST=PASS'

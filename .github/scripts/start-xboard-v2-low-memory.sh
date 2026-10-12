@@ -16,6 +16,7 @@ scheduler_reaper_observation_seconds=${SCHEDULER_REAPER_OBSERVATION_SECONDS:-185
 
 v2_require_tools
 v2_open_release
+release_assert_cleanup_admission "$V2_WORKDIR"
 [[ "$TRAFFIC_STATE" == prepared ]] || v2_fail "invalid_start_state:$TRAFFIC_STATE"
 available_memory_kib=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
 [[ "$available_memory_kib" =~ ^[0-9]+$ ]] && ((available_memory_kib >= 524288)) || v2_fail insufficient_available_memory
