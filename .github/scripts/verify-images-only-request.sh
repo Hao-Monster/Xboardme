@@ -15,13 +15,14 @@ if [[ -z "$review" ]]; then review=$(images_only_selected_review) || fail invali
    "${GITHUB_REF:-}" == refs/heads/main && "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ &&
    "$EXPECTED_SHA" == "${GITHUB_SHA:-}" && "$EXPECTED_SHA" == "${GITHUB_WORKFLOW_SHA:-}" &&
    "${GITHUB_WORKFLOW_REF:-}" == Hao-Monster/Xboardme/.github/workflows/production-image-cleanup.yml@refs/heads/main ]] || fail workflow_identity
-[[ "$IMAGE_CLEANUP_ACTION" == audit || "$IMAGE_CLEANUP_ACTION" == retirement-audit || "$IMAGE_CLEANUP_ACTION" == cleanup ]] || fail invalid_action
-if [[ "$IMAGE_CLEANUP_ACTION" == retirement-audit || "${IMAGE_CLEANUP_REVIEW_ID:-default}" != default ]]; then
+[[ "$IMAGE_CLEANUP_ACTION" == audit || "$IMAGE_CLEANUP_ACTION" == retirement-audit ||
+   "$IMAGE_CLEANUP_ACTION" == gate-audit || "$IMAGE_CLEANUP_ACTION" == cleanup ]] || fail invalid_action
+if [[ "$IMAGE_CLEANUP_ACTION" == retirement-audit || "$IMAGE_CLEANUP_ACTION" == gate-audit || "${IMAGE_CLEANUP_REVIEW_ID:-default}" != default ]]; then
   [[ "${GITHUB_EVENT_NAME:-}" == workflow_dispatch && "${GITHUB_RUN_ATTEMPT:-}" == 1 ]] || fail manual_first_attempt_required
 fi
 [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]] || fail checkout_mismatch
 git diff --quiet --ignore-submodules=none && git diff --cached --quiet || fail dirty_checkout
-if [[ "$IMAGE_CLEANUP_ACTION" == retirement-audit || "${IMAGE_CLEANUP_REVIEW_ID:-default}" != default ]]; then
+if [[ "$IMAGE_CLEANUP_ACTION" == retirement-audit || "$IMAGE_CLEANUP_ACTION" == gate-audit || "${IMAGE_CLEANUP_REVIEW_ID:-default}" != default ]]; then
   checkout_status=$(git status --porcelain=v1 --untracked-files=all --ignore-submodules=none) || fail checkout_inventory
   [[ -z "$checkout_status" ]] || fail dirty_checkout
 fi

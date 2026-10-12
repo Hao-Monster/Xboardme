@@ -3,7 +3,11 @@ set -Eeuo pipefail
 # Read-only extension of audit-xboard-images-only.sh. Keep its fd9 and EXIT
 # trap intact. Evidence is not deletion authority, and HOLD is never modified.
 
-retirement_fail() { printf 'RETIREMENT_READINESS_FAIL=%s\n' "$1" >&2; exit 1; }
+retirement_scope=${retirement_scope:-full}
+retirement_prefix=RETIREMENT_READINESS
+if [[ "$retirement_scope" == gate ]]; then retirement_prefix=RETIREMENT_GATE_AUDIT; fi
+retirement_fail() { printf '%s_FAIL=%s\n' "$retirement_prefix" "$1" >&2; exit 1; }
+[[ "$retirement_scope" == full || "$retirement_scope" == gate ]] || retirement_fail invalid_scope
 retirement_deadline=$((SECONDS+300))
 retirement_run() {
   ((SECONDS<retirement_deadline)) || return 124
@@ -15,14 +19,14 @@ retirement_hash() {
   value=$(retirement_run sha256sum) || return 1
   printf '%s\n' "${value%% *}"
 }
-retirement_emit() { printf 'RETIREMENT_READINESS_%s=%s\n' "$1" "$2"; }
+retirement_emit() { printf '%s_%s=%s\n' "$retirement_prefix" "$1" "$2"; }
 
 # Pin a safely owned regular file through an inherited read-only descriptor.
 # No JSON, environment, log or configuration contents escape except the fixed
 # validated projection. Hashes cover original bytes, including whitespace.
 retirement_file() (
   local path=$1 limit=$2 filter=$3 components=${4:-false}
-  local fd pinned before after hash repeated safe inventory_hash startup_hash
+  local fd pinned before after hash repeated safe inventory_hash startup_hash identity
   [[ -f "$path" && ! -L "$path" && "$path" == "$workdir/"* &&
      "$(retirement_run realpath -e -- "$path")" == "$path" ]] || return 1
   before=$(retirement_run stat -Lc '%d:%i:%u:%a:%h:%s:%y:%z' -- "$path") || return 1
@@ -45,8 +49,14 @@ retirement_file() (
   after=$(retirement_run stat -Lc '%d:%i:%u:%a:%h:%s:%y:%z' -- "$path") || return 1
   [[ "$hash" == "$repeated" && "$before" == "$after" && ! -L "$path" &&
      "$(retirement_run realpath -e -- "$path")" == "$path" ]] || return 1
-  retirement_jq -cnS --arg hash "$hash" --argjson safe "$safe" --argjson size "$size" \
-    '{present:true,status:"verified",raw_sha256:$hash,size_bytes:$size,safe:$safe}'
+  if [[ "$retirement_scope" == gate ]]; then
+    identity=$(printf '%s\n' "$before" | retirement_hash) || return 1
+    retirement_jq -cnS --arg hash "$hash" --arg identity "$identity" --argjson safe "$safe" --argjson size "$size" \
+      '{present:true,status:"verified",raw_sha256:$hash,identity_sha256:$identity,size_bytes:$size,safe:$safe}'
+  else
+    retirement_jq -cnS --arg hash "$hash" --argjson safe "$safe" --argjson size "$size" \
+      '{present:true,status:"verified",raw_sha256:$hash,size_bytes:$size,safe:$safe}'
+  fi
 )
 
 for retirement_tool in timeout jq sha256sum stat realpath head docker; do
@@ -66,6 +76,14 @@ done
    "${active_release_id:-}" =~ ^[0-9]+-[0-9]+$ &&
    "$active_state_file" == "$lock_root/$active_release_id/state.json" &&
    "${resource_fingerprint:-}" =~ ^[a-f0-9]{64}$ ]] || retirement_fail missing_audit_context
+if [[ "$retirement_scope" == gate ]]; then
+  # Preserve the base audit's point-in-time files, without another live Docker
+  # sweep or claiming that these snapshots prove interval-wide runtime health.
+  retirement_inventory=$(retirement_file "$retention_snapshot_file" 8388608 'select(type=="object")|{}') || retirement_fail unsafe_inventory_snapshot
+  retirement_startup=$(retirement_file "$retention_startup_file" 8388608 'select(type=="object")|{}') || retirement_fail unsafe_startup_snapshot
+  retirement_emit INVENTORY_SHA256 "$(retirement_jq -r .raw_sha256 <<< "$retirement_inventory")"
+  retirement_emit STARTUP_SHA256 "$(retirement_jq -r .raw_sha256 <<< "$retirement_startup")"
+fi
 
 # A missing optional state key becomes null, exactly as in
 # retention_resource_fingerprint. Never coerce rollback_supported to boolean.
@@ -119,10 +137,26 @@ retirement_gate_filter='
    baseline_completed_at_uptime,intent_at_uptime,removed_at_uptime,observation_completed_at_uptime,
    completed_at_uptime,sample_count,cleanup_validated,failure_reason,post_verification,
    post_evidence_sha256,post_verified_at_uptime,monitoring_mode}'
+if [[ "$retirement_scope" == gate ]]; then
+  # A nullable field is evidence only when explicitly present in the original
+  # document. The historical full-readiness projection keeps its old semantics.
+  retirement_gate_filter='
+    select(type=="object" and .schema_version==2 and .monitoring_mode=="passive_runtime_v1") | . as $gate |
+    select(all(["schema_version","status","owner_uid","session_id","workflow_sha","review_sha256",
+      "active_release_id","active_release_sha","protection_fingerprint","image_id","baseline_seconds",
+      "observe_seconds","sample_interval_seconds","started_at_uptime","last_heartbeat_uptime",
+      "baseline_started_at_uptime","baseline_completed_at_uptime","intent_at_uptime","removed_at_uptime",
+      "observation_completed_at_uptime","completed_at_uptime","sample_count","cleanup_validated",
+      "failure_reason","post_verification","post_evidence_sha256","post_verified_at_uptime","monitoring_mode"][];
+      . as $key | $gate | has($key))) | '"$retirement_gate_filter"
+fi
 retirement_gate_path="$lock_root/image-cleanup-gate.json"
 if [[ -e "$retirement_gate_path" || -L "$retirement_gate_path" ]]; then
   retirement_gate=$(retirement_file "$retirement_gate_path" 262144 "$retirement_gate_filter") || retirement_fail unsafe_gate
   retirement_jq -e --argjson owner "$EUID" '.safe.owner_uid==$owner' <<< "$retirement_gate" >/dev/null || retirement_fail gate_owner_mismatch
+  if [[ "$retirement_scope" == gate ]]; then
+    retirement_jq -e '.safe.status=="HOLD"' <<< "$retirement_gate" >/dev/null || retirement_fail held_gate_required
+  fi
   retirement_emit GATE_JSON "$retirement_gate"
   retirement_review=$(retirement_jq -r .safe.review_sha256 <<< "$retirement_gate")
   retirement_plan_path="$lock_root/image-cleanup-plan-$retirement_review.json"
@@ -141,21 +175,52 @@ if [[ -e "$retirement_gate_path" || -L "$retirement_gate_path" ]]; then
       .safe.review_sha256==$gate.safe.review_sha256 and .safe.workflow_sha==$gate.safe.workflow_sha and
       .safe.images[0].id==$gate.safe.image_id' <<< "$retirement_plan" >/dev/null || retirement_fail plan_gate_binding_mismatch
     retirement_emit PLAN_JSON "$retirement_plan"
-  else retirement_emit PLAN_JSON '{"present":false,"status":"missing"}'; fi
+  else
+    [[ "$retirement_scope" != gate ]] || retirement_fail held_plan_required
+    retirement_emit PLAN_JSON '{"present":false,"status":"missing"}'
+  fi
 else
+  [[ "$retirement_scope" != gate ]] || retirement_fail held_gate_required
   retirement_gate='{"present":false,"status":"missing"}'
   retirement_emit GATE_JSON "$retirement_gate"
   retirement_emit PLAN_JSON '{"present":false,"status":"no_gate"}'
 fi
 
+if [[ "$retirement_scope" == full ]]; then
 # This asks Docker for named scalar metadata only, never Env, raw inspect,
 # GraphDriver paths, log contents, container exec or a writable-layer size walk.
 retirement_inspect_format='{"id":{{json .Id}},"status":{{json .State.Status}},"finished_at":{{json .State.FinishedAt}},"exit_code":{{json .State.ExitCode}},"oom_killed":{{json .State.OOMKilled}},"readonly_rootfs":{{json .HostConfig.ReadonlyRootfs}},"restart_policy":{"name":{{json .HostConfig.RestartPolicy.Name}},"maximum_retry_count":{{json .HostConfig.RestartPolicy.MaximumRetryCount}}},"storage_driver":{{json .GraphDriver.Name}},"log_options":{"max_size":{{json (index .HostConfig.LogConfig.Config "max-size")}},"max_file":{{json (index .HostConfig.LogConfig.Config "max-file")}},"compress":{{json (index .HostConfig.LogConfig.Config "compress")}}},"log_driver":{{json .HostConfig.LogConfig.Type}},"log_path":{{json .LogPath}},"legacy_release":{{json (index .Config.Labels "codex.xboard.release")}},"legacy_run":{{json (index .Config.Labels "codex.xboard.release.run")}},"stage":{{json (index .Config.Labels "codex.xboard.stage")}},"stage_run":{{json (index .Config.Labels "codex.xboard.stage.run")}}}'
 retirement_inspect() {
-  local result
-  result=$(retirement_run docker inspect --format "$retirement_inspect_format" "$1" 2>/dev/null) || return 1
-  ((${#result}<=16384)) || return 1
-  retirement_jq -ceS --arg id "$1" '
+  local result validated status
+  if result=$(retirement_run docker inspect --format "$retirement_inspect_format" "$1" 2>/dev/null); then :
+  else
+    status=$?
+    printf 'RETIREMENT_METADATA_DIAGNOSTIC=inspect_command_failed exit_code=%s\n' "$status" >&2
+    return 1
+  fi
+  if ((${#result}>16384)); then
+    printf 'RETIREMENT_METADATA_DIAGNOSTIC=schema_rejected\n' >&2; return 1
+  fi
+  if ! retirement_jq -s 'length' <<< "$result" >/dev/null 2>&1; then
+    printf 'RETIREMENT_METADATA_DIAGNOSTIC=invalid_json\n' >&2; return 1
+  fi
+  if ! retirement_jq -se 'length==1 and (.[0]|type=="object")' <<< "$result" >/dev/null 2>&1; then
+    printf 'RETIREMENT_METADATA_DIAGNOSTIC=schema_rejected\n' >&2; return 1
+  fi
+  if ! retirement_jq -e '. as $metadata |
+    all(["id","status","finished_at","exit_code","oom_killed","readonly_rootfs","restart_policy",
+      "storage_driver","log_options","log_driver","log_path","legacy_release","legacy_run","stage","stage_run"][];
+      . as $key | $metadata | has($key)) and
+    (.restart_policy|type=="object" and has("name") and has("maximum_retry_count")) and
+    (.log_options|type=="object" and has("max_size") and has("max_file") and has("compress"))' \
+      <<< "$result" >/dev/null 2>&1; then
+    printf 'RETIREMENT_METADATA_DIAGNOSTIC=missing_field\n' >&2; return 1
+  fi
+  if retirement_jq -e 'any(.id,.status,.finished_at,.exit_code,.oom_killed,.readonly_rootfs,
+    .storage_driver,.log_driver,.log_path;.==null)' <<< "$result" >/dev/null 2>&1; then
+    printf 'RETIREMENT_METADATA_DIAGNOSTIC=unsupported_field\n' >&2; return 1
+  fi
+  if ! validated=$(retirement_jq -ceS --arg id "$1" '
     def run: .==null or .=="" or (type=="string" and test("^[0-9]+-[0-9]+$"));
     select(.id==$id and .status=="exited" and
       (.finished_at|type=="string" and test("^[0-9]{4}-[0-9T:Z.+-]+$")) and
@@ -173,7 +238,10 @@ retirement_inspect() {
       (.log_driver|IN("json-file","local","journald","none","syslog","fluentd","awslogs","gelf","splunk","gcplogs")) and
       (.log_path|type=="string" and length<=4096 and (test("[[:cntrl:]]")|not)) and
       all(.legacy_release,.stage;.==null or .=="" or .=="true" or .=="false") and
-      all(.legacy_run,.stage_run;run))' <<< "$result"
+      all(.legacy_run,.stage_run;run))' <<< "$result" 2>/dev/null); then
+    printf 'RETIREMENT_METADATA_DIAGNOSTIC=schema_rejected\n' >&2; return 1
+  fi
+  printf '%s\n' "$validated"
 }
 
 retirement_docker_root=$(retirement_run docker info --format '{{.DockerRootDir}}' 2>/dev/null) || retirement_docker_root=''
@@ -253,7 +321,10 @@ while IFS= read -r retirement_snapshot; do
       "$(retirement_jq -r .log_path <<< "$retirement_meta")") || retirement_fail log_metadata_failed
   fi
   retirement_after=$(retirement_inspect "$retirement_id") || retirement_fail stopped_container_changed_after_inspection
-  [[ "$retirement_meta" == "$retirement_after" ]] || retirement_fail stopped_container_changed_after_inspection
+  if [[ "$retirement_meta" != "$retirement_after" ]]; then
+    printf 'RETIREMENT_METADATA_DIAGNOSTIC=post_read_drift\n' >&2
+    retirement_fail stopped_container_changed_after_inspection
+  fi
   retirement_row=$(retirement_jq -cnS --arg id "$retirement_id" --arg kind "$retirement_kind" --arg release "$retirement_release" \
     --argjson metadata "$retirement_meta" --argjson state "$retirement_state" --argjson writable_layer "$retirement_writable_layer" \
     --argjson log "$retirement_log" --argjson snapshot "$retirement_snapshot" --argjson protection "$protection_snapshot" '
@@ -268,6 +339,7 @@ while IFS= read -r retirement_snapshot; do
        (.Type==$m.Type and .Source==$m.Source and .Source!="") or (.Name!="" and .Name==$m.Name)))}') || retirement_fail container_projection_failed
   retirement_emit CONTAINER_JSON "$retirement_row"
 done <<< "$(retirement_jq -c '.[]' <<< "$retirement_targets")"
+fi
 
 # Rebind the projection and recovery evidence after the metadata calls. This
 # detects concurrent writers without querying or reading production databases.
@@ -279,5 +351,11 @@ if [[ "$(retirement_jq -r .present <<< "$retirement_gate")" == true ]]; then
     [[ "$(retirement_file "$retirement_plan_path" 8388608 "$retirement_plan_filter" true)" == "$retirement_plan" ]] || retirement_fail plan_changed
   fi
 fi
-retirement_emit STOPPED_NONPROTECTED_COUNT "$retirement_count"
-printf 'RETIREMENT_READINESS=PASS mode=read_only deletion_authorized=false directories=preserved logs_read=false connection_continuity=unverified\n'
+if [[ "$retirement_scope" == gate ]]; then
+  [[ "$(retirement_file "$retention_snapshot_file" 8388608 'select(type=="object")|{}')" == "$retirement_inventory" ]] || retirement_fail inventory_snapshot_changed
+  [[ "$(retirement_file "$retention_startup_file" 8388608 'select(type=="object")|{}')" == "$retirement_startup" ]] || retirement_fail startup_snapshot_changed
+  printf 'RETIREMENT_GATE_AUDIT=PASS mode=read_only gate_plan_stable=true recovery_authorized=false metadata_inspected=false deletion_authorized=false connection_continuity=unverified\n'
+else
+  retirement_emit STOPPED_NONPROTECTED_COUNT "$retirement_count"
+  printf 'RETIREMENT_READINESS=PASS mode=read_only deletion_authorized=false directories=preserved logs_read=false connection_continuity=unverified\n'
+fi

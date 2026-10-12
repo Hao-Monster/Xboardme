@@ -16,6 +16,7 @@ on:
         options:
           - audit
           - retirement-audit
+          - gate-audit
           - cleanup
       review_id:
         description: Committed one-image review identifier (default or exactly three digits)
