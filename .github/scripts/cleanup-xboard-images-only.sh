@@ -120,7 +120,7 @@ done
 [[ "$(retention_hash < "$review_file")" == "$EXPECTED_RETENTION_REVIEW_SHA256" ]] || image_cleanup_fail review_hash_mismatch
 retention_images_review_validate "$review_file" || image_cleanup_fail review_not_approved
 retention_images_review_fresh "$review_file" || image_cleanup_fail approval_expired
-jq -e '.schema_version==2 and .status=="approved" and .operation=="image_cleanup"' "$review_file" >/dev/null || image_cleanup_fail image_only_review_required
+jq -e '(.schema_version==2 or .schema_version==3) and .status=="approved" and .operation=="image_cleanup"' "$review_file" >/dev/null || image_cleanup_fail image_only_review_required
 jq -e '.containers==[]' "$review_file" >/dev/null || image_cleanup_fail containers_forbidden
 jq -e '.images|type=="array" and length==1' "$review_file" >/dev/null || image_cleanup_fail exactly_one_image_required
 jq -e --arg id "$EXPECTED_ACTIVE_RELEASE_ID" --arg sha "$EXPECTED_ACTIVE_RELEASE_SHA" \
@@ -138,6 +138,20 @@ image_cleanup_startup_hash=$(retention_hash < "$retention_startup_file")
 image_cleanup_protection_hash=$(jq -er '.protection_fingerprint' "$review_file")
 image_cleanup_selected=$(jq -ceS --arg id "$image_cleanup_id" '.images[]|select(.id==$id)' "$retention_snapshot_file") || image_cleanup_fail reviewed_image_missing
 [[ "$(printf '%s\n' "$image_cleanup_selected" | retention_hash)" == "$(jq -er '.images[0].snapshot_sha256' "$review_file")" ]] || image_cleanup_fail image_snapshot_mismatch
+if [[ "$(jq -er .schema_version "$review_file")" == 3 ]]; then
+  # Restore identity is immutable. Never pull on production; the runner verifies
+  # the registry image before host access, and this binds it to the live audit.
+  jq -e --slurpfile review "$review_file" '
+    .revision==$review[0].images[0].revision and
+    (.digests|index($review[0].images[0].restore_digest)!=null)' \
+    <<< "$image_cleanup_selected" >/dev/null || image_cleanup_fail restore_identity_not_in_audit
+  # Include stopped/rollback/anchor containers, not merely the six active roles.
+  # A shortened monitor list must not make preservation of omitted roles pass.
+  jq -e --slurpfile review "$review_file" '
+    [.containers[]|{id,status,started_at,restart_count}]|sort_by(.id) ==
+      ($review[0].monitoring.protected_containers|sort_by(.id))' \
+    "$retention_snapshot_file" >/dev/null || image_cleanup_fail monitoring_inventory_mismatch
+fi
 jq -e --slurpfile review "$review_file" '.size_bytes>0 and .size_bytes<=$review[0].max_image_size_bytes' \
   <<< "$image_cleanup_selected" >/dev/null || image_cleanup_fail image_size_exceeds_review
 retention_image_eligible "$image_cleanup_selected" "$review_file" "$(date -u +%s)" "$RETENTION_IMAGE_MIN_AGE_SECONDS" || image_cleanup_fail image_not_eligible

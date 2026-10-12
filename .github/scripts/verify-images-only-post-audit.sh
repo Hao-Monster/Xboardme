@@ -80,6 +80,12 @@ snapshots() {
 original_containers=$(snapshots "$before" CONTAINER) || fail before_containers
 current_containers=$(snapshots "$after" CONTAINER) || fail after_containers
 [[ "$original_containers" == "$current_containers" ]] || fail container_drift
+if [[ "$(jq -er .schema_version "$review")" == 3 ]]; then
+  jq -e --slurpfile review "$review" '
+    [.[]|{id,status,started_at,restart_count}]|sort_by(.id) ==
+      ($review[0].monitoring.protected_containers|sort_by(.id))' \
+    <<< "$original_containers" >/dev/null || fail monitoring_inventory_mismatch
+fi
 original=$(snapshots "$before" IMAGE) || fail before_images
 current=$(snapshots "$after" IMAGE) || fail after_images
 verify_inventory() {
@@ -94,6 +100,12 @@ verify_inventory "$before" "$original_containers" "$original"
 verify_inventory "$after" "$current_containers" "$current"
 selected=$(jq -ceS --arg id "$id" '.[]|select(.id==$id)' <<< "$original") || fail selected_image_missing
 [[ "$(printf '%s\n' "$selected" | sha256sum | awk '{print $1}')" == "$(jq -er .images[0].snapshot_sha256 "$review")" ]] || fail selected_image_review_mismatch
+if [[ "$(jq -er .schema_version "$review")" == 3 ]]; then
+  jq -e --slurpfile review "$review" '
+    .revision==$review[0].images[0].revision and
+    (.digests|index($review[0].images[0].restore_digest)!=null)' \
+    <<< "$selected" >/dev/null || fail restore_identity_not_in_audit
+fi
 jq -e --arg id "$id" --argjson current "$current" \
   '([.[]|select(.id==$id)]|length)==1 and ([.[]|select(.id!=$id)]==$current)' \
   <<< "$original" >/dev/null || fail unapproved_image_delta

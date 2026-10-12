@@ -63,4 +63,30 @@ class ImageOnlyCleanupWorkflowTest extends TestCase
         }
         $this->assertStringNotContainsString('cleanup-continuity-admission', json_encode($jobs['auto-rollback-failed-approved-release']));
     }
+
+    public function test_passive_cleanup_verifies_restore_before_host_access_and_never_claims_authenticated_smoke(): void
+    {
+        $workflow = Yaml::parseFile(base_path('.github/workflows/production-image-cleanup.yml'));
+        $steps = $workflow['jobs']['images-only']['steps'];
+        $ids = array_column($steps, 'id');
+        $restoreIndex = array_search('restore', $ids, true);
+        $hostIndex = array_search('host-key', $ids, true);
+        $this->assertNotFalse($restoreIndex);
+        $this->assertLessThan($hostIndex, $restoreIndex);
+        $byId = [];
+        foreach ($steps as $step) {
+            if (isset($step['id'])) {
+                $byId[$step['id']] = $step;
+            }
+        }
+        $this->assertSame('read', $workflow['permissions']['packages']);
+        $this->assertStringContainsString("monitoring_mode == 'passive_runtime_v1'", $byId['restore']['if']);
+        $this->assertStringNotContainsString('SERVICES_', json_encode($byId['restore']));
+        $this->assertStringNotContainsString('DISTRIBUTOR_', json_encode($byId['restore']));
+        $this->assertStringContainsString('verify-image-restore.sh', $byId['restore']['run']);
+        $this->assertStringContainsString("monitoring_mode == 'legacy_live_v1'", $byId['smoke']['if']);
+        $evidence = array_values(array_filter($steps, fn ($step) => $step['name'] === 'Bind independent post-verification evidence'))[0];
+        $this->assertStringContainsString('PASSIVE_RUNTIME_POST_AUDIT=PASS', $evidence['run']);
+        $this->assertStringContainsString('images-only-restore.json', $evidence['run']);
+    }
 }

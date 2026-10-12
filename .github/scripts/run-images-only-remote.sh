@@ -7,10 +7,18 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 operation=${1:?audit, cleanup, post-success or post-failure required}
 case "$operation" in audit|cleanup|post-success|post-failure) ;; *) exit 1 ;; esac
 bash "$script_dir/verify-images-only-request.sh"
+review="$script_dir/../release/image-cleanup-review.json"
+if [[ "$IMAGE_CLEANUP_ACTION" == cleanup && "$operation" != post-failure && "$(jq -er .schema_version "$review")" == 3 ]]; then
+  # A same-run, immutable registry recovery proof must exist before host access.
+  # This check reads runner evidence only; it never carries registry auth remote.
+  bash "$script_dir/verify-image-restore.sh" --check-evidence
+fi
+# Failure can only tighten the already bound remote gate to HOLD. Lost positive
+# evidence must not prevent that transition; exact-main/fresh review admission
+# above and remote workflow/review-hash identity checks remain mandatory.
 : "${DEPLOY_HOST:?required}" "${DEPLOY_PORT:?required}" "${DEPLOY_USER:?required}"
 [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ && "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.:-]*$ &&
    "$DEPLOY_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || exit 1
-review="$script_dir/../release/image-cleanup-review.json"
 remote_env="EXPECTED_WORKFLOW_SHA='$EXPECTED_SHA'"
 if [[ "$IMAGE_CLEANUP_ACTION" == cleanup ]]; then
   review_hash=$(sha256sum < "$review" | awk '{print $1}')

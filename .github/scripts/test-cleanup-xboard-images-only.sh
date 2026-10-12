@@ -409,4 +409,32 @@ count_before=$(wc -l < "$case_root/mutations.log")
 expect_fail 'prior_execution_requires_review\|inventory_changed_before_cleanup'
 [[ $(wc -l < "$case_root/mutations.log") == "$count_before" ]]
 pass successful_manifest_not_replayed
+make_passive_review() {
+  jq --slurpfile inventory "$retention_snapshot_file" --arg revision "$old_sha" --arg digest "ghcr.io/hao-monster/xboardme@$candidate" '
+    .schema_version=3 | .monitoring={mode:"passive_runtime_v1",
+      protected_containers:[$inventory[0].containers[]|{id,status,started_at,restart_count}]} |
+    .review_evidence={scope_review_sha256:.review_evidence.monitoring_review_sha256,
+      isolated_docker_review_sha256:.review_evidence.isolated_docker_review_sha256} |
+    .images[0].revision=$revision | .images[0].restore_digest=$digest' "$review_file" > "$case_root/review.next"
+  mv -- "$case_root/review.next" "$review_file"
+}
+make_case passive_success
+make_passive_review
+expect_pass
+pass passive_precise_scope_success
+for fault in digest revision monitor_missing monitor_extra; do
+  make_case "passive_$fault"
+  make_passive_review
+  case "$fault" in
+    digest) expression='.images[0].restore_digest="ghcr.io/hao-monster/xboardme@sha256:"+("7"*64)' ;;
+    revision) expression='.images[0].revision=("7"*40)' ;;
+    monitor_missing) expression='.monitoring.protected_containers=[]' ;;
+    monitor_extra) expression='.monitoring.protected_containers+=.monitoring.protected_containers' ;;
+  esac
+  jq "$expression" "$review_file" > "$case_root/review.next"
+  mv -- "$case_root/review.next" "$review_file"
+  expect_fail 'restore_identity_not_in_audit\|monitoring_inventory_mismatch'
+  [[ ! -s "$case_root/mutations.log" ]]
+  pass "passive_${fault}_rejected_before_mutation"
+done
 echo "IMAGE_ONLY_TESTS=PASS cases=$passed"
