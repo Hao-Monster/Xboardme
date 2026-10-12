@@ -18,6 +18,9 @@ if [[ "$IMAGE_CLEANUP_ACTION" == cleanup && "$operation" != post-failure && "$(j
   # A same-run, immutable registry recovery proof must exist before host access.
   # This check reads runner evidence only; it never carries registry auth remote.
   bash "$script_dir/verify-image-restore.sh" --check-evidence
+  if jq -e '.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2"' "$review" >/dev/null; then
+    bash "$script_dir/verify-sampled-recovery-runner.sh" --check-evidence
+  fi
 fi
 # Failure can only tighten the already bound remote gate to HOLD. Lost positive
 # evidence must not prevent that transition; exact-main/fresh review admission
@@ -41,6 +44,11 @@ if [[ "$operation" == cleanup ]]; then
   manifest=$(base64 -w0 "$review")
   [[ "$manifest" =~ ^[A-Za-z0-9+/=]+$ ]] || exit 1
   remote_env+=" RETENTION_REVIEW_MANIFEST_B64='$manifest'"
+  if jq -e '.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2"' "$review" >/dev/null; then
+    proof=$(base64 -w0 "$RUNNER_TEMP/images-only-sampled-proof.json")
+    [[ "$proof" =~ ^[A-Za-z0-9+/=]+$ && ${#proof} -le 21848 ]] || exit 1
+    remote_env+=" RETENTION_SAMPLED_PROOF_B64='$proof'"
+  fi
 fi
 if [[ "$operation" == post-success ]]; then
   [[ "${POST_EVIDENCE_SHA256:-}" =~ ^[a-f0-9]{64}$ ]] || exit 1
@@ -49,9 +57,9 @@ fi
 payload() {
   printf 'set -Eeuo pipefail\numask 077\n'
   cat "$script_dir/production-runtime-discovery.sh" "$script_dir/release-state.sh" \
-    "$script_dir/retention-safety.sh" "$script_dir/image-startup-references.sh" \
+    "$script_dir/retention-safety.sh" "$script_dir/images-only-inventory.sh" "$script_dir/image-startup-references.sh" \
     "$script_dir/images-only-approval.sh" "$script_dir/retention-continuity.sh" \
-    "$script_dir/select-images-only-review.sh" "$script_dir/retention-predelete-recovery.sh"
+    "$script_dir/select-images-only-review.sh" "$script_dir/retention-sampled-recovery.sh" "$script_dir/retention-predelete-recovery.sh"
   if [[ "$operation" == audit || "$operation" == retirement-audit || "$operation" == gate-audit || "$operation" == cleanup ]]; then
     cat "$script_dir/audit-xboard-images-only.sh"
     if [[ "$operation" == retirement-audit ]]; then

@@ -15,7 +15,7 @@ image_cleanup_fail() { echo "IMAGE_CLEANUP_FAIL=$1" >&2; return 1; }
 review_file=${RETENTION_REVIEW_FILE:-${review_file:-}}
 
 for helper in retention_images_review_validate retention_images_review_fresh retention_images_review_load retention_hash \
-  retention_image_snapshot retention_container_snapshot retention_all_snapshots retention_image_eligible \
+  retention_image_snapshot retention_container_snapshot images_only_all_snapshots retention_image_eligible \
   retention_inventory_within_plan retention_live_protection retention_startup_references \
   retention_continuity_begin retention_continuity_check retention_continuity_intent \
   retention_continuity_observe retention_continuity_complete retention_continuity_hold; do
@@ -231,7 +231,7 @@ image_cleanup_check_target() {
   image_cleanup_target=$snapshot
 }
 image_cleanup_check_inventory() {
-  retention_all_snapshots > "$image_cleanup_current" || { image_cleanup_fail inventory_read_failed; return 1; }
+  images_only_all_snapshots > "$image_cleanup_current" || { image_cleanup_fail inventory_read_failed; return 1; }
   if [[ "$image_cleanup_intent_recorded" == false ]]; then
     if [[ -n "$image_cleanup_plan_hash" ]]; then
       jq -e --slurpfile original "$image_cleanup_plan" '.==$original[0].inventory' \

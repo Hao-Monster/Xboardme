@@ -5,6 +5,9 @@ set -Eeuo pipefail
 # fakes; unknown Docker operations fail instead of reaching a real daemon.
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/retention-safety.sh"
+# Executor decisions retain the existing exact fake inventory boundary; the
+# production inventory/watchdog is independently tested against a CLI fixture.
+images_only_all_snapshots() { retention_all_snapshots; }
 source "$script_dir/images-only-approval.sh"
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT

@@ -49,7 +49,7 @@ retention_startup_file=$(mktemp "$lock_root/.image-startup.XXXXXX")
 inventory=$(mktemp "$lock_root/.image-audit.XXXXXX")
 chmod 600 "$retention_snapshot_file" "$retention_startup_file" "$inventory"
 trap 'rm -f -- "$retention_snapshot_file" "$retention_startup_file" "$inventory"' EXIT
-retention_all_snapshots > "$retention_snapshot_file" || image_audit_fail inventory_unavailable
+images_only_all_snapshots > "$retention_snapshot_file" || image_audit_fail inventory_unavailable
 protection_snapshot=$(retention_live_protection) || image_audit_fail protection_invalid
 protection_fingerprint=$(printf '%s\n' "$protection_snapshot" | retention_hash)
 retention_startup_references > "$retention_startup_file" || image_audit_fail startup_references_unresolved

@@ -13,6 +13,13 @@ _rc_predelete_recovery_error() {
 retention_predelete_recovery_schema_validate() {
   [[ $# == 1 ]] || { _rc_predelete_recovery_error invalid_schema_arguments; return 1; }
   declare -F _rc_jq >/dev/null || { _rc_predelete_recovery_error validator_helper_missing; return 1; }
+  if _rc_jq -e '.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2"' "$1" >/dev/null 2>&1; then
+    declare -F retention_sampled_recovery_schema_validate >/dev/null &&
+      retention_sampled_recovery_schema_validate "$1" || {
+        _rc_predelete_recovery_error invalid_recovery_schema; return 1;
+      }
+    return 0
+  fi
   _rc_jq -e '
     def hash: type=="string" and test("^[a-f0-9]{64}$") and .!=("0"*64);
     def sha: type=="string" and test("^[a-f0-9]{40}$");
@@ -43,7 +50,7 @@ retention_predelete_recovery_validate() {
   [[ $# == 8 ]] || { _rc_predelete_recovery_error invalid_arguments; return 1; }
   local review=$1 gate=$2 plan=$3 inventory=$4 startup=$5 state=$6 protection=$7 workflow=$8
   local helper path root old_review_hash gate_hash plan_hash review_hash state_hash
-  local protection_hash startup_hash resource_hash image_hash resource_document image_document
+  local protection_hash startup_hash resource_hash image_hash resource_document image_document sampled=false
   for helper in _rc_run _rc_jq _rc_hash _rc_secure_file _rc_gate_validate retention_continuity_validate_review; do
     declare -F "$helper" >/dev/null || { _rc_predelete_recovery_error validator_helper_missing; return 1; }
   done
@@ -91,9 +98,16 @@ retention_predelete_recovery_validate() {
   image_hash=$(printf '%s\n' "$image_document" | _rc_hash) || {
     _rc_predelete_recovery_error evidence_hash_failed; return 1;
   }
+  if _rc_jq -e '.recovery.schema_version==2 and .recovery.mode=="predelete_sampled_hold_v2"' "$review" >/dev/null; then
+    sampled=true
+    declare -F retention_sampled_recovery_validate >/dev/null &&
+      retention_sampled_recovery_validate "$review" "$gate" "$plan" "$inventory" "$startup" "$state" "$protection" "$workflow" || {
+        _rc_predelete_recovery_error sampled_evidence_mismatch; return 1;
+      }
+  fi
   _rc_jq -ne --slurpfile review "$review" --slurpfile gate "$gate" --slurpfile plan "$plan" \
     --slurpfile inventory "$inventory" --slurpfile startup "$startup" --slurpfile state "$state" \
-    --argjson protection "$protection" --arg workflow "$workflow" \
+    --argjson protection "$protection" --arg workflow "$workflow" --argjson sampled "$sampled" \
     --arg gate_hash "$gate_hash" --arg plan_hash "$plan_hash" --arg review_hash "$review_hash" \
     --arg state_hash "$state_hash" --arg protection_hash "$protection_hash" \
     --arg startup_hash "$startup_hash" --arg resource_hash "$resource_hash" --arg image_hash "$image_hash" '
@@ -106,14 +120,14 @@ retention_predelete_recovery_validate() {
       $r.recovery.session_id==$g.session_id and $r.recovery.workflow_sha==$g.workflow_sha and
       $workflow!=$g.workflow_sha and $r.recovery.image_id==$g.image_id and
       $g.schema_version==2 and $g.monitoring_mode=="passive_runtime_v1" and
-      $g.status=="HOLD" and $g.cleanup_validated==false and $g.sample_count==0 and
+      $g.status=="HOLD" and $g.cleanup_validated==false and ($sampled or $g.sample_count==0) and
       ($g.failure_reason|type=="string" and test("^[a-zA-Z0-9_:-]{1,120}$")) and
       (["last_heartbeat_uptime","baseline_started_at_uptime","baseline_completed_at_uptime",
         "intent_at_uptime","removed_at_uptime","observation_completed_at_uptime",
         "completed_at_uptime","post_evidence_sha256","post_verified_at_uptime"] |
         all(.[]; . as $key | $g | has($key))) and
-      $g.last_heartbeat_uptime==null and $g.baseline_started_at_uptime==null and
-      $g.baseline_completed_at_uptime==null and $g.intent_at_uptime==null and
+      ($sampled or ($g.last_heartbeat_uptime==null and $g.baseline_started_at_uptime==null and
+        $g.baseline_completed_at_uptime==null)) and $g.intent_at_uptime==null and
       $g.removed_at_uptime==null and $g.observation_completed_at_uptime==null and
       $g.completed_at_uptime==null and $g.post_evidence_sha256==null and
       $g.post_verified_at_uptime==null and $g.post_verification!="passed" and

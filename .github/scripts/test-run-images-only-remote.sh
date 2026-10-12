@@ -8,13 +8,14 @@ trap 'rm -rf -- "$test_root"' EXIT
 mkdir -p "$test_root/scripts" "$test_root/release" "$test_root/bin"
 cd -- "$test_root"
 for file in run-images-only-remote.sh verify-images-only-request.sh images-only-approval.sh \
-  verify-image-restore.sh retention-continuity.sh select-images-only-review.sh retention-predelete-recovery.sh; do
+  verify-image-restore.sh retention-continuity.sh select-images-only-review.sh retention-predelete-recovery.sh retention-sampled-recovery.sh \
+  verify-sampled-recovery-runner.sh verify-sampled-recovery-runner.mjs verify-sampled-recovery-proof.mjs sampled-recovery-trace.mjs; do
   cp -- "$script_dir/$file" "$test_root/scripts/$file"
 done
 cat > "$test_root/scripts/production-runtime-discovery.sh" <<'DISCOVERY'
 xboard_find_compose_anchor() { XBOARD_ANCHOR_WORKDIR=$TEST_REMOTE_WORKDIR; }
 DISCOVERY
-for file in release-state.sh retention-safety.sh image-startup-references.sh; do : > "$test_root/scripts/$file"; done
+for file in release-state.sh retention-safety.sh images-only-inventory.sh image-startup-references.sh; do : > "$test_root/scripts/$file"; done
 printf 'echo TEST_AUDIT=PASS\n' > "$test_root/scripts/audit-xboard-images-only.sh"
 cat > "$test_root/scripts/audit-retirement-readiness.sh" <<'READINESS'
 case "$retirement_scope" in
@@ -147,6 +148,26 @@ jq -e '.status=="HOLD" and .post_verification=="failed" and .failure_reason=="in
 [[ $(wc -l < "$TEST_SSH_LOG") == 1 ]]
 grep -Fxq 'RETENTION_CONTINUITY_POST_VERIFICATION=failure' "$result"
 assert_absent 'SSHPASS|GHCR_TOKEN|DEPLOY_HOST' "$TEST_SSH_PAYLOAD"
+((cases+=1))
+
+new_case sampled_missing_historical_proof
+jq '.recovery={schema_version:2,mode:"predelete_sampled_hold_v2",gate_sha256:("e"*64),plan_sha256:("f"*64),
+  proof_sha256:("1"*64),review_sha256:("2"*64),workflow_sha:("b"*40),
+  session_id:"22222222-2222-4222-8222-222222222222",image_id:.images[0].id}' "$review" > "$review.next"
+mv -- "$review.next" "$review"
+write_gate RUNNING
+restore_fixture
+original=$(unchanged_hash)
+for operation in cleanup audit post-success; do
+  if invoke "$operation"; then echo 'unexpected sampled operation without proof' >&2; exit 1; fi
+  grep -Fxq 'SAMPLED_RECOVERY_RUNNER_FAIL=evidence_unavailable_or_mismatch' "$result"
+  [[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+  ((cases+=1))
+done
+invoke post-failure
+jq -e '.status=="HOLD" and .post_verification=="failed"' "$gate" >/dev/null
+[[ $(wc -l < "$TEST_SSH_LOG") == 1 ]]
+assert_absent 'GH_TOKEN|GHCR_TOKEN|SSHPASS' "$TEST_SSH_PAYLOAD"
 ((cases+=1))
 
 new_case completed_pending_missing_restore
