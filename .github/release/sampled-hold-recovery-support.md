@@ -77,6 +77,42 @@ observer-only plus old/new/new/old ordering. It neither starts services nor
 establishes production CPU headroom or real connection continuity. No broad
 prune, force removal, volume deletion or unknown-resource cleanup is permitted.
 
+### Fixed CI benchmark preparation
+
+After fixture setup and correctness, benchmark mode runs one predeclared
+60-second procfs-only preparation phase. Its seven absolute sample slots are
+0/10/20/30/40/50/60 seconds; both actual start and completion must be within one
+second after their slot. The sampling/validation phase has a 65-second software
+deadline. There is no retry, eighth point, catch-up, extension or repeated phase.
+Correctness-only mode does not enter preparation.
+
+Preparation requires at least 2705 seconds left on the existing overall
+deadline. After its evidence is published, formal entry rechecks that at least
+2640 seconds remain; publication time is charged to that same overall deadline,
+not the 65-second sampling envelope. The deadline is never reset for admission.
+Clock, source, schema, finite/range and per-field CPU-counter checks fail closed.
+Only the initial CPU delta may be null. PSI totals, Dirty/Writeback and optional
+daemon counters are controlled diagnostic scalars, not additional load limits.
+
+Threshold exceedances at 0/10/20 seconds remain visible as
+`WARN_UNSTABLE_PREPARATION` in both `preparation.json` and the summary, even if
+the subsequent samples or benchmark pass. All four preselected 30/40/50/60-second
+samples must satisfy the unchanged `LIMITS` with valid source/CPU data. Their
+actual start-time span is reported; four discrete points do not establish
+continuous health for 30 seconds or identify what caused earlier pressure.
+Invalid/late samples, tail exceedances, missing evidence or insufficient budget
+leave `benchmark=NOT_RUN_PREPARATION_REJECTED`, with no formal observer or
+benchmark snapshot started. The summary's `preparation_formal_entry` records the
+post-publication gate separately from the sampling artifact.
+
+Admitted formal episodes create five new observers with independent rows and
+CPU history. Their existing limits, failure behavior, coverage checks, order and
+120/300/10-second protocol remain unchanged. Benchmark run `38314674406` remains
+FAIL on its observed first-sample I/O pressure; these diagnostics neither
+attribute that failure to fixture creation nor retroactively turn it green.
+A future successful run establishes only that run's CI conditions, not production
+cleanup authority, available capacity or uninterrupted public service.
+
 ## Verification and remaining production gates
 
 Run the pure Node proof tests, real Linux runner/receipt tests (local gh
