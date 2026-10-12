@@ -11,7 +11,7 @@ class ImageOnlyCleanupWorkflowTest extends TestCase
     {
         $workflow = Yaml::parseFile(base_path('.github/workflows/production-image-cleanup.yml'));
         $this->assertSame(['workflow_dispatch'], array_keys($workflow['on']));
-        $this->assertSame(['audit', 'retirement-audit', 'cleanup'], $workflow['on']['workflow_dispatch']['inputs']['action']['options']);
+        $this->assertSame(['audit', 'retirement-audit', 'gate-audit', 'cleanup'], $workflow['on']['workflow_dispatch']['inputs']['action']['options']);
         $this->assertSame('audit', $workflow['on']['workflow_dispatch']['inputs']['action']['default']);
         $this->assertSame('default', $workflow['on']['workflow_dispatch']['inputs']['review_id']['default']);
         $this->assertSame('xboard-production-release', $workflow['concurrency']['group']);
@@ -77,7 +77,9 @@ class ImageOnlyCleanupWorkflowTest extends TestCase
             }
         }
         $transport = file_get_contents(base_path('.github/scripts/run-images-only-remote.sh'));
-        $this->assertStringContainsString('if [[ "$operation" == retirement-audit ]]; then cat "$script_dir/audit-retirement-readiness.sh"; fi', $transport);
+        $this->assertStringContainsString("printf 'retirement_scope=full\\n'", $transport);
+        $this->assertStringContainsString("printf 'retirement_scope=gate\\n'", $transport);
+        $this->assertStringContainsString('"$operation" == gate-audit', $transport);
         $this->assertStringContainsString('if [[ "$operation" == cleanup ]]; then cat "$script_dir/cleanup-xboard-images-only.sh"; fi', $transport);
     }
 

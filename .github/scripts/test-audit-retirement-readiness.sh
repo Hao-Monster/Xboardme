@@ -42,6 +42,12 @@ fixture_docker() {
       [[ "$metadata_template" != *'{{'* && "$metadata_template" != *'}}'* ]] || return 97
       id=$3
       [[ "$id" == "$old_id" || "$id" == "$second_id" ]] || { echo FORBIDDEN_PROTECTED_INSPECT >&2; return 97; }
+      case "${metadata_fault:-}" in
+        command) printf 'inspect-secret-do-not-emit\n' >&2; return 42 ;;
+        invalid_json) printf '{"secret":"invalid-json-secret-do-not-emit",\n'; return ;;
+        json_stream) printf '{}\n{}\n'; return ;;
+        oversize) printf '%17000s' 'oversize-secret-do-not-emit'; return ;;
+      esac
       if [[ -f "$case_root/inspect-change" ]]; then
         if [[ -f "$case_root/inspected-$id" ]]; then
           jq -c --arg id "$id" --arg field "${metadata_change_field:-status}" '.[]|select(.id==$id)|
@@ -65,6 +71,29 @@ command() {
     [[ $2 == --signal=TERM && $3 == --kill-after=1s && $4 == 3s ]] || return 97
     shift 5
     fixture_docker "$@"
+  elif [[ ${1:-} == timeout && ${5:-} == stat && "${drift_kind:-}" == rename &&
+          ${7:-} == '%d:%i:%u:%a:%h:%s:%y:%z' && ${9:-} == "${drift_path:-}" ]]; then
+    local count=0
+    if [[ -f "$case_root/drift-stat-count" ]]; then read -r count < "$case_root/drift-stat-count"; fi
+    ((count+=1))
+    printf '%s\n' "$count" > "$case_root/drift-stat-count"
+    if ((count==3)); then
+      cp -p -- "$drift_path" "$case_root/replacement.json"
+      mv -- "$case_root/replacement.json" "$drift_path"
+    fi
+    builtin command "$@"
+  elif [[ ${1:-} == timeout && ${5:-} == head && -n "${drift_path:-}" && "${drift_kind:-}" != rename ]]; then
+    local actual_path count
+    actual_path=$(readlink -f -- "${9:-}")
+    if [[ "$actual_path" == "$drift_path" ]]; then
+      count=0
+      if [[ -f "$case_root/drift-read-count" ]]; then read -r count < "$case_root/drift-read-count"; fi
+      ((count+=1))
+      printf '%s\n' "$count" > "$case_root/drift-read-count"
+      # Simulate an external writer between the first and final complete reads.
+      if ((count==3)); then printf '\n' >> "$drift_path"; fi
+    fi
+    builtin command "$@"
   elif [[ ${1:-} == du || (${1:-} == timeout && ${5:-} == du) ]]; then
     echo FORBIDDEN_DU >&2; return 97
   else builtin command "$@"; fi
@@ -74,6 +103,10 @@ du() { echo FORBIDDEN_DU >&2; return 97; }
 
 make_case() {
   metadata_change_field=status
+  metadata_fault=''
+  retirement_scope=full
+  drift_path=''
+  drift_kind=bytes
   case_root=$(mktemp -d "$test_root/$1.XXXXXX")
   workdir=$case_root
   lock_root="$case_root/.codex-v2-release"
@@ -152,19 +185,39 @@ invoke() (
   [[ "$(trap -p EXIT)" == "$original_trap" && "$(stat -Lc '%d:%i' "/proc/$BASHPID/fd/9")" == "$original_fd" ]]
 )
 run_case() {
-  local before after
+  local before after before_identity=''
+  if [[ -n "$drift_path" ]]; then before_identity=$(stat -Lc '%d:%i' -- "$drift_path"); fi
   before=$(find "$lock_root" "$case_root/data" "$case_root/docker" -type f -print0 | sort -z | xargs -0 sha256sum)
   set +e
   invoke > "$case_root/result.out" 2>&1
   status=$?
   set -e
   after=$(find "$lock_root" "$case_root/data" "$case_root/docker" -type f -print0 | sort -z | xargs -0 sha256sum)
-  [[ "$before" == "$after" ]]
+  if [[ -n "$drift_path" && "$drift_kind" == bytes ]]; then [[ "$before" != "$after" ]]
+  else [[ "$before" == "$after" ]]; fi
+  if [[ -n "$drift_path" && "$drift_kind" == rename ]]; then
+    [[ "$before_identity" != "$(stat -Lc '%d:%i' -- "$drift_path")" ]]
+  fi
   ! grep -q 'do-not-emit\|DO_NOT_READ_LOG\|FORBIDDEN_' "$case_root/result.out"
   ! grep -qvE '^(inspect|info)$' "$case_root/docker-reads.log"
 }
 expect_pass() { run_case; ((status==0)) || { cat "$case_root/result.out" >&2; return 1; }; grep -q '^RETIREMENT_READINESS=PASS ' "$case_root/result.out"; }
 expect_fail() { run_case; ((status!=0)); ! grep -q '^RETIREMENT_READINESS=PASS ' "$case_root/result.out"; }
+expect_gate_pass() {
+  retirement_scope=gate
+  run_case
+  ((status==0)) || { cat "$case_root/result.out" >&2; return 1; }
+  grep -q '^RETIREMENT_GATE_AUDIT=PASS ' "$case_root/result.out"
+  ! grep -q '^RETIREMENT_READINESS=PASS\|CONTAINER_JSON=' "$case_root/result.out"
+  [[ ! -s "$case_root/docker-reads.log" ]]
+}
+expect_gate_fail() {
+  retirement_scope=gate
+  run_case
+  ((status!=0))
+  ! grep -q '^RETIREMENT_GATE_AUDIT=PASS\|^RETIREMENT_READINESS=PASS' "$case_root/result.out"
+  [[ ! -s "$case_root/docker-reads.log" ]]
+}
 record() { sed -n "s/^RETIREMENT_READINESS_$1=//p" "$case_root/result.out"; }
 pass() { ((passed+=1)); printf 'RETIREMENT_READINESS_CASE=PASS %s\n' "$1"; }
 
@@ -186,6 +239,89 @@ record CONTAINER_JSON | jq -se --arg id "$old_id" 'map(select(.id==$id))[0]|
   }
 ! grep -q '^diff$' "$case_root/docker-reads.log"
 pass hold_audited_without_bypass_and_no_secrets_or_mutations
+
+make_case gate_only_hold
+expect_gate_pass
+sed -n 's/^RETIREMENT_GATE_AUDIT_GATE_JSON=//p' "$case_root/result.out" |
+  jq -e '.present==true and .safe.status=="HOLD" and (.safe|has("intent_at_uptime")) and .safe.intent_at_uptime==null' >/dev/null
+pass gate_only_hold_has_own_terminal_without_docker_or_mutations
+
+for fault in missing_gate missing_plan gate_permissions plan_permissions gate_symlink plan_symlink gate_hardlink \
+  plan_hardlink gate_owner gate_running gate_complete gate_legacy_schema gate_null_mode \
+  invalid_gate_json invalid_plan_json plan_binding invalid_scope; do
+  make_case "gate_only_$fault"
+  gate_path="$lock_root/image-cleanup-gate.json"
+  plan_path="$lock_root/image-cleanup-plan-$review_hash.json"
+  case "$fault" in
+    missing_gate) rm -- "$gate_path" ;;
+    missing_plan) rm -- "$plan_path" ;;
+    gate_permissions) chmod 644 "$gate_path" ;;
+    plan_permissions) chmod 644 "$plan_path" ;;
+    gate_symlink) mv -- "$gate_path" "$case_root/gate-original"; ln -s "$case_root/gate-original" "$gate_path" ;;
+    plan_symlink) mv -- "$plan_path" "$case_root/plan-original"; ln -s "$case_root/plan-original" "$plan_path" ;;
+    gate_hardlink) ln -- "$gate_path" "$case_root/gate-hardlink" ;;
+    plan_hardlink) ln -- "$plan_path" "$case_root/plan-hardlink" ;;
+    gate_owner) rewrite_json "$gate_path" '.owner_uid+=1' ;;
+    gate_running) rewrite_json "$gate_path" '.status="RUNNING"' ;;
+    gate_complete) rewrite_json "$gate_path" '.status="COMPLETE"' ;;
+    gate_legacy_schema) rewrite_json "$gate_path" '.schema_version=1 | del(.monitoring_mode)' ;;
+    gate_null_mode) rewrite_json "$gate_path" '.monitoring_mode=null' ;;
+    invalid_gate_json) printf '{"secret":"gate-malformed-do-not-emit",\n' > "$gate_path" ;;
+    invalid_plan_json) printf '{"secret":"plan-malformed-do-not-emit",\n' > "$plan_path" ;;
+    plan_binding) rewrite_json "$plan_path" '.workflow_sha="eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"' ;;
+    invalid_scope) retirement_scope='gate;do-not-emit'; expect_fail; pass gate_only_invalid_scope; continue ;;
+  esac
+  expect_gate_fail
+  pass "gate_only_$fault"
+done
+
+# Null is evidence only when the key exists in the original gate. Never infer
+# absence of deletion intent from a projection that silently filled missing keys.
+for field in last_heartbeat_uptime baseline_started_at_uptime baseline_completed_at_uptime intent_at_uptime \
+  removed_at_uptime observation_completed_at_uptime completed_at_uptime post_verified_at_uptime \
+  failure_reason post_evidence_sha256 monitoring_mode; do
+  make_case "gate_only_missing_$field"
+  rewrite_json "$lock_root/image-cleanup-gate.json" "del(.$field)"
+  expect_gate_fail
+  pass "gate_only_missing_$field"
+done
+for kind in bytes rename; do
+  for target in gate plan active inventory startup; do
+    make_case "gate_only_${target}_${kind}_drift"
+    drift_kind=$kind
+    case "$target" in
+      gate) drift_path="$lock_root/image-cleanup-gate.json" ;;
+      plan) drift_path="$lock_root/image-cleanup-plan-$review_hash.json" ;;
+      active) drift_path="$active_state_file" ;;
+      inventory) drift_path="$retention_snapshot_file" ;;
+      startup) drift_path="$retention_startup_file" ;;
+    esac
+    expect_gate_fail
+    pass "gate_only_${target}_${kind}_drift"
+  done
+done
+
+make_case gate_observes_intent_without_authorizing_recovery
+rewrite_json "$lock_root/image-cleanup-gate.json" '.intent_at_uptime=130 | .baseline_completed_at_uptime=130'
+expect_gate_pass
+grep -q '^RETIREMENT_GATE_AUDIT=PASS .*recovery_authorized=false ' "$case_root/result.out"
+pass gate_only_records_intent_without_recovery_authority
+
+for fault in command invalid_json json_stream oversize missing_field unsupported_field schema_rejected; do
+  make_case "metadata_$fault"
+  metadata_fault=$fault
+  expected_diagnostic=$fault
+  case "$fault" in
+    command) expected_diagnostic='inspect_command_failed exit_code=42' ;;
+    json_stream|oversize) expected_diagnostic=schema_rejected ;;
+    missing_field) rewrite_json "$case_root/metadata.json" '.[0]|=del(.readonly_rootfs)' ;;
+    unsupported_field) rewrite_json "$case_root/metadata.json" '.[0].storage_driver=null' ;;
+    schema_rejected) rewrite_json "$case_root/metadata.json" '.[0].readonly_rootfs="true"' ;;
+  esac
+  expect_fail
+  grep -Fxq "RETIREMENT_METADATA_DIAGNOSTIC=$expected_diagnostic" "$case_root/result.out"
+  pass "metadata_redacted_$fault"
+done
 
 make_case readonly_is_not_deletion_approval
 rewrite_json "$case_root/metadata.json" '.[0].readonly_rootfs=true | .[0].log_options={max_size:"",max_file:"",compress:""}'
@@ -300,6 +436,7 @@ for field in readonly_rootfs restart_policy storage_driver log_options; do
   : > "$case_root/inspect-change"
   expect_fail
   grep -q 'RETIREMENT_READINESS_FAIL=stopped_container_changed_after_inspection' "$case_root/result.out"
+  grep -Fxq 'RETIREMENT_METADATA_DIAGNOSTIC=post_read_drift' "$case_root/result.out"
   pass "container_metadata_drift_$field"
 done
 

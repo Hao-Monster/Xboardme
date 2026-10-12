@@ -109,6 +109,26 @@ checked_failure dirty_checkout env IMAGE_CLEANUP_ACTION=retirement-audit TEST_ST
 checked_failure checkout_inventory env IMAGE_CLEANUP_ACTION=retirement-audit TEST_STATUS_FAIL=true \
   bash "$script_dir/verify-images-only-request.sh"
 
+IMAGE_CLEANUP_ACTION=gate-audit bash "$script_dir/verify-images-only-request.sh" > "$test_root/result"
+grep -Fxq "IMAGE_REQUEST=PASS action=gate-audit sha=$GITHUB_SHA" "$test_root/result"
+((cases+=1))
+for event in push schedule workflow_call ''; do
+  checked_failure manual_first_attempt_required env IMAGE_CLEANUP_ACTION=gate-audit \
+    GITHUB_EVENT_NAME="$event" bash "$script_dir/verify-images-only-request.sh"
+done
+for attempt in 0 2 01 ''; do
+  checked_failure manual_first_attempt_required env IMAGE_CLEANUP_ACTION=gate-audit \
+    GITHUB_RUN_ATTEMPT="$attempt" bash "$script_dir/verify-images-only-request.sh"
+done
+checked_failure dirty_checkout env IMAGE_CLEANUP_ACTION=gate-audit TEST_STATUS='?? unexpected.json' \
+  bash "$script_dir/verify-images-only-request.sh"
+checked_failure checkout_inventory env IMAGE_CLEANUP_ACTION=gate-audit TEST_STATUS_FAIL=true \
+  bash "$script_dir/verify-images-only-request.sh"
+checked_failure workflow_identity env IMAGE_CLEANUP_ACTION=gate-audit GITHUB_REF=refs/heads/develop \
+  bash "$script_dir/verify-images-only-request.sh"
+checked_failure dirty_submodule env IMAGE_CLEANUP_ACTION=gate-audit TEST_SUBMODULE='+changed' \
+  bash "$script_dir/verify-images-only-request.sh"
+
 first="$script_dir/../release/image-cleanup-reviews/001.json"
 second="$script_dir/../release/image-cleanup-reviews/002.json"
 jq '.sequence={schema_version:1,index:"001",predecessor_review_sha256:null,audit_artifact_sha256:("d"*64)} |

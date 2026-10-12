@@ -16,7 +16,13 @@ xboard_find_compose_anchor() { XBOARD_ANCHOR_WORKDIR=$TEST_REMOTE_WORKDIR; }
 DISCOVERY
 for file in release-state.sh retention-safety.sh image-startup-references.sh; do : > "$test_root/scripts/$file"; done
 printf 'echo TEST_AUDIT=PASS\n' > "$test_root/scripts/audit-xboard-images-only.sh"
-printf 'echo TEST_RETIREMENT_AUDIT=PASS\n' > "$test_root/scripts/audit-retirement-readiness.sh"
+cat > "$test_root/scripts/audit-retirement-readiness.sh" <<'READINESS'
+case "$retirement_scope" in
+  full) echo TEST_RETIREMENT_AUDIT=PASS ;;
+  gate) echo TEST_GATE_AUDIT=PASS ;;
+  *) exit 97 ;;
+esac
+READINESS
 cat > "$test_root/scripts/cleanup-xboard-images-only.sh" <<'CLEANUP'
 echo TEST_CLEANUP=PASS
 actual_hash=$(printf '%s' "$RETENTION_REVIEW_MANIFEST_B64" | base64 -d | sha256sum | awk '{print $1}')
@@ -263,6 +269,46 @@ if IMAGE_CLEANUP_ACTION=retirement-audit TEST_STATUS='?? unreviewed.json' invoke
 grep -Fxq 'IMAGE_REQUEST_FAIL=dirty_checkout' "$result"
 [[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
 ((cases+=1))
+
+# Gate-only audit binds its own action and scope. It cannot be redirected to
+# metadata inspection or any persistent gate writer, and needs no restore file.
+new_case gate_audit
+write_gate HOLD
+original=$(unchanged_hash)
+IMAGE_CLEANUP_ACTION=gate-audit retirement_scope=full invoke gate-audit
+grep -Fxq 'TEST_AUDIT=PASS' "$result"
+grep -Fxq 'TEST_GATE_AUDIT=PASS' "$result"
+assert_absent 'TEST_RETIREMENT_AUDIT=PASS|TEST_CLEANUP=' "$result"
+assert_absent 'TEST_CLEANUP=|RETENTION_REVIEW_MANIFEST_B64=' "$TEST_SSH_PAYLOAD"
+[[ $(wc -l < "$TEST_SSH_LOG") == 1 && $(unchanged_hash) == "$original" &&
+   ! -e "$RUNNER_TEMP/images-only-restore.json" ]]
+((cases+=1))
+for operation in audit retirement-audit cleanup post-success post-failure; do
+  new_case "gate_rejects_$operation"
+  original=$(unchanged_hash)
+  if IMAGE_CLEANUP_ACTION=gate-audit invoke "$operation"; then exit 1; fi
+  [[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+  ((cases+=1))
+done
+for action in audit retirement-audit cleanup; do
+  new_case "gate_action_mismatch_$action"
+  restore_fixture
+  original=$(unchanged_hash)
+  if IMAGE_CLEANUP_ACTION=$action invoke gate-audit; then exit 1; fi
+  [[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+  ((cases+=1))
+done
+for fault in retry scheduled dirty; do
+  new_case "gate_$fault"
+  original=$(unchanged_hash)
+  case "$fault" in
+    retry) if IMAGE_CLEANUP_ACTION=gate-audit GITHUB_RUN_ATTEMPT=2 invoke gate-audit; then exit 1; fi ;;
+    scheduled) if IMAGE_CLEANUP_ACTION=gate-audit GITHUB_EVENT_NAME=schedule invoke gate-audit; then exit 1; fi ;;
+    dirty) if IMAGE_CLEANUP_ACTION=gate-audit TEST_STATUS='?? unreviewed.json' invoke gate-audit; then exit 1; fi ;;
+  esac
+  [[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+  ((cases+=1))
+done
 
 # The runner and remote payload must bind the selected bytes, not the default
 # manifest. The remote executor remains synthetic; transport/restore are real.
