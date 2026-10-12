@@ -150,7 +150,7 @@ fi
 
 # This asks Docker for named scalar metadata only, never Env, raw inspect,
 # GraphDriver paths, log contents, container exec or a writable-layer size walk.
-retirement_inspect_format='{"id":{{json .Id}},"status":{{json .State.Status}},"finished_at":{{json .State.FinishedAt}},"exit_code":{{json .State.ExitCode}},"oom_killed":{{json .State.OOMKilled}},"log_driver":{{json .HostConfig.LogConfig.Type}},"log_path":{{json .LogPath}},"legacy_release":{{json (index .Config.Labels "codex.xboard.release")}},"legacy_run":{{json (index .Config.Labels "codex.xboard.release.run")}},"stage":{{json (index .Config.Labels "codex.xboard.stage")}},"stage_run":{{json (index .Config.Labels "codex.xboard.stage.run")}}}'
+retirement_inspect_format='{"id":{{json .Id}},"status":{{json .State.Status}},"finished_at":{{json .State.FinishedAt}},"exit_code":{{json .State.ExitCode}},"oom_killed":{{json .State.OOMKilled}},"readonly_rootfs":{{json .HostConfig.ReadonlyRootfs}},"restart_policy":{"name":{{json .HostConfig.RestartPolicy.Name}},"maximum_retry_count":{{json .HostConfig.RestartPolicy.MaximumRetryCount}}},"storage_driver":{{json .GraphDriver.Name}},"log_options":{"max_size":{{json (index .HostConfig.LogConfig.Config "max-size")}},"max_file":{{json (index .HostConfig.LogConfig.Config "max-file")}},"compress":{{json (index .HostConfig.LogConfig.Config "compress")}}},"log_driver":{{json .HostConfig.LogConfig.Type}},"log_path":{{json .LogPath}},"legacy_release":{{json (index .Config.Labels "codex.xboard.release")}},"legacy_run":{{json (index .Config.Labels "codex.xboard.release.run")}},"stage":{{json (index .Config.Labels "codex.xboard.stage")}},"stage_run":{{json (index .Config.Labels "codex.xboard.stage.run")}}}'
 retirement_inspect() {
   local result
   result=$(retirement_run docker inspect --format "$retirement_inspect_format" "$1" 2>/dev/null) || return 1
@@ -161,6 +161,15 @@ retirement_inspect() {
       (.finished_at|type=="string" and test("^[0-9]{4}-[0-9T:Z.+-]+$")) and
       (.exit_code|type=="number" and floor==. and .>=0 and .<=255) and
       (.oom_killed|type=="boolean") and
+      (.readonly_rootfs|type=="boolean") and
+      (.restart_policy|type=="object" and (keys|sort)==["maximum_retry_count","name"] and
+        (.name|IN("","no","always","unless-stopped","on-failure")) and
+        (.maximum_retry_count|type=="number" and floor==. and .>=0 and .<=2147483647)) and
+      (.storage_driver|type=="string" and length<=64 and (test("[[:cntrl:]]")|not) and test("^[a-z0-9_.-]*$")) and
+      (.log_options|type=="object" and (keys|sort)==["compress","max_file","max_size"] and
+        (.max_size|.==null or (type=="string" and length<=32 and (test("[[:cntrl:]]")|not) and test("^(-1|[0-9]+([.][0-9]+)?([kKmMgGtTpP]([iI]?[bB])?|[bB])?)?$"))) and
+        (.max_file|.==null or (type=="string" and (test("[[:cntrl:]]")|not) and test("^([1-9][0-9]{0,8})?$"))) and
+        (.compress|IN(null,"","true","false"))) and
       (.log_driver|IN("json-file","local","journald","none","syslog","fluentd","awslogs","gelf","splunk","gcplogs")) and
       (.log_path|type=="string" and length<=4096 and (test("[[:cntrl:]]")|not)) and
       all(.legacy_release,.stage;.==null or .=="" or .=="true" or .=="false") and
@@ -249,7 +258,11 @@ while IFS= read -r retirement_snapshot; do
     --argjson metadata "$retirement_meta" --argjson state "$retirement_state" --argjson writable_layer "$retirement_writable_layer" \
     --argjson log "$retirement_log" --argjson snapshot "$retirement_snapshot" --argjson protection "$protection_snapshot" '
     {id:$id,kind:$kind,associated_release_id:$release,deletion_authorized:false,
-     runtime:($metadata|{status,finished_at,exit_code,oom_killed}),state:$state,writable_layer:$writable_layer,log:$log,
+     runtime:($metadata|{status,finished_at,exit_code,oom_killed}),
+     storage:{readonly_rootfs:$metadata.readonly_rootfs,driver:$metadata.storage_driver},
+     restart_policy:$metadata.restart_policy,
+     log_configuration:{driver:$metadata.log_driver,options:$metadata.log_options,effective_limits_verified:false},
+     state:$state,writable_layer:$writable_layer,log:$log,
      mounted_paths_preserved:true,mount_count:($snapshot.mounts|length),
      shares_protected_mount: any($snapshot.mounts[]; . as $m | any($protection.containers[].mounts[]?;
        (.Type==$m.Type and .Source==$m.Source and .Source!="") or (.Name!="" and .Name==$m.Name)))}') || retirement_fail container_projection_failed

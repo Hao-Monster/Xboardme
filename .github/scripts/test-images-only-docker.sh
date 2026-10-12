@@ -152,11 +152,15 @@ maintenance_id=$(docker run -d --name "$test_label-maintenance" --label "codex.r
   --mount "type=bind,src=$test_root/data,dst=/data" --mount "type=volume,src=$volume,dst=/redis" "$base_image")
 containers+=("$maintenance_id")
 anchor_id=$(docker create --name "$test_label-anchor" --label "codex.retention.test=$test_label" \
+  --log-driver none \
   --mount "type=bind,src=$test_root/data,dst=/data" --mount "type=volume,src=$volume,dst=/redis" \
   "$base_image" /fixture-service --read-sentinels)
 containers+=("$anchor_id")
 rollback_id=$(docker create --name "$test_label-rollback" --label "codex.retention.test=$test_label" \
   --label com.docker.compose.project=xboard-v2-222-1 --label com.docker.compose.service=web \
+  --read-only --restart on-failure:3 --log-driver json-file \
+  --log-opt max-size=1m --log-opt max-file=2 --log-opt compress=true \
+  --env READINESS_PRIVATE_ENV=metadata-fixture-must-not-escape \
   --mount "type=bind,src=$test_root/data,dst=/data" --mount "type=volume,src=$volume,dst=/redis" \
   "$base_image" /fixture-service --read-sentinels)
 containers+=("$rollback_id")
@@ -168,6 +172,33 @@ done
 [[ $(< "$test_root/http-ready") == synthetic-service-ok$'\r' ]]
 docker start -a "$anchor_id" >/dev/null
 docker start -a "$rollback_id" >/dev/null
+# Exercise the production Go template AND its real shape filter, not a copied
+# mock. Source only that bounded helper section from this trusted checkout.
+readiness_inspect_real() (
+  retirement_run() { command timeout --signal=TERM --kill-after=1s 3s "$@"; }
+  retirement_jq() { retirement_run jq "$@"; }
+  source <(awk '/^retirement_inspect_format=/{capture=1} /^retirement_docker_root=/{exit} capture{print}' \
+    "$script_dir/audit-retirement-readiness.sh")
+  declare -F retirement_inspect >/dev/null
+  [[ -n $retirement_inspect_format && $retirement_inspect_format != *$'\n'* ]]
+  retirement_inspect "$1"
+)
+readiness_metadata=$(readiness_inspect_real "$rollback_id")
+jq -e --arg id "$rollback_id" '
+  .id==$id and .status=="exited" and .readonly_rootfs==true and
+  .restart_policy=={name:"on-failure",maximum_retry_count:3} and
+  (.storage_driver|type=="string") and
+  .log_options=={max_size:"1m",max_file:"2",compress:"true"} and
+  .log_driver=="json-file" and (has("Env")|not) and (has("GraphDriver")|not)
+' <<< "$readiness_metadata" >/dev/null
+[[ $readiness_metadata != *metadata-fixture-must-not-escape* ]]
+readiness_default_metadata=$(readiness_inspect_real "$anchor_id")
+jq -e --arg id "$anchor_id" '
+  .id==$id and .status=="exited" and .readonly_rootfs==false and
+  .restart_policy=={name:"no",maximum_retry_count:0} and .log_driver=="none" and
+  all(.log_options.max_size,.log_options.max_file,.log_options.compress; .==null or .=="")
+' <<< "$readiness_default_metadata" >/dev/null
+printf 'RETIREMENT_METADATA_DOCKER=PASS readonly_rootfs=true_and_false bounded_log_options=true missing_options=true secrets_omitted=true\n'
 python3 "$fixture_dir/observe_service.py" "$test_port" > "$test_root/observer.log" 2>&1 &
 observer_pid=$!
 for ((attempt=0;attempt<50;attempt++)); do

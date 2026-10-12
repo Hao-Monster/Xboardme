@@ -18,7 +18,7 @@ second_id=$(full_id 3)
 old_image="sha256:$(full_id 91)"
 
 fixture_docker() {
-  local operation=${1:-} id
+  local operation=${1:-} id metadata_template metadata_action
   shift || return 97
   printf '%s\n' "$operation" >> "$case_root/docker-reads.log"
   case "$operation" in
@@ -27,12 +27,29 @@ fixture_docker() {
       printf '%s\n' "$case_root/docker"
       ;;
     inspect)
-      [[ $# == 3 && $1 == --format && $2 != *Env* && $2 != *GraphDriver* ]] || return 97
+      [[ $# == 3 && $1 == --format && $2 != *Env* && $2 != *GraphDriver.Data* &&
+         $2 != *UpperDir* && $2 != *'json .HostConfig.LogConfig.Config'* ]] || return 97
+      metadata_template=$2
+      for metadata_action in '.Id' '.State.Status' '.State.FinishedAt' '.State.ExitCode' '.State.OOMKilled' \
+        '.HostConfig.ReadonlyRootfs' '.HostConfig.RestartPolicy.Name' '.HostConfig.RestartPolicy.MaximumRetryCount' \
+        '.GraphDriver.Name' '.HostConfig.LogConfig.Type' '.LogPath' \
+        '(index .HostConfig.LogConfig.Config "max-size")' '(index .HostConfig.LogConfig.Config "max-file")' \
+        '(index .HostConfig.LogConfig.Config "compress")' '(index .Config.Labels "codex.xboard.release")' \
+        '(index .Config.Labels "codex.xboard.release.run")' '(index .Config.Labels "codex.xboard.stage")' \
+        '(index .Config.Labels "codex.xboard.stage.run")'; do
+        metadata_template=${metadata_template//"{{json $metadata_action}}"/}
+      done
+      [[ "$metadata_template" != *'{{'* && "$metadata_template" != *'}}'* ]] || return 97
       id=$3
       [[ "$id" == "$old_id" || "$id" == "$second_id" ]] || { echo FORBIDDEN_PROTECTED_INSPECT >&2; return 97; }
       if [[ -f "$case_root/inspect-change" ]]; then
         if [[ -f "$case_root/inspected-$id" ]]; then
-          jq -c --arg id "$id" '.[]|select(.id==$id)|.status="running"' "$case_root/metadata.json"
+          jq -c --arg id "$id" --arg field "${metadata_change_field:-status}" '.[]|select(.id==$id)|
+            if $field=="readonly_rootfs" then .readonly_rootfs=(.readonly_rootfs|not)
+            elif $field=="restart_policy" then .restart_policy.name="always"
+            elif $field=="storage_driver" then .storage_driver="vfs"
+            elif $field=="log_options" then .log_options.max_file="4"
+            else .status="running" end' "$case_root/metadata.json"
           return
         fi
         : > "$case_root/inspected-$id"
@@ -56,6 +73,7 @@ docker() { fixture_docker "$@"; }
 du() { echo FORBIDDEN_DU >&2; return 97; }
 
 make_case() {
+  metadata_change_field=status
   case_root=$(mktemp -d "$test_root/$1.XXXXXX")
   workdir=$case_root
   lock_root="$case_root/.codex-v2-release"
@@ -89,8 +107,12 @@ make_case() {
   resource_fingerprint=$(retention_resource_fingerprint "$retention_snapshot_file" "$protection_snapshot")
   jq -cn --arg old "$old_id" --arg second "$second_id" --arg path "$case_root/docker/containers/$old_id/$old_id-json.log" '[
     {id:$old,status:"exited",finished_at:"2026-10-01T00:00:00Z",exit_code:0,oom_killed:false,
+     readonly_rootfs:false,restart_policy:{name:"unless-stopped",maximum_retry_count:0},storage_driver:"overlay2",
+     log_options:{max_size:"10m",max_file:"3",compress:"true"},
      log_driver:"json-file",log_path:$path,legacy_release:null,legacy_run:null,stage:null,stage_run:null},
     {id:$second,status:"exited",finished_at:"2026-10-01T00:00:00Z",exit_code:0,oom_killed:false,
+     readonly_rootfs:true,restart_policy:{name:"no",maximum_retry_count:0},storage_driver:"overlayfs",
+     log_options:{max_size:"",max_file:"",compress:""},
      log_driver:"none",log_path:"",legacy_release:null,legacy_run:null,stage:null,stage_run:null}]' > "$case_root/metadata.json"
   jq -cn --arg workflow "$workflow_sha" --arg review "$review_hash" --arg sha "$active_sha" --arg image "$old_image" \
     --arg protection "$(printf '%s\n' "$protection_snapshot" | retention_hash)" --argjson owner "$EUID" '{
@@ -155,9 +177,60 @@ record PLAN_JSON | jq -e --arg hash "$(jq -cS . "$retention_snapshot_file" | ret
 record CONTAINER_JSON | jq -se --arg id "$old_id" 'map(select(.id==$id))[0]|
   .kind=="v2" and .shares_protected_mount==true and .state.safe.release_sha=="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" and
   .writable_layer=={status:"not_investigated_passive_only",deletion_ready:false,contents_read:false,byte_size:"not_measured"} and
-  .log.status=="verified_metadata" and .log.contents_read==false and .deletion_authorized==false' >/dev/null
+  .storage.readonly_rootfs==false and .storage.driver=="overlay2" and
+  .restart_policy=={name:"unless-stopped",maximum_retry_count:0} and
+  .log_configuration.options=={max_size:"10m",max_file:"3",compress:"true"} and
+  .log_configuration.effective_limits_verified==false and
+  .log.status=="verified_metadata" and .log.contents_read==false and .deletion_authorized==false' >/dev/null || {
+    printf 'RETIREMENT_READINESS_TEST_FAIL=missing_or_incorrect_safe_container_metadata\n' >&2; exit 1;
+  }
 ! grep -q '^diff$' "$case_root/docker-reads.log"
 pass hold_audited_without_bypass_and_no_secrets_or_mutations
+
+make_case readonly_is_not_deletion_approval
+rewrite_json "$case_root/metadata.json" '.[0].readonly_rootfs=true | .[0].log_options={max_size:"",max_file:"",compress:""}'
+expect_pass
+record CONTAINER_JSON | jq -se --arg id "$old_id" 'map(select(.id==$id))[0]|
+  .storage.readonly_rootfs==true and .deletion_authorized==false and .writable_layer.deletion_ready==false and
+  .log_configuration.options=={max_size:"",max_file:"",compress:""} and
+  .log_configuration.effective_limits_verified==false and .log.rotated_logs=="not_investigated"' >/dev/null
+pass readonly_rootfs_and_missing_rotation_do_not_authorize_deletion
+
+make_case null_log_options
+rewrite_json "$case_root/metadata.json" '.[0].log_options={max_size:null,max_file:null,compress:null}'
+expect_pass
+record CONTAINER_JSON | jq -se --arg id "$old_id" 'map(select(.id==$id))[0]|
+  .log_configuration.options=={max_size:null,max_file:null,compress:null} and
+  .log_configuration.effective_limits_verified==false and .deletion_authorized==false' >/dev/null
+pass null_options_are_preserved_not_replaced_with_defaults
+
+make_case unlimited_log_size
+rewrite_json "$case_root/metadata.json" '.[0].log_options.max_size="-1" | .[0].log_options.compress="false"'
+expect_pass
+record CONTAINER_JSON | jq -se --arg id "$old_id" 'map(select(.id==$id))[0]|
+  .log_configuration.options.max_size=="-1" and .log_configuration.options.compress=="false"' >/dev/null
+pass unlimited_rotation_is_recorded_without_inference
+
+for fault in readonly_missing readonly_string restart_unknown restart_negative restart_fractional storage_path log_extra log_secret log_bad_compress log_bad_count log_control log_oversize log_type; do
+  make_case "$fault"
+  case "$fault" in
+    readonly_missing) rewrite_json "$case_root/metadata.json" '.[0]|=del(.readonly_rootfs)' ;;
+    readonly_string) rewrite_json "$case_root/metadata.json" '.[0].readonly_rootfs="true"' ;;
+    restart_unknown) rewrite_json "$case_root/metadata.json" '.[0].restart_policy.name="unexpected"' ;;
+    restart_negative) rewrite_json "$case_root/metadata.json" '.[0].restart_policy.maximum_retry_count=-1' ;;
+    restart_fractional) rewrite_json "$case_root/metadata.json" '.[0].restart_policy.maximum_retry_count=1.5' ;;
+    storage_path) rewrite_json "$case_root/metadata.json" '.[0].storage_driver="/var/lib/docker/overlay2/private"' ;;
+    log_extra) rewrite_json "$case_root/metadata.json" '.[0].log_options.token="log-secret-do-not-emit"' ;;
+    log_secret) rewrite_json "$case_root/metadata.json" '.[0].log_options.max_size="log-secret-do-not-emit"' ;;
+    log_bad_compress) rewrite_json "$case_root/metadata.json" '.[0].log_options.compress="yes"' ;;
+    log_bad_count) rewrite_json "$case_root/metadata.json" '.[0].log_options.max_file="0"' ;;
+    log_control) rewrite_json "$case_root/metadata.json" '.[0].log_options.max_size="1m\n"' ;;
+    log_oversize) rewrite_json "$case_root/metadata.json" '.[0].log_options.max_size=("1"*33)' ;;
+    log_type) rewrite_json "$case_root/metadata.json" '.[0].log_options.compress=true' ;;
+  esac
+  expect_fail
+  pass "$fault"
+done
 
 make_case nullable_lifecycle
 rewrite_json "$active_state_file" 'del(.legacy_ws_id,.legacy_edge_id) | .legacy_horizon_id=null'
@@ -220,6 +293,15 @@ make_case changed_stopped_container
 expect_fail
 grep -q 'RETIREMENT_READINESS_FAIL=stopped_container_changed_after_inspection' "$case_root/result.out"
 pass container_restart_during_audit_blocks_evidence
+
+for field in readonly_rootfs restart_policy storage_driver log_options; do
+  make_case "changed_$field"
+  metadata_change_field=$field
+  : > "$case_root/inspect-change"
+  expect_fail
+  grep -q 'RETIREMENT_READINESS_FAIL=stopped_container_changed_after_inspection' "$case_root/result.out"
+  pass "container_metadata_drift_$field"
+done
 
 make_case legacy_and_stage
 mkdir -p "$case_root/.codex-release/222-1"
