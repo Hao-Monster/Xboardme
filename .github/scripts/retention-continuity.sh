@@ -288,10 +288,12 @@ _rc_containers() {
   local -a selected=()
   mapfile -t selected <<< "$ids"
   snapshot=$(_rc_run docker inspect --format \
-    '{"id":{{json .Id}},"status":{{json .State.Status}},"started_at":{{json .State.StartedAt}},"restart_count":{{json .RestartCount}},"oom_killed":{{json .State.OOMKilled}},"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}"none"{{end}}}' \
+    '{"id":{{json .Id}},"status":{{json .State.Status}},"started_at":{{json .State.StartedAt}},"restart_count":{{json .RestartCount}},"oom_killed":{{json .State.OOMKilled}},"health":{{if eq (index .State "Health") nil}}"none"{{else}}{{json .State.Health.Status}}{{end}}}' \
     "${selected[@]}") || return 1
   # Docker itself selects secret-free fields. Never copy Config.Env into argv,
   # logs or an observation artifact merely to check process identity.
+  # Health is absent without a healthcheck. Use index for that optional key;
+  # present but malformed health data must still fail the strict template.
   _rc_jq -se --slurpfile review "$RC_REVIEW" '
     . as $actual | [$actual[]|{id,status,started_at,restart_count}]|sort_by(.id) as $live |
     $live==($review[0].monitoring.protected_containers|sort_by(.id)) and

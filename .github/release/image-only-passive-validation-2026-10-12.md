@@ -81,7 +81,7 @@ The earlier exact PR head `37949dc70c9aa5d378f81e659212836d5ce1f8d5` passed
 eight real Docker scenarios, 408 continuous synthetic TCP samples, zero
 reconnects. This is prior-contract evidence, not proof of the new schema3 path.
 
-The current test adds five scenarios (13 total), with a loopback registry
+The current test adds six scenarios (14 total), with a loopback registry
 serving genuine synthetic config/layers and real Docker pull, inspect and
 remove. It retains shared-layer, all-container, bind/volume sentinel and
 continuous synthetic TCP tests. New cases cover stopped historical unhealthy
@@ -90,11 +90,25 @@ member and StartedAt drift after the first alias. Local registry protocol
 checks passed 8/8; real Docker execution is NOT RUN locally.
 
 The committed scope approval is conditional on this exact change passing the
-normal PR `verify` and `pr-image-build` checks, including the 13 real Docker
+normal PR `verify` and `pr-image-build` checks, including the 14 real Docker
 cases and the PHP/MySQL matrix. Do not merge or dispatch cleanup based on this
 document alone. Preserve the actual successful PR CI log with the execution
 report; an empty check list or prior successful run cannot satisfy this gate.
 The exact merged main build must also complete before the one cleanup dispatch.
+
+The initial current PR CI [38218945011](https://github.com/Hao-Monster/Xboardme/actions/runs/38218945011)
+failed before any production access: strict Docker Go templates reject direct
+access to an absent `State.Health` key. The normal passive case therefore
+failed closed before deletion. Optional-key access was minimally corrected to
+use `index`, distinguishing missing/null health from a present malformed map;
+the health/OOM policy and secret-free field whitelist are unchanged. A local
+Go `text/template` test reads the actual source format with `missingkey=error`:
+RED reproduced the missing-key failure; GREEN passed 10/10 cases, including
+healthy, unhealthy, starting, OOM and malformed health metadata, with no daemon
+or network. The real Docker suite now explicitly tests no-healthcheck containers
+and requires the unhealthy rejection to have no template/inspect error. These
+14 scenarios must all pass the corrected exact PR CI; the failed run is not a
+successful rehearsal.
 
 ## Independent review and remaining limits
 

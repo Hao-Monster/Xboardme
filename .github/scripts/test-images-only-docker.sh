@@ -541,6 +541,14 @@ expect_hold() {
 pass() { ((cases+=1)); printf 'IMAGE_ONLY_DOCKER_CASE=PASS %s\n' "$1"; }
 
 make_case success
+# Exercise the actual Docker template before negative health cases: a missing
+# optional Health key must not be mistaken for a failed health-policy check.
+docker container inspect "$active_container" "$maintenance_id" | \
+  jq -e 'all(.[]; .State.Status=="running" and (.State|has("Health")|not))' >/dev/null
+if ! RC_REVIEW=$review_file _rc_containers > "$case_root/container-template.log" 2>&1; then
+  cat "$case_root/container-template.log" >&2; exit 1
+fi
+pass real_container_template_accepts_absent_health
 run_case
 if ((status != 0)); then cat "$case_root/result.log" >&2; exit 1; fi
 grep -q '^IMAGE_CLEANUP=PASS result=complete ' "$case_root/result.log"
@@ -568,6 +576,14 @@ fixture_wait_unhealthy "$identity_witness"
 
 make_passive_case passive_running_unhealthy
 before=$(retention_image_snapshot "$candidate")
+if RC_REVIEW=$review_file _rc_containers > "$case_root/health-policy.log" 2>&1; then
+  echo 'IMAGE_ONLY_DOCKER_TEST=FAIL running_unhealthy_probe_accepted' >&2; exit 1
+fi
+# The jq health policy is silent on rejection. Any template/inspect error is a
+# different failure, not evidence that unhealthy running containers are gated.
+if [[ -s "$case_root/health-policy.log" ]]; then
+  cat "$case_root/health-policy.log" >&2; exit 1
+fi
 run_case
 if ! expect_hold; then cat "$case_root/result.log" >&2; exit 1; fi
 [[ -f "$case_root/container-probe-failed" ]]
