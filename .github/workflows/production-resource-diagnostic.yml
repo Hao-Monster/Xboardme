@@ -1,0 +1,73 @@
+name: Production Resource Diagnostic
+run-name: Resource diagnostic at ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact full workflow SHA currently at main; one read-only diagnostic run
+        required: true
+        type: string
+
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash --noprofile --norc -e -o pipefail {0}
+concurrency:
+  group: xboard-production-release
+  cancel-in-progress: false
+
+jobs:
+  resource-diagnostic:
+    if: ${{ github.ref == 'refs/heads/main' && github.repository == 'Hao-Monster/Xboardme' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: distributor-server
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+    steps:
+      - name: Checkout exact diagnostic source with recursive submodules
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Admit exact main and fixed resource limits before host access
+        id: admission
+        run: |
+          bash .github/scripts/verify-resource-diagnostic-request.sh 2>&1 |
+            tee "$RUNNER_TEMP/resource-diagnostic-admission.txt"
+
+      - name: Trust deployment host key after admission
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.:-]*$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[1-9][0-9]{0,4}$ ]] && ((DEPLOY_PORT <= 65535))
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          timeout --signal=TERM --kill-after=2s 15s ssh-keyscan -T 10 -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Collect one fixed three-sample resource diagnostic
+        id: diagnostic
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          bash .github/scripts/run-resource-diagnostic-remote.sh 2>&1 |
+            tee "$RUNNER_TEMP/resource-diagnostic-samples.txt"
+
+      - name: Preserve diagnostic evidence without any follow-up operation
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-resource-diagnostic-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/resource-diagnostic-*.txt
+          if-no-files-found: error
+          retention-days: 90
