@@ -13,8 +13,9 @@ _rc_wait() {
 }
 _rc_fail() { printf 'RETENTION_CONTINUITY_FAIL=%s\n' "$1" >&2; return 1; }
 
-# Pure schema validation for runner admission. Evidence hashes bind a review;
-# they do not replace the mandatory live signal stream read by every probe.
+# Pure schema validation for runner admission. Schema 2 retains its original
+# traffic/connection contract. Schema 3 is a separately reviewed image-only
+# contract: runtime identity and resource observations, not connection proof.
 retention_monitoring_validate() {
   _rc_jq -e '
     def integer: type=="number" and floor==.;
@@ -22,18 +23,13 @@ retention_monitoring_validate() {
     def positive: integer and .>0;
     def endpoint: .expected_status==200 and (.body_sha256|hash) and
       (.max_latency_ms|positive and .<=2000);
-    .monitoring as $m |
-    ($m.baseline_seconds|integer and .>=600 and .<=1800) and
-    ($m.post_delete_observe_seconds|integer and .>=900 and .<=1800) and
-    ($m.sample_interval_seconds|integer and .>=5 and .<=10) and
-    $m.heartbeat_max_age_seconds==30 and
-    ($m.public|endpoint) and ($m.origin|endpoint) and
-    ($m.public.url|type=="string" and test("^https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[A-Za-z0-9_./~-]*$")) and
-    ($m.origin.url|type=="string" and test("^http://127\\.0\\.0\\.1:[0-9]{1,5}/[A-Za-z0-9_./~-]*$")) and
+    . as $review | .monitoring as $m |
+    ($m|type=="object") and $m.heartbeat_max_age_seconds==30 and
     $m.caddy.unit=="caddy.service" and
     ($m.caddy.invocation_id|type=="string" and test("^[a-f0-9]{32}$") and .!=("0"*32)) and
     ($m.caddy.main_pid|positive) and ($m.caddy.active_enter_monotonic_usec|positive) and
-    ($m.protected_containers|type=="array" and length>=6 and length<=16 and
+    ($m.protected_containers|type=="array" and length>=6 and
+      length<=(if $review.schema_version==3 then 128 else 16 end) and
       all(.[]; (.id|hash) and (.status=="running" or .status=="exited") and
         (.started_at|type=="string" and test("^[0-9]{4}-[0-9T:Z.+-]+$")) and
         (.restart_count|integer and .>=0))) and
@@ -43,14 +39,33 @@ retention_monitoring_validate() {
     ($m.resources.min_mem_available_kib|positive and .>=65536) and
     ($m.resources.max_io_full_avg10|type=="number" and .>0 and .<=5) and
     ($m.resources.max_cpu_some_avg10|type=="number" and .>0 and .<=20) and
-    ($m.evidence.read_only_endpoints_sha256|hash) and
-    ($m.evidence.production_baseline_sha256|hash) and
-    ($m.evidence.long_connections_sha256|hash) and
-    ($m.evidence.natural_traffic_sha256|hash) and
-    ($m.evidence.resource_overhead_sha256|hash) and
-    $m.live_signals.transport=="host_json_v1" and
-    ($m.live_signals.source_review_sha256|hash) and
-    $m.live_signals.max_age_seconds==20
+    (if .schema_version==2 then
+      ($m|has("mode")|not) and ($m|has("active_port")|not) and
+      ($m.baseline_seconds|integer and .>=600 and .<=1800) and
+      ($m.post_delete_observe_seconds|integer and .>=900 and .<=1800) and
+      ($m.sample_interval_seconds|integer and .>=5 and .<=10) and
+      ($m.public|endpoint) and ($m.origin|endpoint) and
+      ($m.public.url|type=="string" and test("^https://[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]{1,5})?/[A-Za-z0-9_./~-]*$")) and
+      ($m.origin.url|type=="string" and test("^http://127\\.0\\.0\\.1:[0-9]{1,5}/[A-Za-z0-9_./~-]*$")) and
+      ($m.evidence.read_only_endpoints_sha256|hash) and
+      ($m.evidence.production_baseline_sha256|hash) and
+      ($m.evidence.long_connections_sha256|hash) and
+      ($m.evidence.natural_traffic_sha256|hash) and
+      ($m.evidence.resource_overhead_sha256|hash) and
+      $m.live_signals.transport=="host_json_v1" and
+      ($m.live_signals.source_review_sha256|hash) and
+      $m.live_signals.max_age_seconds==20
+    elif .schema_version==3 then
+      $m.mode=="passive_runtime_v1" and
+      ($m.active_port|integer and .>=1 and .<=65535) and
+      $m.baseline_seconds==120 and $m.post_delete_observe_seconds==300 and
+      $m.sample_interval_seconds==10 and
+      ($m|has("public") or has("origin") or has("live_signals") or has("evidence")|not) and
+      $m.resources.max_cpu_busy_percent<=85 and
+      $m.resources.max_cpu_iowait_percent<=10 and
+      $m.resources.min_mem_available_kib>=131072 and
+      $m.resources.max_io_full_avg10<=1 and $m.resources.max_cpu_some_avg10<=10
+    else false end)
   ' "$1" >/dev/null
 }
 
@@ -58,7 +73,7 @@ retention_continuity_validate_review() {
   retention_monitoring_validate "$1" || return 1
   _rc_jq -e '
     def hash: type=="string" and test("^[a-f0-9]{64}$") and .!=("0"*64);
-    .schema_version==2 and .status=="approved" and .operation=="image_cleanup" and
+    (.schema_version==2 or .schema_version==3) and .status=="approved" and .operation=="image_cleanup" and
     (.active_release_id|type=="string" and test("^[0-9]+-[0-9]+$")) and
     (.active_release_sha|type=="string" and test("^[a-f0-9]{40}$")) and
     (.protection_fingerprint|hash) and (.resource_fingerprint|hash) and
@@ -103,7 +118,15 @@ _rc_gate_validate() {
     def integer: type=="number" and floor==.;
     def clock: integer and .>=0;
     def hash: type=="string" and test("^[a-f0-9]{64}$") and .!=("0"*64);
-    .schema_version==1 and (.status=="RUNNING" or .status=="HOLD" or .status=="COMPLETE") and
+    (if .schema_version==1 then
+      (has("monitoring_mode")|not) and
+      (.baseline_seconds|integer and .>=600) and (.observe_seconds|integer and .>=900) and
+      (.sample_interval_seconds|integer and .>=5 and .<=10)
+    elif .schema_version==2 then
+      .monitoring_mode=="passive_runtime_v1" and .baseline_seconds==120 and
+      .observe_seconds==300 and .sample_interval_seconds==10
+    else false end) and
+    (.status=="RUNNING" or .status=="HOLD" or .status=="COMPLETE") and
     .owner_uid==$owner and
     (.session_id|type=="string" and test("^[a-f0-9-]{36}$")) and
     (.workflow_sha|type=="string" and test("^[a-f0-9]{40}$")) and
@@ -112,8 +135,6 @@ _rc_gate_validate() {
     (.review_sha256|hash) and (.protection_fingerprint|hash) and
     (.image_id|type=="string" and test("^sha256:[a-f0-9]{64}$")) and
     (.started_at_uptime|clock) and (.sample_count|integer and .>=0) and
-    (.baseline_seconds|integer and .>=600) and (.observe_seconds|integer and .>=900) and
-    (.sample_interval_seconds|integer and .>=5 and .<=10) and
     (.post_verification=="pending" or .post_verification=="passed" or .post_verification=="failed") and
     (.post_verification!="passed" or (
       .status=="COMPLETE" and (.post_evidence_sha256|hash) and (.post_verified_at_uptime|clock) and
@@ -267,14 +288,20 @@ _rc_containers() {
   local -a selected=()
   mapfile -t selected <<< "$ids"
   snapshot=$(_rc_run docker inspect --format \
-    '{"id":{{json .Id}},"status":{{json .State.Status}},"started_at":{{json .State.StartedAt}},"restart_count":{{json .RestartCount}},"oom_killed":{{json .State.OOMKilled}},"health":{{if .State.Health}}{{json .State.Health.Status}}{{else}}"none"{{end}}}' \
+    '{"id":{{json .Id}},"status":{{json .State.Status}},"started_at":{{json .State.StartedAt}},"restart_count":{{json .RestartCount}},"oom_killed":{{json .State.OOMKilled}},"health":{{if eq (index .State "Health") nil}}"none"{{else}}{{json .State.Health.Status}}{{end}}}' \
     "${selected[@]}") || return 1
   # Docker itself selects secret-free fields. Never copy Config.Env into argv,
   # logs or an observation artifact merely to check process identity.
+  # Health is absent without a healthcheck. Use index for that optional key;
+  # present but malformed health data must still fail the strict template.
   _rc_jq -se --slurpfile review "$RC_REVIEW" '
     . as $actual | [$actual[]|{id,status,started_at,restart_count}]|sort_by(.id) as $live |
     $live==($review[0].monitoring.protected_containers|sort_by(.id)) and
-    all($actual[]; .oom_killed==false and (.health=="none" or .health=="healthy"))' <<< "$snapshot" >/dev/null
+    all($actual[];
+      # Stopped historical containers retain stale health/OOM fields. Their
+      # exact lifecycle remains frozen; they are never started to test health.
+      if $review[0].schema_version==3 and .status=="exited" then true
+      else .oom_killed==false and (.health=="none" or .health=="healthy") end)' <<< "$snapshot" >/dev/null
 }
 
 _rc_caddy() {
@@ -311,6 +338,8 @@ _rc_resources() {
     _rc_jq -e --argjson busy "$((busy-RC_CPU_BUSY))" --argjson delta "$delta" --argjson waiting "$wait_delta" '
       .monitoring.resources | $busy*100/$delta<=.max_cpu_busy_percent and $waiting*100/$delta<=.max_cpu_iowait_percent' \
       "$RC_REVIEW" >/dev/null || return 1
+    RC_CPU_BUSY_PERCENT=$(( (busy-RC_CPU_BUSY)*100/delta ))
+    RC_CPU_IOWAIT_PERCENT=$(( wait_delta*100/delta ))
   fi
   RC_CPU_TOTAL=$total RC_CPU_BUSY=$busy RC_CPU_IOWAIT=$iowait
   RC_MEMORY_AVAILABLE_KIB=$memory RC_IO_FULL_AVG10=$io RC_CPU_SOME_AVG10=$cpu
@@ -348,12 +377,20 @@ _rc_live_signals() {
 
 _rc_probe() {
   RC_PROBE_FAILURE=''
-  _rc_http public || { RC_PROBE_FAILURE=public_http_failed; return 1; }
-  _rc_http origin || { RC_PROBE_FAILURE=origin_http_failed; return 1; }
+  case "${RC_MONITORING_MODE:-legacy_live_v1}" in
+    legacy_live_v1)
+      _rc_http public || { RC_PROBE_FAILURE=public_http_failed; return 1; }
+      _rc_http origin || { RC_PROBE_FAILURE=origin_http_failed; return 1; }
+      ;;
+    passive_runtime_v1) ;;
+    *) RC_PROBE_FAILURE=unknown_monitoring_mode; return 1 ;;
+  esac
   _rc_containers || { RC_PROBE_FAILURE=protected_runtime_changed; return 1; }
   _rc_caddy || { RC_PROBE_FAILURE=caddy_continuity_changed; return 1; }
   _rc_resources || { RC_PROBE_FAILURE=resource_limit_or_source_failed; return 1; }
-  _rc_live_signals "$1" || { RC_PROBE_FAILURE=live_traffic_or_connection_source_unverified; return 1; }
+  if [[ "${RC_MONITORING_MODE:-legacy_live_v1}" == legacy_live_v1 ]]; then
+    _rc_live_signals "$1" || { RC_PROBE_FAILURE=live_traffic_or_connection_source_unverified; return 1; }
+  fi
 }
 
 _rc_sample() {
@@ -369,9 +406,15 @@ _rc_sample() {
       .baseline_started_at_uptime=(.baseline_started_at_uptime // $now) end' --argjson now "$now" || {
         _rc_reject heartbeat_write_failed; return 1;
       }
-  printf 'RETENTION_CONTINUITY_SAMPLE=PASS uptime=%s public_seconds=%s origin_seconds=%s mem_available_kib=%s io_full_avg10=%s cpu_some_avg10=%s\n' \
-    "$now" "${RC_HTTP_PUBLIC_SECONDS:-unverified}" "${RC_HTTP_ORIGIN_SECONDS:-unverified}" \
-    "${RC_MEMORY_AVAILABLE_KIB:-unverified}" "${RC_IO_FULL_AVG10:-unverified}" "${RC_CPU_SOME_AVG10:-unverified}"
+  if [[ "${RC_MONITORING_MODE:-legacy_live_v1}" == passive_runtime_v1 ]]; then
+    printf 'RETENTION_PASSIVE_SAMPLE=PASS uptime=%s cpu_busy_percent=%s cpu_iowait_percent=%s mem_available_kib=%s io_full_avg10=%s cpu_some_avg10=%s http=not_run connections=not_measured\n' \
+      "$now" "${RC_CPU_BUSY_PERCENT:-initial_sample}" "${RC_CPU_IOWAIT_PERCENT:-initial_sample}" \
+      "${RC_MEMORY_AVAILABLE_KIB:-unverified}" "${RC_IO_FULL_AVG10:-unverified}" "${RC_CPU_SOME_AVG10:-unverified}"
+  else
+    printf 'RETENTION_CONTINUITY_SAMPLE=PASS uptime=%s public_seconds=%s origin_seconds=%s mem_available_kib=%s io_full_avg10=%s cpu_some_avg10=%s\n' \
+      "$now" "${RC_HTTP_PUBLIC_SECONDS:-unverified}" "${RC_HTTP_ORIGIN_SECONDS:-unverified}" \
+      "${RC_MEMORY_AVAILABLE_KIB:-unverified}" "${RC_IO_FULL_AVG10:-unverified}" "${RC_CPU_SOME_AVG10:-unverified}"
+  fi
 }
 
 _rc_start_observer() {
@@ -453,10 +496,15 @@ retention_continuity_begin() {
   RC_REVIEW=$review
   RC_REVIEW_HASH=$(_rc_hash < "$review") || return 1
   [[ "$RC_REVIEW_HASH" == "$EXPECTED_RETENTION_REVIEW_SHA256" ]] || { _rc_fail review_hash_mismatch; return 1; }
+  # This is derived only from the validated, hash-bound review. There is no
+  # production environment or dispatch switch that skips the legacy probes.
+  RC_MONITORING_MODE=$(_rc_jq -r 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' "$review") || return 1
   _rc_jq -e --arg id "${EXPECTED_ACTIVE_RELEASE_ID:-}" --arg sha "${EXPECTED_ACTIVE_RELEASE_SHA:-}" \
     --arg port "${XBOARD_ACTIVE_PORT:-}" '
       .active_release_id==$id and .active_release_sha==$sha and
-      (.monitoring.origin.url|startswith("http://127.0.0.1:"+$port+"/")) and ($port|test("^[0-9]{1,5}$"))' \
+      ($port|test("^[0-9]{1,5}$")) and
+      (if .schema_version==3 then .monitoring.active_port==($port|tonumber)
+       else (.monitoring.origin.url|startswith("http://127.0.0.1:"+$port+"/")) end)' \
     "$review" >/dev/null || { _rc_fail active_monitoring_binding_mismatch; return 1; }
   RC_INTERVAL=$(_rc_jq -r .monitoring.sample_interval_seconds "$review") || return 1
   RC_BASELINE=$(_rc_jq -r .monitoring.baseline_seconds "$review") || return 1
@@ -464,7 +512,7 @@ retention_continuity_begin() {
   now=$(_rc_now) || return 1
   read -r session < /proc/sys/kernel/random/uuid || return 1
   RC_SESSION=$session
-  RC_CPU_TOTAL='' RC_LIVE_SERIES=''
+  RC_CPU_TOTAL='' RC_LIVE_SERIES='' RC_CPU_BUSY_PERCENT='' RC_CPU_IOWAIT_PERCENT=''
   if [[ -e "$RC_GATE_LOCK" || -L "$RC_GATE_LOCK" ]]; then
     _rc_secure_file "$RC_GATE_LOCK" || { _rc_fail unsafe_gate_lock; return 1; }
   else
@@ -475,7 +523,7 @@ retention_continuity_begin() {
   _rc_run chmod 600 "$temporary" || return 1
   _rc_jq -n --slurpfile review "$review" --argjson owner "$EUID" --arg session "$RC_SESSION" \
     --arg workflow "$EXPECTED_WORKFLOW_SHA" --arg hash "$RC_REVIEW_HASH" --argjson now "$now" '
-    $review[0] as $r | {schema_version:1,status:"RUNNING",owner_uid:$owner,session_id:$session,
+    $review[0] as $r | {schema_version:(if $r.schema_version==3 then 2 else 1 end),status:"RUNNING",owner_uid:$owner,session_id:$session,
       workflow_sha:$workflow,review_sha256:$hash,active_release_id:$r.active_release_id,
       active_release_sha:$r.active_release_sha,protection_fingerprint:$r.protection_fingerprint,image_id:$r.images[0].id,
       baseline_seconds:$r.monitoring.baseline_seconds,observe_seconds:$r.monitoring.post_delete_observe_seconds,
@@ -483,7 +531,8 @@ retention_continuity_begin() {
       last_heartbeat_uptime:null,baseline_started_at_uptime:null,baseline_completed_at_uptime:null,
       intent_at_uptime:null,removed_at_uptime:null,observation_completed_at_uptime:null,completed_at_uptime:null,
       sample_count:0,cleanup_validated:false,failure_reason:null,post_verification:"pending",
-      post_evidence_sha256:null,post_verified_at_uptime:null}' > "$temporary" || return 1
+      post_evidence_sha256:null,post_verified_at_uptime:null} |
+      if $r.schema_version==3 then .monitoring_mode=$r.monitoring.mode else . end' > "$temporary" || return 1
   if ! _rc_create_gate "$temporary"; then
     _rc_run rm -f -- "$temporary" || true
     _rc_fail new_operation_not_approved

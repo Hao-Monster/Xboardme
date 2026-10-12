@@ -25,5 +25,6 @@ if [[ "$IMAGE_CLEANUP_ACTION" == cleanup ]]; then
   active=$(jq -er .active_release_sha "$review")
   git merge-base --is-ancestor "$active" "$EXPECTED_SHA" || fail active_not_in_history
   echo "IMAGE_REQUEST_REVIEW_SHA256=$(sha256sum < "$review" | awk '{print $1}')"
+  echo "IMAGE_REQUEST_MONITORING_MODE=$(jq -er 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' "$review")"
 fi
 echo "IMAGE_REQUEST=PASS action=$IMAGE_CLEANUP_ACTION sha=$EXPECTED_SHA"

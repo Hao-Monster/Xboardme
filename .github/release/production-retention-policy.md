@@ -14,18 +14,32 @@ not a prerequisite for image-only cleanup. See
 
 Approval permits exactly one unreferenced image ID, at most 512 MiB, eight
 aliases and at least seven days old. No force/prune, automatic next batch,
-automatic retry or application deployment is provided. Minimum baseline and
-post-removal observation are 600s and 900s. Missing live traffic/connection
-signals fail closed; hashes of review evidence do not replace those signals.
+automatic retry or application deployment is provided. Two explicitly reviewed
+contracts are supported; neither is selected by a skip flag or environment:
+
+- Schema 2 retains the 600s/900s live traffic/connection contract. Missing
+  signals fail closed; evidence hashes do not replace those signals.
+- Schema 3 (`passive_runtime_v1`) is the narrowly authorized idle-image path.
+  It uses a fixed 120s baseline and 300s post-removal observation, sampled every
+  10s, with a 30s maximum heartbeat age. It preserves every container and
+  observes Caddy/container identity, existing running-container health and host
+  resource pressure. It sends no application HTTP/WS requests, performs no
+  login, and installs no monitoring producer. It does not certify individual
+  connections, natural traffic or absolute zero latency impact. See
+  `image-only-passive-scope-2026-10-12.md` for the reviewed scope and stop limits.
 
 RUNNING/HOLD persist in `image-cleanup-gate.json`. COMPLETE with independent
 post-verification still pending also blocks new deployment. Only exact-main
-post-verification may mark it passed, after inventory, public/authenticated
-smoke and evidence preservation succeed. A later separately approved image
+post-verification may mark it passed, after exact inventory/identity comparison
+and evidence preservation succeed. Schema 2 additionally requires the original
+public/authenticated smoke; schema 3 requires an exact-digest restore check on
+the isolated CI runner before any production access, not an application login.
+A later separately approved image
 request archives a COMPLETE/passed gate without overwriting old evidence;
 RUNNING/HOLD are never automatically reset. Existing emergency rollback is
-not blocked. The checked-in image approval remains blocked until live evidence
-and the isolated Docker rehearsal have been reviewed.
+not blocked. A committed approval must bind fresh audit evidence, the selected
+contract and the isolated Docker rehearsal. Schema changes never clear an old
+RUNNING/HOLD, malformed gate or COMPLETE with verification still pending.
 
 ## Safety invariants
 

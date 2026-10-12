@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 defaults:
   run:
     shell: bash --noprofile --norc -e -o pipefail {0}
@@ -51,7 +52,22 @@ jobs:
           if [[ "$IMAGE_CLEANUP_ACTION" == cleanup ]]; then
             echo "active_sha=$(jq -er .active_release_sha .github/release/image-cleanup-review.json)" >> "$GITHUB_OUTPUT"
             echo "active_id=$(jq -er .active_release_id .github/release/image-cleanup-review.json)" >> "$GITHUB_OUTPUT"
+            echo "monitoring_mode=$(jq -er 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' .github/release/image-cleanup-review.json)" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Verify immutable image recovery on the runner before host access
+        id: restore
+        if: ${{ success() && inputs.action == 'cleanup' && steps.admission.outputs.monitoring_mode == 'passive_runtime_v1' }}
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          export DOCKER_CONFIG
+          DOCKER_CONFIG=$(mktemp -d "$RUNNER_TEMP/image-restore-auth.XXXXXX")
+          chmod 700 "$DOCKER_CONFIG"
+          trap 'timeout 10s docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          printf '%s' "$GHCR_TOKEN" | timeout --signal=TERM --kill-after=2s 30s docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null 2>&1
+          unset GHCR_TOKEN
+          bash .github/scripts/verify-image-restore.sh
 
       - name: Trust deployment host key
         id: host-key
@@ -97,7 +113,7 @@ jobs:
 
       - name: Verify current public runtime and authenticated read-only flows
         id: smoke
-        if: ${{ success() && inputs.action == 'cleanup' }}
+        if: ${{ success() && inputs.action == 'cleanup' && steps.admission.outputs.monitoring_mode == 'legacy_live_v1' }}
         uses: ./.github/actions/distributor-smoke
         with:
           validation_mode: release
@@ -116,10 +132,20 @@ jobs:
       - name: Bind independent post-verification evidence
         if: ${{ success() && inputs.action == 'cleanup' }}
         run: |
-          printf 'AUTHENTICATED_PUBLIC_SMOKE=PASS workflow=%s run=%s attempt=%s\n' \
-            "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$RUNNER_TEMP/images-only-post-result.txt"
+          mode=$(jq -er 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' .github/release/image-cleanup-review.json)
+          if [[ "$mode" == passive_runtime_v1 ]]; then
+            bash .github/scripts/verify-image-restore.sh --check-evidence
+            printf 'PASSIVE_RUNTIME_POST_AUDIT=PASS workflow=%s run=%s attempt=%s connection_continuity=unverified\n' \
+              "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$RUNNER_TEMP/images-only-post-result.txt"
+          else
+            printf 'AUTHENTICATED_PUBLIC_SMOKE=PASS workflow=%s run=%s attempt=%s\n' \
+              "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" >> "$RUNNER_TEMP/images-only-post-result.txt"
+          fi
           sha256sum "$RUNNER_TEMP/images-only-operation.txt" "$RUNNER_TEMP/images-only-post-audit.txt" \
             "$RUNNER_TEMP/images-only-post-result.txt" > "$RUNNER_TEMP/images-only-evidence.sha256"
+          if [[ "$mode" == passive_runtime_v1 ]]; then
+            sha256sum "$RUNNER_TEMP/images-only-restore.json" >> "$RUNNER_TEMP/images-only-evidence.sha256"
+          fi
 
       - name: Preserve evidence even for failed or cancelled operations
         if: ${{ always() && steps.admission.outcome == 'success' }}

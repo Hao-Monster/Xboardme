@@ -385,6 +385,10 @@ jobs:
           for image_script in .github/scripts/*images-only*.sh .github/scripts/*image-startup*.sh .github/scripts/*retention-continuity*.sh .github/scripts/admit-xboard-after-image-cleanup.sh; do
             bash -n "$image_script"
           done
+          bash -n .github/scripts/test-passive-image-monitoring.sh
+          bash -n .github/scripts/verify-image-restore.sh
+          bash -n .github/scripts/test-verify-image-restore.sh
+          bash -n .github/scripts/test-run-images-only-remote.sh
           bash -n .github/scripts/verify-retention-request.sh
           bash -n .github/scripts/test-verify-retention-request.sh
           bash -n .github/scripts/verify-retention-post-audit.sh
@@ -422,6 +426,9 @@ jobs:
           bash .github/scripts/test-image-startup-references.sh
           bash .github/scripts/test-verify-images-only-request.sh
           bash .github/scripts/test-retention-continuity.sh
+          bash .github/scripts/test-passive-image-monitoring.sh
+          bash .github/scripts/test-verify-image-restore.sh
+          bash .github/scripts/test-run-images-only-remote.sh
           bash .github/scripts/test-cleanup-xboard-images-only.sh
           bash .github/scripts/test-audit-xboard-images-only.sh
           bash .github/scripts/test-deploy-admin-assets-admission.sh

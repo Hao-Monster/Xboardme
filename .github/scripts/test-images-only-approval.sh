@@ -44,4 +44,28 @@ if retention_images_review_fresh "$temporary/future.json"; then exit 1; fi
 ln -s "$temporary/valid.json" "$temporary/link.json"
 if retention_images_review_validate "$temporary/link.json"; then exit 1; fi
 ((cases+=1))
+jq '.schema_version=3 | .monitoring={mode:"passive_runtime_v1"} |
+  .review_evidence={scope_review_sha256:("e"*64),isolated_docker_review_sha256:("e"*64)} |
+  .images[0].revision=("b"*40) |
+  .images[0].restore_digest=("ghcr.io/hao-monster/xboardme@sha256:"+("f"*64))' \
+  "$temporary/valid.json" > "$temporary/passive.json"
+retention_images_review_validate "$temporary/passive.json"
+retention_images_review_fresh "$temporary/passive.json"
+((cases+=2))
+for invalid in '.schema_version=4' '.monitoring.mode="unknown"' '.schema_version=2' \
+  '.review_evidence.scope_review_sha256=("0"*64)' 'del(.review_evidence.isolated_docker_review_sha256)' \
+  '.images[0].revision="short"' '.images[0].restore_digest="ghcr.io/hao-monster/xboardme:latest"' \
+  '.images[0].restore_digest=("ghcr.io/other/xboardme@sha256:"+("f"*64))' \
+  '.monitoring.public={}' '.monitoring.origin={}' '.monitoring.live_signals={}' '.monitoring.evidence={}'; do
+  jq "$invalid" "$temporary/passive.json" > "$temporary/invalid.json"
+  if retention_images_review_validate "$temporary/invalid.json"; then
+    echo "IMAGE_APPROVAL_TEST_FAIL=accepted_passive:$invalid" >&2; exit 1
+  fi
+  ((cases+=1))
+done
+for mode in '"passive_runtime_v1"' '"legacy_live_v1"' null; do
+  jq ".monitoring.mode=$mode" "$temporary/valid.json" > "$temporary/invalid.json"
+  if retention_images_review_validate "$temporary/invalid.json"; then exit 1; fi
+  ((cases+=1))
+done
 printf 'IMAGE_APPROVAL_TEST=PASS cases=%s production_connections=0\n' "$cases"

@@ -4,8 +4,10 @@ set -Eeuo pipefail
 # REAL local-Docker integration. Only this test's uniquely labelled resources
 # are created/removed. Production discovery, GHCR provenance eligibility and
 # monitoring time/probes are synthetic test-process boundaries, never workflow
-# switches. Inventory, protected identity, approval, deletion and HOLD logic
-# come from the actual image-only executor. This is not production load, GHCR
+# switches. Schema 3 uses a loopback registry with genuine manifest digests;
+# only its registry-name eligibility is normalized to the GHCR fixture boundary.
+# Inventory, protected identity, approval, deletion and HOLD logic come from
+# the actual image-only executor. This is not production load, GHCR
 # signature, multiple-RepoDigest, daemon-timeout or SSH-loss acceptance.
 [[ ${RETENTION_DOCKER_TEST_ALLOW_LOCAL:-false} == true ]] || {
   echo 'IMAGE_ONLY_DOCKER_TEST=NOT_RUN explicit_local_test_opt_in_required' >&2
@@ -32,18 +34,24 @@ source "$script_dir/retention-continuity.sh"
 test_root=$(mktemp -d /tmp/retention-images-docker.XXXXXXXX)
 test_label="retention-ci-$(date +%s)-$$-$RANDOM"
 test_namespace="ghcr.io/hao-monster/xboardme:$test_label"
-containers=() images=() volume='' observer_pid=''
+containers=() images=() registry_pids=() registry_references=() volume='' observer_pid=''
 cases=0
 active_sha=$(printf 'a%.0s' {1..40})
 old_sha=$(printf 'b%.0s' {1..40})
 workflow_sha=$(printf 'c%.0s' {1..40})
 cleanup() {
-  local result=$? id index reference owned
+  local result=$? id index reference owned registry_pid
   trap - EXIT HUP INT TERM
   if [[ -n $observer_pid ]] && kill -0 "$observer_pid" 2>/dev/null; then
     kill -TERM "$observer_pid"
     wait "$observer_pid" || result=1
   fi
+  for registry_pid in "${registry_pids[@]}"; do
+    if kill -0 "$registry_pid" 2>/dev/null; then
+      kill -TERM "$registry_pid" || result=1
+    fi
+    wait "$registry_pid" 2>/dev/null || true
+  done
   for id in "${containers[@]}"; do
     docker container inspect "$id" >/dev/null 2>&1 || continue
     owned=$(docker inspect -f '{{ index .Config.Labels "codex.retention.test" }}' "$id")
@@ -68,6 +76,9 @@ cleanup() {
     while IFS= read -r reference; do
       [[ $reference == "$test_namespace"-* ]] || owned=false
     done < <(docker image inspect "$id" | jq -r '.[0].RepoTags[]?')
+    while IFS= read -r reference; do
+      [[ " ${registry_references[*]} " == *" $reference "* ]] || owned=false
+    done < <(docker image inspect "$id" | jq -r '.[0].RepoDigests[]?')
     [[ $owned == true ]] || { result=1; continue; }
     while IFS= read -r reference; do
       docker image inspect "$reference" >/dev/null 2>&1 || continue
@@ -180,6 +191,130 @@ _ris_compose_metadata() {
     workdir:$root,config_files:($root+"/compose.yaml")}]'
 }
 
+# Docker load does not supply RepoDigests. Serve the existing fixture's exact
+# config and layers from a test-owned loopback-only Registry V2 endpoint, then
+# let the real daemon verify and pull the manifest. No image inspect/delete
+# operation is replaced, and no registry or image is contacted outside localhost.
+fixture_add_manifest_digest() {
+  local registry_pid registry_port manifest_digest
+  python3 - "$test_root/archive" "$candidate_config" > "$case_root/registry.log" 2>&1 <<'FIXTURE_REGISTRY_PY' &
+import gzip
+import hashlib
+import http.server
+import json
+import pathlib
+import sys
+import urllib.parse
+
+archive = pathlib.Path(sys.argv[1])
+config = (archive / (sys.argv[2] + ".json")).read_bytes()
+blobs = {}
+
+def descriptor(data, media_type):
+    digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    blobs[digest] = data
+    return {"mediaType": media_type, "size": len(data), "digest": digest}
+
+manifest = json.dumps({
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+    "config": descriptor(config, "application/vnd.docker.container.image.v1+json"),
+    "layers": [descriptor(gzip.compress((archive / name).read_bytes(), mtime=0),
+                          "application/vnd.docker.image.rootfs.diff.tar.gzip")
+               for name in ("base-layer.tar", "parent-layer.tar", "child-layer.tar")],
+}, sort_keys=True, separators=(",", ":")).encode()
+manifest_digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
+
+class Registry(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def respond(self, body):
+        path = urllib.parse.urlsplit(self.path).path
+        media_type = "application/octet-stream"
+        digest = ""
+        if path in ("/v2", "/v2/"):
+            data = b"{}"
+            media_type = "application/json"
+        elif path == "/v2/hao-monster/xboardme/manifests/" + manifest_digest:
+            data = manifest
+            digest = manifest_digest
+            media_type = "application/vnd.docker.distribution.manifest.v2+json"
+        elif path.startswith("/v2/hao-monster/xboardme/blobs/"):
+            digest = path.rsplit("/", 1)[-1]
+            data = blobs.get(digest)
+            if data is None:
+                self.send_error(404)
+                return
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Docker-Distribution-Api-Version", "registry/2.0")
+        self.send_header("Content-Type", media_type)
+        self.send_header("Content-Length", str(len(data)))
+        if digest:
+            self.send_header("Docker-Content-Digest", digest)
+        self.end_headers()
+        if body:
+            self.wfile.write(data)
+
+    def do_GET(self):
+        self.respond(True)
+
+    def do_HEAD(self):
+        self.respond(False)
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Registry)
+print(json.dumps({"port": server.server_port, "digest": manifest_digest}), flush=True)
+server.serve_forever()
+FIXTURE_REGISTRY_PY
+  registry_pid=$!
+  registry_pids+=("$registry_pid")
+  for ((attempt=0;attempt<50;attempt++)); do
+    kill -0 "$registry_pid" 2>/dev/null || { cat "$case_root/registry.log" >&2; return 1; }
+    [[ ! -s "$case_root/registry.log" ]] || break
+    sleep 0.1
+  done
+  registry_port=$(jq -er '.port|select(type=="number" and .>0 and .<65536)' "$case_root/registry.log")
+  manifest_digest=$(jq -er '.digest|select(test("^sha256:[a-f0-9]{64}$"))' "$case_root/registry.log")
+  fixture_restore_prefix="localhost:$registry_port/hao-monster/xboardme@"
+  fixture_restore_digest="$fixture_restore_prefix$manifest_digest"
+  registry_references+=("$fixture_restore_digest")
+  timeout --signal=TERM --kill-after=5s 60s docker image pull "$fixture_restore_digest" > "$case_root/pull.log" 2>&1 || {
+    cat "$case_root/pull.log" >&2; return 1;
+  }
+  [[ $(docker image inspect -f '{{.Id}}' "$fixture_restore_digest") == "$candidate" ]]
+  docker image inspect "$candidate" | jq -e --arg digest "$fixture_restore_digest" \
+    '.[0].RepoDigests|index($digest)!=null' >/dev/null
+}
+
+# Production approval still validates every schema field. Only the actual
+# loopback manifest reference's registry-name eligibility is normalized, because
+# this isolated fixture deliberately neither publishes to nor pulls from GHCR.
+eval "$(declare -f retention_images_review_validate | sed '1s/retention_images_review_validate/fixture_review_validate/')"
+retention_images_review_validate() {
+  local normalized result
+  [[ -f "$1" && ! -L "$1" && $(stat -c %s -- "$1") -le 262144 ]] || return 1
+  if [[ $(jq -r '.schema_version' "$1") != 3 ]]; then
+    fixture_review_validate "$1"
+    return
+  fi
+  [[ -n ${fixture_restore_prefix:-} ]] || return 1
+  jq -e --arg prefix "$fixture_restore_prefix" \
+    '.images[0].restore_digest|startswith($prefix) and test("@sha256:[a-f0-9]{64}$")' "$1" >/dev/null || return 1
+  normalized=$(mktemp "$case_root/.fixture-ghcr-approval.XXXXXX") || return 1
+  if jq --arg prefix "$fixture_restore_prefix" '
+      .images[0].restore_digest |= ("ghcr.io/hao-monster/xboardme@" + ltrimstr($prefix))' \
+      "$1" > "$normalized" && fixture_review_validate "$normalized"; then
+    result=0
+  else
+    result=1
+  fi
+  rm -f -- "$normalized"
+  return "$result"
+}
+
 # Narrow provenance fixture boundary. The real old timestamp, full ID, source,
 # revision, labels, exact synthetic namespace and fresh Docker snapshot must
 # match. Nothing is patched into the production helper or workflow interface.
@@ -194,11 +329,13 @@ retention_image_eligible() {
       .Config.Labels["org.opencontainers.image.revision"]==$revision and
       (.RepoTags|length)>0 and all(.RepoTags[];startswith($prefix))' <<< "$inspected" >/dev/null || return 1
   [[ $(retention_image_snapshot "$id") == "$snapshot" ]] || return 1
-  jq -e --slurpfile review "$manifest" --arg workflow "$EXPECTED_WORKFLOW_SHA" '
+  jq -e --slurpfile review "$manifest" --arg workflow "$EXPECTED_WORKFLOW_SHA" \
+    --arg fixture_prefix "${fixture_restore_prefix:-unused-fixture-prefix}" '
     .revision!=$workflow and
     (.revision as $r|$review[0].protected_image_revisions|index($r)==null) and
     ([.digests[] as $d|$review[0].protected_image_digests|index($d)|select(.!=null)]|length==0) and
-    all(.digests[];test("^ghcr\\.io/hao-monster/xboardme@sha256:[a-f0-9]{64}$"))
+    all(.digests[];test("^ghcr\\.io/hao-monster/xboardme@sha256:[a-f0-9]{64}$") or
+      (startswith($fixture_prefix) and test("@sha256:[a-f0-9]{64}$")))
   ' <<< "$snapshot" >/dev/null || return 1
   created=$(date -u -d "$(jq -r .created_at <<< "$snapshot")" +%s) || return 1
   ((now>=created && now-created >= age))
@@ -213,7 +350,12 @@ _rc_start_observer() { _rc_sample; }
 _rc_stop_observer() { :; }
 _rc_probe() {
   kill -0 "$observer_pid" 2>/dev/null || return 1
-  [[ ! -f "$case_root/probe-failure" ]]
+  [[ ! -f "$case_root/probe-failure" ]] || return 1
+  if [[ $(jq -r '.monitoring.mode // "legacy"' "$RC_REVIEW") == passive_runtime_v1 ]]; then
+    # Genuine secret-free Docker metadata collection for every inventoried
+    # container; Caddy, resource sampling and time remain synthetic boundaries.
+    _rc_containers || { touch "$case_root/container-probe-failed"; return 1; }
+  fi
 }
 eval "$(declare -f retention_continuity_check | sed '1s/retention_continuity_check/fixture_continuity_check/')"
 retention_continuity_check() {
@@ -229,6 +371,15 @@ retention_continuity_check() {
         printf '%s\n' "$id" > "$case_root/fault-container"
         ;;
       monitor) touch "$case_root/probe-failure"; _rc_sample; return 1 ;;
+      protected_identity)
+        # Deliberately perturb only the extra CI witness, never the persistent
+        # connection's web container or any other original protected member.
+        docker start "$identity_witness" >/dev/null
+        fixture_wait_unhealthy "$identity_witness"
+        docker container stop --time 5 "$identity_witness" >/dev/null
+        _rc_sample
+        return 1
+        ;;
       term) kill -TERM "$BASHPID"; return 1 ;;
       *) return 1 ;;
     esac
@@ -238,6 +389,7 @@ retention_continuity_check() {
 
 make_case() {
   case_name=$1
+  fixture_restore_prefix='' fixture_restore_digest=''
   case_root="$test_root/$case_name"
   workdir=$case_root
   mkdir -p "$case_root/.codex-v2-release/333-1" "$case_root/parent" "$case_root/child"
@@ -319,6 +471,41 @@ make_case() {
   fault=''
 }
 
+make_passive_case() {
+  make_case "$1"
+  fixture_add_manifest_digest
+  retention_all_snapshots > "$retention_snapshot_file"
+  resource_fingerprint=$(retention_resource_fingerprint "$retention_snapshot_file")
+  jq --arg restore "$fixture_restore_digest" --arg revision "$old_sha" \
+    --arg image_hash "$(retention_image_snapshot "$candidate" | retention_hash)" \
+    --arg fingerprint "$resource_fingerprint" --argjson port "$test_port" \
+    --slurpfile inventory "$retention_snapshot_file" '
+    .schema_version=3 |
+    .resource_fingerprint=$fingerprint |
+    .images[0].restore_digest=$restore | .images[0].revision=$revision |
+    .images[0].snapshot_sha256=$image_hash |
+    .review_evidence={scope_review_sha256:.review_evidence.monitoring_review_sha256,
+      isolated_docker_review_sha256:.review_evidence.isolated_docker_review_sha256} |
+    .monitoring.mode="passive_runtime_v1" | .monitoring.active_port=$port |
+    .monitoring.baseline_seconds=120 | .monitoring.post_delete_observe_seconds=300 |
+    .monitoring.protected_containers=[$inventory[0].containers[]|{id,status,started_at,restart_count}] |
+    del(.monitoring.public,.monitoring.origin,.monitoring.live_signals,.monitoring.evidence)
+    ' "$review_file" > "$case_root/passive-review.json"
+  mv -- "$case_root/passive-review.json" "$review_file"
+  chmod 600 "$review_file"
+}
+
+fixture_wait_unhealthy() {
+  local id=$1 attempt
+  for ((attempt=0;attempt<100;attempt++)); do
+    [[ $(docker container inspect -f '{{.State.Running}}' "$id") == true ]] || return 1
+    if [[ $(docker container inspect -f '{{.State.Health.Status}}' "$id") == unhealthy ]]; then return 0; fi
+    sleep 0.1
+  done
+  echo 'IMAGE_ONLY_DOCKER_TEST=FAIL expected_fixture_unhealthy_not_observed' >&2
+  return 1
+}
+
 invoke() (
   set -Eeuo pipefail
   EXPECTED_WORKFLOW_SHA=$workflow_sha
@@ -354,6 +541,14 @@ expect_hold() {
 pass() { ((cases+=1)); printf 'IMAGE_ONLY_DOCKER_CASE=PASS %s\n' "$1"; }
 
 make_case success
+# Exercise the actual Docker template before negative health cases: a missing
+# optional Health key must not be mistaken for a failed health-policy check.
+docker container inspect "$active_container" "$maintenance_id" | \
+  jq -e 'all(.[]; .State.Status=="running" and (.State|has("Health")|not))' >/dev/null
+if ! RC_REVIEW=$review_file _rc_containers > "$case_root/container-template.log" 2>&1; then
+  cat "$case_root/container-template.log" >&2; exit 1
+fi
+pass real_container_template_accepts_absent_health
 run_case
 if ((status != 0)); then cat "$case_root/result.log" >&2; exit 1; fi
 grep -q '^IMAGE_CLEANUP=PASS result=complete ' "$case_root/result.log"
@@ -364,6 +559,96 @@ jq -e '.status=="COMPLETE" and .cleanup_validated==true and .post_verification==
   "$case_root/.codex-v2-release/image-cleanup-gate.json" >/dev/null
 cmp "$active_state_file" "$case_root/state.before.json"
 pass multi_tag_image_removed_shared_layers_and_untagged_parent_retained
+
+# The extra witness has an intentionally failing health check. It is not one
+# of the original live-role/TCP fixtures. Its stopped historical health must
+# not block schema 3, but the same unhealthy state while running must block it.
+# This scratch image has no /bin/sh, so CMD-SHELL fails without touching the
+# synthetic application's persistent records or accepting additional requests.
+identity_witness=$(docker run -d --name "$test_label-passive-witness" \
+  --label "codex.retention.test=$test_label" \
+  --health-cmd='/fixture-service --intentional-ci-health-failure' \
+  --health-interval=1s --health-timeout=1s --health-retries=1 \
+  --mount "type=bind,src=$test_root/data,dst=/data" --mount "type=volume,src=$volume,dst=/redis" \
+  "$base_image")
+containers+=("$identity_witness")
+fixture_wait_unhealthy "$identity_witness"
+
+make_passive_case passive_running_unhealthy
+before=$(retention_image_snapshot "$candidate")
+if RC_REVIEW=$review_file _rc_containers > "$case_root/health-policy.log" 2>&1; then
+  echo 'IMAGE_ONLY_DOCKER_TEST=FAIL running_unhealthy_probe_accepted' >&2; exit 1
+fi
+# The jq health policy is silent on rejection. Any template/inspect error is a
+# different failure, not evidence that unhealthy running containers are gated.
+if [[ -s "$case_root/health-policy.log" ]]; then
+  cat "$case_root/health-policy.log" >&2; exit 1
+fi
+run_case
+if ! expect_hold; then cat "$case_root/result.log" >&2; exit 1; fi
+[[ -f "$case_root/container-probe-failed" ]]
+[[ $(retention_image_snapshot "$candidate") == "$before" ]]
+pass passive_real_running_unhealthy_container_blocks_before_deletion
+
+docker container stop --time 5 "$identity_witness" >/dev/null
+[[ $(docker container inspect -f '{{.State.Status}}:{{.State.Health.Status}}' "$identity_witness") == exited:unhealthy ]]
+make_passive_case passive_success
+run_case
+if ((status != 0)); then cat "$case_root/result.log" >&2; exit 1; fi
+grep -q '^IMAGE_CLEANUP=PASS result=complete ' "$case_root/result.log"
+! docker image inspect "$candidate" >/dev/null 2>&1
+! docker image inspect "$fixture_restore_digest" >/dev/null 2>&1
+docker image inspect "$parent_image" >/dev/null
+docker image inspect "$base_image" >/dev/null
+jq -e '.schema_version==2 and .monitoring_mode=="passive_runtime_v1" and
+  .status=="COMPLETE" and .cleanup_validated==true and .post_verification=="pending" and
+  .baseline_seconds==120 and .observe_seconds==300' \
+  "$case_root/.codex-v2-release/image-cleanup-gate.json" >/dev/null
+cmp "$active_state_file" "$case_root/state.before.json"
+pass passive_real_digest_removed_shared_layers_and_stopped_historical_unhealthy_preserved
+
+make_passive_case passive_restore_mismatch
+jq --arg digest "${fixture_restore_prefix}sha256:$(printf 'd%.0s' {1..64})" \
+  '.images[0].restore_digest=$digest' "$review_file" > "$case_root/invalid-review.json"
+mv -- "$case_root/invalid-review.json" "$review_file"
+chmod 600 "$review_file"
+before=$(retention_image_snapshot "$candidate")
+run_case
+((status != 0))
+grep -q '^IMAGE_CLEANUP_FAIL=restore_identity_not_in_audit$' "$case_root/result.log" || {
+  cat "$case_root/result.log" >&2; exit 1;
+}
+[[ $(retention_image_snapshot "$candidate") == "$before" ]]
+pass passive_unmatched_restore_digest_blocks_before_deletion
+
+make_passive_case passive_missing_stopped_rollback
+jq --arg id "$rollback_id" '.monitoring.protected_containers|=map(select(.id!=$id))' \
+  "$review_file" > "$case_root/invalid-review.json"
+mv -- "$case_root/invalid-review.json" "$review_file"
+chmod 600 "$review_file"
+before=$(retention_image_snapshot "$candidate")
+run_case
+((status != 0))
+grep -q '^IMAGE_CLEANUP_FAIL=monitoring_inventory_mismatch$' "$case_root/result.log" || {
+  cat "$case_root/result.log" >&2; exit 1;
+}
+[[ $(retention_image_snapshot "$candidate") == "$before" ]]
+pass passive_monitor_omitting_stopped_rollback_blocks_before_deletion
+
+make_passive_case passive_protected_identity
+fault=protected_identity
+run_case
+if ! expect_hold; then cat "$case_root/result.log" >&2; exit 1; fi
+[[ -f "$case_root/fault-fired" && -f "$case_root/container-probe-failed" ]]
+! docker image inspect "$test_namespace-$case_name-a" >/dev/null 2>&1
+docker image inspect "$test_namespace-$case_name-b" >/dev/null
+docker image inspect "$fixture_restore_digest" >/dev/null
+before=$(retention_image_snapshot "$candidate")
+fault=''
+run_case
+expect_hold
+[[ $(retention_image_snapshot "$candidate") == "$before" ]]
+pass passive_real_protected_started_at_drift_durable_hold_blocks_later_aliases_and_reexecution
 
 make_case new_alias
 docker tag "$candidate" "$test_namespace-$case_name-unreviewed"
@@ -411,4 +696,4 @@ cat "$test_root/observer.log"
 after=$(for id in $(jq -r '.[].id' <<< "$protected_before"); do retention_container_snapshot "$id"; done | jq -csS 'sort_by(.id)')
 [[ $after == "$protected_before" ]]
 pass all_protected_and_rollback_containers_mounts_data_and_tcp_connection_preserved
-printf 'IMAGE_ONLY_DOCKER_TEST=PASS cases=%s real_docker=true synthetic_discovery=true synthetic_provenance=true fixture_clock=true production_load=false daemon_timeout=false ssh_loss=false\n' "$cases"
+printf 'IMAGE_ONLY_DOCKER_TEST=PASS cases=%s real_docker=true loopback_registry=true schema3_real_digest=true schema3_real_container_probes=true synthetic_discovery=true synthetic_provenance=true fixture_clock=true production_load=false daemon_timeout=false ssh_loss=false\n' "$cases"
