@@ -27,7 +27,7 @@ snapshot() {
 audit() {
   local phase=$1 containers images
   containers=$(jq -cnS '[{id:("e"*64),status:"running"}]')
-  images=$(jq -cnS --arg id "$id" --arg phase "$phase" '[{id:("sha256:"+("d"*64))}] + (if $phase=="before" then [{id:$id}] else [] end)|sort_by(.id)')
+  images=$(jq -cnS --arg id "$id" --arg phase "$phase" '[{id:("sha256:"+("d"*64)),source:"https://example.com/~~~"}] + (if $phase=="before" then [{id:$id}] else [] end)|sort_by(.id)')
   printf 'IMAGE_AUDIT_SCHEMA=1\nIMAGE_AUDIT_DISK_AVAILABLE_KIB=10000\nIMAGE_AUDIT_ACTIVE_STATE_SHA256=%s\n' "$hash"
   printf 'IMAGE_AUDIT_CONTAINER_COUNT=1\nIMAGE_AUDIT_IMAGE_COUNT=%s\n' "$(jq length <<< "$images")"
   printf 'IMAGE_AUDIT_INVENTORY_SHA256=%s\n' "$(jq -cnS --argjson containers "$containers" --argjson images "$images" '{containers:$containers,images:$images}' | sha256sum | awk '{print $1}')"
@@ -36,7 +36,7 @@ audit() {
   printf 'IMAGE_AUDIT_ACTIVE_UPSTREAM=127.0.0.1:7002\nIMAGE_AUDIT_TRAFFIC_STATE=active_v2\nIMAGE_AUDIT_ROLLBACK_SUPPORTED=true\n'
   printf 'IMAGE_AUDIT_RESOURCE_FINGERPRINT=%s\nIMAGE_AUDIT_PROTECTION_FINGERPRINT=%s\nIMAGE_AUDIT_STARTUP_SHA256=%s\n' "$hash" "$hash" "$hash"
   snapshot CONTAINER "$(jq -c '.[0]' <<< "$containers")"
-  snapshot IMAGE "$(jq -cn '{id:("sha256:"+("d"*64))}')"
+  snapshot IMAGE "$(jq -cn '{id:("sha256:"+("d"*64)),source:"https://example.com/~~~"}')"
   if [[ "$phase" == before ]]; then snapshot IMAGE "{\"id\":\"$id\"}"; fi
   printf 'IMAGE_AUDIT_COMPLETED_AT_EPOCH=100\nIMAGE_AUDIT=PASS mode=read_only lifecycle=preserved\n'
   if [[ "$phase" == before ]]; then
@@ -45,6 +45,7 @@ audit() {
 }
 audit before > "$test_root/before"
 audit after > "$test_root/after"
+grep '^IMAGE_AUDIT_IMAGE_SNAPSHOT ' "$test_root/after" | grep -Fq '+'
 verify() { bash "$script_dir/verify-images-only-post-audit.sh" "$test_root/before" "$test_root/after" "$test_root/review.json"; }
 verify
 cp "$test_root/after" "$test_root/good"

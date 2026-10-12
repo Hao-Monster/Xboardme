@@ -54,7 +54,7 @@ hash=$(sha256sum < "$review" | awk '{print $1}')
    $(field "$before" IMAGE_AUDIT_COMPLETED_AT_EPOCH) =~ ^[0-9]{1,12}$ ]] || fail timestamp
 (( $(field "$after" IMAGE_AUDIT_COMPLETED_AT_EPOCH) >= $(field "$before" IMAGE_AUDIT_COMPLETED_AT_EPOCH) )) || fail stale_audit
 snapshots() {
-  local file=$1 type=$2 lines line encoded decoded identity digest result=''
+  local file=$1 type=$2 lines line encoded decoded identity digest references result=''
   lines=$(grep "^IMAGE_AUDIT_${type}_SNAPSHOT " "$file") || fail missing_snapshots
   while IFS= read -r line; do
     [[ "$line" =~ snapshot_b64=([A-Za-z0-9+/=]+)$ ]] || fail malformed_snapshot
@@ -67,7 +67,11 @@ snapshots() {
     else
       [[ "$identity" =~ ^sha256:[a-f0-9]{64}$ ]] || fail invalid_image_id
       digest=$(printf '%s\n' "$decoded" | sha256sum | awk '{print $1}')
-      [[ "$line" =~ ^IMAGE_AUDIT_IMAGE_SNAPSHOT\ id=$identity\ container_refs=[0-9]+\ snapshot_sha256=$digest\ snapshot_b64=$encoded$ ]] || fail image_line_mismatch
+      references=${line#* container_refs=}; references=${references%% *}
+      [[ "$references" =~ ^[0-9]+$ ]] || fail invalid_reference_count
+      # Base64 can contain '+', a regular-expression metacharacter. Compare
+      # encoded evidence literally rather than interpolating it into an ERE.
+      [[ "$line" == "IMAGE_AUDIT_IMAGE_SNAPSHOT id=$identity container_refs=$references snapshot_sha256=$digest snapshot_b64=$encoded" ]] || fail image_line_mismatch
     fi
     result+="$decoded"$'\n'
   done <<< "$lines"
