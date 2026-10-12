@@ -214,6 +214,202 @@ def daemon_identity():
     return found[0] if len(found) == 1 else None
 
 
+def read_preparation_proc(path):
+    """Bounded procfs text only; never publish raw contents or error details."""
+    require(str(path) in ('/proc/stat', '/proc/meminfo', '/proc/pressure/cpu', '/proc/pressure/io') or
+            re.fullmatch(r'/proc/[1-9][0-9]{0,14}/stat', str(path)) is not None, 'preparation_source_invalid')
+    try:
+        with Path(path).open(encoding='ascii', errors='strict') as stream:
+            value = stream.read(131073)
+        require(0 < len(value) <= 131072, 'preparation_source_invalid')
+        return value
+    except (OSError, UnicodeError):
+        raise ClosedFailure('preparation_source_failed') from None
+
+
+class PreparationSampler:
+    """Independent CI preparation diagnostics; no Docker call or observer thread."""
+    def __init__(self):
+        self.daemon = daemon_identity()
+
+    @staticmethod
+    def unsigned(value):
+        require(re.fullmatch(r'(?:0|[1-9][0-9]{0,19})', value) is not None and
+                int(value) <= 2 ** 64 - 1, 'preparation_source_invalid')
+        return int(value)
+
+    def psi(self, which, kind):
+        matches = [line.split() for line in read_preparation_proc('/proc/pressure/' + which).splitlines()
+                   if line.split() and line.split()[0] == kind]
+        require(len(matches) == 1 and len(matches[0]) == 5, 'preparation_source_invalid')
+        pairs = [token.split('=') for token in matches[0][1:]]
+        require(all(len(pair) == 2 for pair in pairs) and
+                sorted(pair[0] for pair in pairs) == ['avg10', 'avg300', 'avg60', 'total'], 'preparation_source_invalid')
+        values = dict(pairs)
+        for key in ('avg10', 'avg60', 'avg300'):
+            require(re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', values[key]) is not None,
+                    'preparation_source_invalid')
+            values[key] = float(values[key])
+            require(math.isfinite(values[key]) and 0 <= values[key] <= 100, 'preparation_source_invalid')
+        return values['avg10'], self.unsigned(values['total'])
+
+    def sample(self):
+        lines = read_preparation_proc('/proc/stat').splitlines()
+        require(lines and lines[0].split()[0:1] == ['cpu'] and len(lines[0].split()) >= 9,
+                'preparation_source_invalid')
+        ticks = [self.unsigned(value) for value in lines[0].split()[1:9]]
+        memory = {}
+        wanted = {'MemAvailable:': 'mem_available_kib', 'Dirty:': 'mem_dirty_kib', 'Writeback:': 'mem_writeback_kib'}
+        for line in read_preparation_proc('/proc/meminfo').splitlines():
+            parts = line.split()
+            if parts and parts[0] in wanted:
+                key = wanted[parts[0]]
+                require(len(parts) == 3 and parts[2] == 'kB' and key not in memory, 'preparation_source_invalid')
+                memory[key] = self.unsigned(parts[1])
+        require(set(memory) == set(wanted.values()), 'preparation_source_invalid')
+        cpu_avg, cpu_total = self.psi('cpu', 'some')
+        io_avg, io_total = self.psi('io', 'full')
+        row = dict(cpu_ticks=ticks, **memory, cpu_some_avg10=cpu_avg, io_full_avg10=io_avg,
+                   cpu_some_total_usec=cpu_total, io_full_total_usec=io_total,
+                   daemon_cpu_ticks=None, daemon_cpu_status='NOT_AVAILABLE')
+        # Daemon counters are optional context, never an additional load limit.
+        if self.daemon:
+            fields = read_preparation_proc('/proc/%d/stat' % self.daemon[0]).rsplit(') ', 1)[-1].split()
+            require(len(fields) >= 20 and self.unsigned(fields[19]) == self.daemon[1],
+                    'preparation_daemon_identity_changed')
+            row.update(daemon_cpu_ticks=self.unsigned(fields[11]) + self.unsigned(fields[12]),
+                       daemon_cpu_status='AVAILABLE')
+        return row
+
+
+def validate_preparation_sample(value, previous):
+    fields = {'cpu_ticks', 'mem_available_kib', 'mem_dirty_kib', 'mem_writeback_kib',
+              'cpu_some_avg10', 'io_full_avg10', 'cpu_some_total_usec', 'io_full_total_usec',
+              'daemon_cpu_ticks', 'daemon_cpu_status'}
+    integer = lambda x: type(x) is int and 0 <= x <= 2 ** 64 - 1
+    percentage = lambda x: type(x) in (int, float) and math.isfinite(x) and 0 <= x <= 100
+    require(type(value) is dict and set(value) == fields and type(value['cpu_ticks']) is list and
+            len(value['cpu_ticks']) == 8 and all(integer(x) for x in value['cpu_ticks']) and
+            all(integer(value[key]) for key in ('mem_available_kib', 'mem_dirty_kib', 'mem_writeback_kib',
+                                                'cpu_some_total_usec', 'io_full_total_usec')) and
+            percentage(value['cpu_some_avg10']) and percentage(value['io_full_avg10']) and
+            (value['daemon_cpu_status'] == 'AVAILABLE' and integer(value['daemon_cpu_ticks']) or
+             value['daemon_cpu_status'] == 'NOT_AVAILABLE' and value['daemon_cpu_ticks'] is None),
+            'preparation_sample_invalid')
+    row = dict(value, cpu_ticks=list(value['cpu_ticks']), cpu_busy_percent=None, cpu_iowait_percent=None)
+    require(sum(row['cpu_ticks']) > 0, 'preparation_sample_invalid')
+    if previous is not None:
+        delta = [current - old for current, old in zip(row['cpu_ticks'], previous)]
+        require(all(x >= 0 for x in delta) and sum(delta) > 0, 'preparation_cpu_delta_invalid')
+        row['cpu_busy_percent'] = 100 * (sum(delta) - delta[3] - delta[4]) / sum(delta)
+        row['cpu_iowait_percent'] = 100 * delta[4] / sum(delta)
+        require(percentage(row['cpu_busy_percent']) and percentage(row['cpu_iowait_percent']),
+                'preparation_cpu_delta_invalid')
+    row['violations'] = [
+        'max_' + metric for metric in ('cpu_busy_percent', 'cpu_iowait_percent', 'cpu_some_avg10', 'io_full_avg10')
+        if row[metric] is not None and row[metric] > LIMITS['max_' + metric]]
+    if row['mem_available_kib'] < LIMITS['min_mem_available_kib']:
+        row['violations'].append('min_mem_available_kib')
+    return row
+
+
+def collect_benchmark_preparation(*, deadline, publish, clock=None, sleep=None, sampler=None):
+    """One fixed prospective CI phase; never retries, extends, or reuses samples."""
+    clock, sleep = clock or time.monotonic, sleep or time.sleep
+    start, previous, last_clock, failure = None, None, None, None
+    report = dict(schema_version=1, protocol='fixed_ci_preparation_v1', status='RUNNING', admission='NOT_REACHED',
+                  duration_seconds=60, sample_interval_seconds=10, sample_lateness_limit_seconds=1,
+                  outer_limit_seconds=65, required_budget_before_seconds=2705, required_budget_after_seconds=2640,
+                  outer_limit_scope='sampling_and_validation_excludes_publication',
+                  started_monotonic=None, ended_monotonic=None, limits=dict(LIMITS), samples=[], attempts=[], failure=None,
+                  early_health='NO_THRESHOLD_VIOLATIONS', early_exceedances=[], tail_sample_indices=[3, 4, 5, 6],
+                  tail_admitted=False, tail_actual_start_span_seconds=None, continuous_health_claim=False,
+                  production_authority=False, source_error_details='REDACTED')
+
+    def read_clock():
+        nonlocal last_clock
+        try:
+            value = clock()
+            require(type(value) in (int, float) and math.isfinite(value) and value >= 0 and
+                    (last_clock is None or value >= last_clock), 'preparation_clock_invalid')
+        except Exception:
+            raise ClosedFailure('preparation_clock_invalid') from None
+        last_clock = value
+        return value
+
+    def failure_code(error):
+        return str(error) if isinstance(error, ClosedFailure) and re.fullmatch(r'[a-z_]+', str(error)) else (
+            'preparation_interrupted' if isinstance(error, (KeyboardInterrupt, SystemExit)) else 'preparation_source_failed')
+
+    try:
+        start = read_clock()
+        report['started_monotonic'] = start
+        require(type(deadline) in (int, float) and math.isfinite(deadline) and deadline - start >= 2705,
+                'preparation_budget')
+        reader = sampler or PreparationSampler().sample
+        for index in range(7):
+            target = start + index * 10
+            now = read_clock()
+            require(now <= start + 65, 'preparation_deadline')
+            if now < target:
+                sleep(target - now)
+            actual_start = read_clock()
+            attempt = dict(index=index, scheduled_monotonic=target, actual_start_monotonic=None,
+                           actual_end_monotonic=None, failure=None)
+            report['attempts'].append(attempt)
+            attempt['actual_start_monotonic'] = actual_start
+            require(actual_start <= start + 65, 'preparation_deadline')
+            require(actual_start >= target, 'preparation_sample_early')
+            require(actual_start <= target + 1, 'preparation_sample_late')
+            row = validate_preparation_sample(reader(), previous)
+            actual_end = read_clock()
+            attempt['actual_end_monotonic'] = actual_end
+            row.update(index=index, scheduled_offset_seconds=index * 10, scheduled_monotonic=target,
+                       actual_start_monotonic=actual_start, actual_end_monotonic=actual_end)
+            report['samples'].append(row)
+            if index < 3 and row['violations']:
+                report['early_health'] = 'WARN_UNSTABLE_PREPARATION'
+                report['early_exceedances'].append(dict(row))
+            require(actual_end <= start + 65, 'preparation_deadline')
+            require(actual_end <= target + 1, 'preparation_sample_late')
+            previous = row['cpu_ticks']
+        end = read_clock()
+        report['ended_monotonic'] = end
+        require(end <= start + 65, 'preparation_deadline')
+        require(deadline - end >= 2640, 'preparation_remaining_budget')
+        tail = report['samples'][3:7]
+        report['tail_actual_start_span_seconds'] = tail[-1]['actual_start_monotonic'] - tail[0]['actual_start_monotonic']
+        require(len(tail) == 4 and all(row['cpu_busy_percent'] is not None and row['cpu_iowait_percent'] is not None
+                                     for row in tail), 'preparation_tail_incomplete')
+        require(not any(row['violations'] for row in tail), 'preparation_tail_threshold_failed')
+        report.update(status='COMPLETE', admission='PASS', tail_admitted=True)
+    except BaseException as error:
+        failure = failure_code(error)
+    finally:
+        # Sampling/validation ends before publication. A slow publication is
+        # charged to the same overall deadline again at the formal entry gate.
+        try:
+            ended = read_clock()
+            if start is not None:
+                report['ended_monotonic'] = ended
+                if report['attempts'] and report['attempts'][-1]['actual_end_monotonic'] is None:
+                    report['attempts'][-1]['actual_end_monotonic'] = ended
+                require(ended <= start + 65, 'preparation_deadline')
+        except BaseException as error:
+            failure = failure or failure_code(error)
+        if failure:
+            report.update(status='FAIL', admission='FAIL', tail_admitted=False, failure=failure)
+            if report['attempts']:
+                report['attempts'][-1]['failure'] = failure
+        try:
+            publish(report)
+        except BaseException:
+            report.update(status='FAIL', admission='FAIL', tail_admitted=False, failure='preparation_publication_failed')
+            raise ClosedFailure('preparation_publication_failed') from None
+    require(failure is None, failure)
+    return report
+
+
 class ResourceObserver:
     """CI procfs sampler only, not Caddy/connection/production continuity."""
     def __init__(self):
@@ -313,6 +509,7 @@ class InventoryCI:
         self.baseline = None
         self.abort_check = None
         self.setup_started = False
+        self.preparation_attempted = False
         self.summary = dict(schema_version=1, status='RUNNING', mode=mode,
                             fixture_container_state='created_never_started', measurements=[],
                             real_service_continuity='NOT_RUN', production_headroom='NOT_RUN',
@@ -493,7 +690,31 @@ esac
         self.summary['measurements'] += [old_metric, new_metric]
         self.approved_snapshot = old_bytes
 
+    def prepare_benchmark(self):
+        require(not self.preparation_attempted, 'preparation_may_run_once')
+        self.preparation_attempted = True
+
+        def publish(report):
+            report.update(checkout_sha=self.summary['checkout_sha'], sources=dict(self.summary['sources']))
+            # Preserve early failed values in both artifacts, even on later failure.
+            self.summary['preparation'] = report
+            write_json(self.publication / 'preparation.json', report)
+
+        return collect_benchmark_preparation(deadline=self.deadline, publish=publish)
+
     def benchmark(self):
+        self.summary['benchmark'] = 'NOT_RUN_PREPARATION_REJECTED'
+        self.prepare_benchmark()
+        entry = dict(status='FAIL', checked_monotonic=None, remaining_budget_seconds=None,
+                     required_budget_seconds=2640, failure='preparation_formal_entry_clock_invalid')
+        self.summary['preparation_formal_entry'] = entry
+        now = time.monotonic()
+        require(type(now) in (int, float) and math.isfinite(now) and now >= 0, entry['failure'])
+        entry.update(checked_monotonic=now, remaining_budget_seconds=self.deadline - now,
+                     failure='preparation_remaining_budget_after_publication')
+        require(entry['remaining_budget_seconds'] >= 2640, entry['failure'])
+        entry.update(status='PASS', failure=None)
+        self.summary['benchmark'] = 'INCOMPLETE_COMPARATIVE_CI_ONLY'
         for episode, variant in enumerate(('observer_only', 'old', 'new', 'new', 'old')):
             observer = ResourceObserver()
             observation_start = time.monotonic()
@@ -618,8 +839,12 @@ def main():
     runner = InventoryCI(mode)
     failure = None
     try:
+        runner.summary['phase_markers'] = dict(setup_started=time.monotonic())
         runner.setup()
+        runner.summary['phase_markers']['setup_completed'] = time.monotonic()
+        runner.summary['phase_markers']['correctness_started'] = time.monotonic()
         runner.correctness()
+        runner.summary['phase_markers']['correctness_completed'] = time.monotonic()
         if mode == 'benchmark':
             runner.benchmark()
         runner.summary['status'] = 'PASS_CI_ONLY'

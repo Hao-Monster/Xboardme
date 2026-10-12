@@ -76,6 +76,7 @@ jobs:
           name: image-inventory-benchmark-${{ github.sha }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/image-inventory-ci-results/summary.json
+            ${{ runner.temp }}/image-inventory-ci-results/preparation.json
             ${{ runner.temp }}/image-inventory-ci-results/episode-*.json
           if-no-files-found: warn
           retention-days: 14

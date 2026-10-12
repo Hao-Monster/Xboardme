@@ -289,6 +289,386 @@ class ObserverLivenessTests(unittest.TestCase):
             observer.check()
 
 
+class BenchmarkPreparationTests(unittest.TestCase):
+    """Pure clock and scalar fixtures: no thread, wait, Docker or procfs access."""
+    @staticmethod
+    def sample(index):
+        return dict(cpu_ticks=[10 * (index + 1), 0, 5 * (index + 1), 80 * (index + 1),
+                               5 * (index + 1), 0, 0, 0], mem_available_kib=1000000,
+                    mem_dirty_kib=10, mem_writeback_kib=0, cpu_some_avg10=0.2,
+                    io_full_avg10=0.1, cpu_some_total_usec=index * 100,
+                    io_full_total_usec=index * 10, daemon_cpu_ticks=100 + index,
+                    daemon_cpu_status='AVAILABLE')
+
+    def execute(self, *, mutate=None, deadline=3000, sleep_delta=0, sample_duration=0,
+                sample_error=None, expected=None):
+        state = dict(now=0.0, samples=0, sleeps=0)
+        published = []
+
+        def clock():
+            return state['now']
+
+        def sleep(seconds):
+            state['sleeps'] += 1
+            state['now'] += seconds + sleep_delta
+
+        def sampler():
+            index = state['samples']
+            state['samples'] += 1
+            if sample_error is not None and index == sample_error:
+                raise OSError('private diagnostic must not be published')
+            value = self.sample(index)
+            if mutate:
+                mutate(index, value)
+            state['now'] += sample_duration
+            return value
+
+        if expected:
+            with self.assertRaisesRegex(MOD.ClosedFailure, '^' + expected + '$'):
+                MOD.collect_benchmark_preparation(deadline=deadline, publish=published.append,
+                    clock=clock, sleep=sleep, sampler=sampler)
+        else:
+            result = MOD.collect_benchmark_preparation(deadline=deadline, publish=published.append,
+                clock=clock, sleep=sleep, sampler=sampler)
+            self.assertIs(result, published[-1])
+        self.assertEqual(len(published), 1, 'partial diagnostic must be published exactly once')
+        self.assertNotIn('private diagnostic', json.dumps(published))
+        return published[-1], state
+
+    def test_exact_seven_slots_and_fresh_admission(self):
+        report, state = self.execute()
+        self.assertEqual(state, dict(now=60.0, samples=7, sleeps=6))
+        self.assertEqual(report['admission'], 'PASS')
+        self.assertEqual(report['early_health'], 'NO_THRESHOLD_VIOLATIONS')
+        self.assertEqual([row['scheduled_offset_seconds'] for row in report['samples']], list(range(0, 61, 10)))
+        self.assertEqual(report['tail_sample_indices'], [3, 4, 5, 6])
+        self.assertEqual(report['tail_actual_start_span_seconds'], 30)
+        self.assertEqual(report['limits'], MOD.LIMITS)
+
+    def test_early_violation_is_permanent_warning_not_erased(self):
+        report, state = self.execute(mutate=lambda i, row: row.update(io_full_avg10=1.47) if i == 0 else None)
+        self.assertEqual(report['admission'], 'PASS')
+        self.assertEqual(report['early_health'], 'WARN_UNSTABLE_PREPARATION')
+        self.assertEqual(report['early_exceedances'][0]['io_full_avg10'], 1.47)
+        self.assertEqual(report['samples'][0]['violations'], ['max_io_full_avg10'])
+        self.assertEqual(state['samples'], 7)
+
+    def test_each_tail_violation_blocks_without_extending(self):
+        for bad in (3, 4, 5, 6):
+            with self.subTest(bad=bad):
+                report, state = self.execute(mutate=lambda i, row: row.update(io_full_avg10=1.01) if i == bad else None,
+                                             expected='preparation_tail_threshold_failed')
+                self.assertEqual(state['samples'], 7)
+                self.assertEqual(state['now'], 60)
+                self.assertEqual(report['admission'], 'FAIL')
+                self.assertFalse(report['tail_admitted'])
+
+    def test_late_start_fails_without_catchup(self):
+        report, state = self.execute(sleep_delta=1.01, expected='preparation_sample_late')
+        self.assertEqual(state['samples'], 1)
+        self.assertEqual(len(report['samples']), 1)
+        self.assertEqual(report['attempts'][-1]['actual_start_monotonic'], 11.01)
+
+    def test_slow_sample_keeps_row_and_fails(self):
+        report, state = self.execute(sample_duration=1.01, expected='preparation_sample_late')
+        self.assertEqual(state['samples'], 1)
+        self.assertEqual(report['samples'][0]['actual_end_monotonic'], 1.01)
+
+    def test_early_wakeup_does_not_sample_or_retry(self):
+        report, state = self.execute(sleep_delta=-0.01, expected='preparation_sample_early')
+        self.assertEqual(state['samples'], 1)
+
+    def test_one_second_tolerance_is_disclosed_not_continuous_health(self):
+        report, state = self.execute(sample_duration=1)
+        self.assertEqual(report['admission'], 'PASS')
+        self.assertEqual(state['now'], 61)
+        self.assertFalse(report['continuous_health_claim'])
+
+    def test_budget_fails_before_sampler(self):
+        report, state = self.execute(deadline=2704.99, expected='preparation_budget')
+        self.assertEqual(state['samples'], 0)
+        self.assertEqual(report['samples'], [])
+
+    def test_exact_budget_boundary_accepts(self):
+        self.assertEqual(self.execute(deadline=2705)[0]['admission'], 'PASS')
+
+    def test_source_failure_preserves_partial_safe_evidence(self):
+        report, state = self.execute(sample_error=2, expected='preparation_source_failed')
+        self.assertEqual(len(report['samples']), 2)
+        self.assertEqual(report['failure'], 'preparation_source_failed')
+        self.assertEqual(report['attempts'][-1]['index'], 2)
+
+    def test_invalid_scalars_fail_closed(self):
+        for key, value in [('io_full_avg10', float('nan')), ('cpu_some_avg10', float('inf')),
+                           ('mem_available_kib', True), ('mem_dirty_kib', -1),
+                           ('cpu_some_total_usec', '1'), ('daemon_cpu_ticks', -1),
+                           ('daemon_cpu_status', 'MISSING'), ('cpu_ticks', [0] * 7),
+                           ('cpu_ticks', [True] + [0] * 7)]:
+            with self.subTest(key=key, value=value):
+                self.execute(mutate=lambda i, row: row.update({key: value}), expected='preparation_sample_invalid')
+
+    def test_missing_or_extra_fields_fail(self):
+        self.execute(mutate=lambda i, row: row.pop('io_full_avg10'), expected='preparation_sample_invalid')
+        self.execute(mutate=lambda i, row: row.update(unknown=1), expected='preparation_sample_invalid')
+
+    def test_cpu_delta_is_required_after_first(self):
+        report, state = self.execute(mutate=lambda i, row: row.update(cpu_ticks=[10, 0, 5, 80, 5, 0, 0, 0]),
+                                     expected='preparation_cpu_delta_invalid')
+        self.assertEqual(len(report['samples']), 1)
+        self.assertIsNone(report['samples'][0]['cpu_busy_percent'])
+
+    def test_all_unchanged_limits_are_used(self):
+        values = dict(cpu_some_avg10=10.01, io_full_avg10=1.01, mem_available_kib=131071)
+        for key, value in values.items():
+            with self.subTest(key=key):
+                self.execute(mutate=lambda i, row: row.update({key: value}) if i == 4 else None,
+                             expected='preparation_tail_threshold_failed')
+
+    def test_cpu_busy_and_iowait_thresholds_are_not_weakened(self):
+        for ticks in ([100, 0, 5, 1, 0, 0, 0, 0], [10, 0, 5, 50, 35, 0, 0, 0]):
+            with self.subTest(ticks=ticks):
+                self.execute(mutate=lambda i, row: row.update(cpu_ticks=[x * (i + 1) for x in ticks]),
+                             expected='preparation_tail_threshold_failed')
+
+    def test_individual_cpu_regression_cannot_hide_in_growing_total(self):
+        self.execute(mutate=lambda i, row: row.update(cpu_ticks=[9, 0, 20, 160, 10, 0, 0, 0]) if i == 1 else None,
+                     expected='preparation_cpu_delta_invalid')
+
+    def test_outer_deadline_cannot_extend_to_find_healthy_samples(self):
+        report, state = self.execute(sleep_delta=66, expected='preparation_deadline')
+        self.assertEqual(state['samples'], 1)
+        self.assertEqual(report['admission'], 'FAIL')
+
+    def test_interruption_publishes_without_retry(self):
+        published = []
+        with self.assertRaisesRegex(MOD.ClosedFailure, '^preparation_interrupted$'):
+            MOD.collect_benchmark_preparation(deadline=3000, publish=published.append,
+                clock=lambda: 0, sleep=lambda unused: None,
+                sampler=lambda: (_ for _ in ()).throw(KeyboardInterrupt()))
+        self.assertEqual(len(published), 1)
+        self.assertEqual(published[0]['failure'], 'preparation_interrupted')
+
+    def test_invalid_initial_clock_never_reaches_json(self):
+        for value in (float('nan'), float('inf'), True, -1):
+            published = []
+            with self.subTest(value=value), self.assertRaises(MOD.ClosedFailure):
+                MOD.collect_benchmark_preparation(deadline=3000, publish=published.append,
+                    clock=lambda: value, sampler=lambda: self.fail('unexpected sample'))
+            self.assertEqual(len(published), 1)
+            self.assertIsNone(published[0]['started_monotonic'])
+            self.assertIsNone(published[0]['ended_monotonic'])
+            json.dumps(published, allow_nan=False)
+
+    def test_final_envelope_cannot_overwrite_success_with_invalid_or_late_time(self):
+        for final in (float('nan'), float('inf'), 65.01):
+            state = dict(now=0.0, samples=0, end_reads=0)
+            published = []
+
+            def clock():
+                if state['samples'] == 7:
+                    state['end_reads'] += 1
+                    if state['end_reads'] == 3:
+                        return final
+                return state['now']
+
+            def sample():
+                value = self.sample(state['samples'])
+                state['samples'] += 1
+                return value
+
+            with self.subTest(final=final), self.assertRaises(MOD.ClosedFailure):
+                MOD.collect_benchmark_preparation(deadline=3000, publish=published.append,
+                    clock=clock, sleep=lambda seconds: state.update(now=state['now'] + seconds), sampler=sample)
+            self.assertEqual(published[0]['status'], 'FAIL')
+            self.assertEqual(published[0]['admission'], 'FAIL')
+            self.assertFalse(published[0]['tail_admitted'])
+            json.dumps(published, allow_nan=False)
+
+    def test_final_clock_exception_still_publishes_safe_partial_evidence(self):
+        calls, published = [], []
+
+        def clock():
+            calls.append(1)
+            if len(calls) > 1:
+                raise OSError('private final clock detail')
+            return 0
+
+        with self.assertRaises(MOD.ClosedFailure):
+            MOD.collect_benchmark_preparation(deadline=2704, publish=published.append,
+                clock=clock, sampler=lambda: self.fail('unexpected sample'))
+        self.assertEqual(len(published), 1)
+        self.assertNotIn('private', json.dumps(published, allow_nan=False))
+
+
+class PreparationSourceTests(unittest.TestCase):
+    def source(self, replacements=None):
+        contents = {'/proc/stat': 'cpu 10 0 5 80 5 0 0 0 0 0\n',
+                    '/proc/meminfo': 'MemAvailable: 1000000 kB\nDirty: 10 kB\nWriteback: 0 kB\n',
+                    '/proc/pressure/cpu': 'some avg10=0.20 avg60=0.10 avg300=0.01 total=20\n',
+                    '/proc/pressure/io': 'some avg10=0.20 avg60=0.10 avg300=0.01 total=20\nfull avg10=0.10 avg60=0.01 avg300=0.00 total=10\n'}
+        contents.update(replacements or {})
+        with patch.object(MOD, 'read_preparation_proc', side_effect=lambda path: contents[str(path)]), \
+                patch.object(MOD, 'daemon_identity', return_value=None):
+            return MOD.PreparationSampler().sample()
+
+    def test_safe_selected_proc_scalars(self):
+        value = self.source()
+        self.assertEqual(value['cpu_ticks'], [10, 0, 5, 80, 5, 0, 0, 0])
+        self.assertEqual(value['io_full_total_usec'], 10)
+        self.assertEqual(value['mem_dirty_kib'], 10)
+        self.assertEqual(value['daemon_cpu_status'], 'NOT_AVAILABLE')
+
+    def test_bad_proc_fields_are_rejected(self):
+        for path, text in [('/proc/stat', 'cpu -1 0 5 80 5 0 0 0\n'),
+                           ('/proc/meminfo', 'MemAvailable: 1 MB\nDirty: 0 kB\nWriteback: 0 kB\n'),
+                           ('/proc/meminfo', 'MemAvailable: 1 kB\nDirty: 0 kB\nDirty: 0 kB\nWriteback: 0 kB\n'),
+                           ('/proc/pressure/io', 'full avg10=nan avg60=0 avg300=0 total=1\n'),
+                           ('/proc/pressure/io', 'full avg10=0 avg60=0 avg300=0 total=-1\n')]:
+            with self.subTest(path=path, text=text), self.assertRaises(MOD.ClosedFailure):
+                self.source({path: text})
+
+
+class PreparationWiringTests(unittest.TestCase):
+    def fixture(self, directory, *, preparation_failure=False, formal_failure=False):
+        obj = MOD.InventoryCI.__new__(MOD.InventoryCI)
+        obj.summary = dict(checkout_sha='a' * 40, sources={'ci_harness_sha256': 'b' * 64})
+        obj.publication = Path(directory)
+        obj.preparation_attempted = False
+        obj.deadline = time.monotonic() + 3000
+        obj.approved_snapshot = b'fixture'
+        obj.abort_check = None
+        events, instances = [], []
+
+        def prepare(**kwargs):
+            events.append('prepare')
+            report = dict(early_health='WARN_UNSTABLE_PREPARATION', early_exceedances=[dict(io_full_avg10=1.47)],
+                          admission='FAIL' if preparation_failure else 'PASS')
+            kwargs['publish'](report)
+            if preparation_failure:
+                raise MOD.ClosedFailure('preparation_tail_threshold_failed')
+            return report
+
+        class Observer:
+            def __init__(self):
+                self.rows, self.previous, self.failure = [], None, None
+                self.thread = type('Thread', (), {'start': lambda unused: events.append('observer_start')})()
+                instances.append(self)
+
+            def wait(self, seconds, deadline):
+                events.append(('wait', seconds))
+                if formal_failure:
+                    raise MOD.ClosedFailure('formal_resource_failed')
+
+            def check(self):
+                pass
+
+            def close(self):
+                events.append('observer_close')
+
+            def coverage(self, *args):
+                return {'synthetic_coverage': True}
+
+        def snapshot(variant):
+            events.append(('snapshot', variant))
+            return b'fixture', {}, {'variant': variant}
+
+        obj.snapshot = snapshot
+        obj.setup = lambda: events.append('setup')
+        obj.correctness = lambda: events.append('correctness')
+        obj.teardown = lambda: events.append('teardown')
+        return obj, events, instances, prepare, Observer
+
+    def test_benchmark_prepares_once_then_creates_five_fresh_observers(self):
+        with tempfile.TemporaryDirectory(prefix='image-preparation-wiring.') as directory:
+            obj, events, instances, prepare, observer = self.fixture(directory)
+            with patch.object(MOD, 'collect_benchmark_preparation', side_effect=prepare), \
+                    patch.object(MOD, 'ResourceObserver', observer):
+                obj.benchmark()
+                with self.assertRaisesRegex(MOD.ClosedFailure, '^preparation_may_run_once$'):
+                    obj.benchmark()
+            self.assertEqual(events.count('prepare'), 1)
+            self.assertEqual(events[0], 'prepare')
+            self.assertEqual(len(instances), 5)
+            self.assertEqual(len({id(item.rows) for item in instances}), 5)
+            self.assertTrue(all(item.previous is None for item in instances))
+            self.assertEqual([item for item in events if isinstance(item, tuple) and item[0] == 'snapshot'],
+                             [('snapshot', 'old'), ('snapshot', 'new'), ('snapshot', 'new'), ('snapshot', 'old')])
+            self.assertEqual([item[1] for item in events if isinstance(item, tuple) and item[0] == 'wait'], [120, 300] * 5)
+            self.assertEqual(obj.summary['preparation']['early_exceedances'][0]['io_full_avg10'], 1.47)
+
+    def test_failed_preparation_never_starts_formal_observer_or_snapshot(self):
+        with tempfile.TemporaryDirectory(prefix='image-preparation-wiring.') as directory:
+            obj, events, instances, prepare, observer = self.fixture(directory, preparation_failure=True)
+            with patch.object(MOD, 'collect_benchmark_preparation', side_effect=prepare), \
+                    patch.object(MOD, 'ResourceObserver', observer), self.assertRaises(MOD.ClosedFailure):
+                obj.benchmark()
+            self.assertEqual(events, ['prepare'])
+            self.assertEqual(instances, [])
+            self.assertEqual(obj.summary['benchmark'], 'NOT_RUN_PREPARATION_REJECTED')
+            self.assertEqual(json.loads((Path(directory) / 'preparation.json').read_text())['admission'], 'FAIL')
+
+    def test_slow_preparation_publication_blocks_formal_entry(self):
+        with tempfile.TemporaryDirectory(prefix='image-preparation-wiring.') as directory:
+            obj, events, instances, prepare, observer = self.fixture(directory)
+            obj.deadline = 2705
+            state = dict(now=60.0)
+            real_write = MOD.write_json
+
+            def slow_publish(path, value):
+                real_write(path, value)
+                state['now'] = 65.01
+
+            with patch.object(MOD, 'collect_benchmark_preparation', side_effect=prepare), \
+                    patch.object(MOD, 'ResourceObserver', observer), patch.object(MOD, 'write_json', slow_publish), \
+                    patch.object(MOD.time, 'monotonic', side_effect=lambda: state['now']), \
+                    self.assertRaisesRegex(MOD.ClosedFailure, '^preparation_remaining_budget_after_publication$'):
+                obj.benchmark()
+            self.assertEqual(events, ['prepare'])
+            self.assertEqual(instances, [])
+            self.assertEqual(obj.summary['benchmark'], 'NOT_RUN_PREPARATION_REJECTED')
+            self.assertEqual(obj.summary['preparation_formal_entry']['status'], 'FAIL')
+
+    def test_preparation_publication_failure_never_starts_formal_observer(self):
+        with tempfile.TemporaryDirectory(prefix='image-preparation-wiring.') as directory:
+            obj, events, instances, prepare, observer = self.fixture(directory)
+            with patch.object(MOD, 'collect_benchmark_preparation', side_effect=prepare), \
+                    patch.object(MOD, 'ResourceObserver', observer), \
+                    patch.object(MOD, 'write_json', side_effect=OSError('private disk error')), \
+                    self.assertRaises(Exception):
+                obj.benchmark()
+            self.assertEqual(events, ['prepare'])
+            self.assertEqual(instances, [])
+            self.assertEqual(obj.summary['benchmark'], 'NOT_RUN_PREPARATION_REJECTED')
+
+    def test_correctness_main_has_no_preparation(self):
+        with tempfile.TemporaryDirectory(prefix='image-preparation-wiring.') as directory:
+            obj, events, instances, prepare, observer = self.fixture(directory)
+            with patch.object(MOD, 'InventoryCI', return_value=obj), \
+                    patch.object(MOD, 'collect_benchmark_preparation', side_effect=AssertionError('unexpected preparation')), \
+                    patch.object(MOD, 'ResourceObserver', side_effect=AssertionError('unexpected observer')), \
+                    patch.object(MOD.signal, 'signal'), patch.object(sys, 'argv', ['synthetic-test']), patch('builtins.print'):
+                MOD.main()
+            self.assertEqual(events, ['setup', 'correctness', 'teardown'])
+            self.assertNotIn('preparation', obj.summary)
+
+    def test_early_warning_survives_formal_failure_and_teardown_failure(self):
+        with tempfile.TemporaryDirectory(prefix='image-preparation-wiring.') as directory:
+            obj, events, instances, prepare, observer = self.fixture(directory, formal_failure=True)
+            obj.teardown = lambda: (_ for _ in ()).throw(MOD.ClosedFailure('synthetic_teardown_failure'))
+            with patch.object(MOD, 'InventoryCI', return_value=obj), \
+                    patch.object(MOD, 'collect_benchmark_preparation', side_effect=prepare), \
+                    patch.object(MOD, 'ResourceObserver', observer), patch.object(MOD.signal, 'signal'), \
+                    patch.object(sys, 'argv', ['synthetic-test', '--mode', 'benchmark']), \
+                    self.assertRaisesRegex(MOD.ClosedFailure, '^formal_resource_failed$'):
+                MOD.main()
+            summary = json.loads((Path(directory) / 'summary.json').read_text())
+            self.assertEqual(summary['status'], 'FAIL')
+            self.assertEqual(summary['teardown'], 'FAIL_RETAIN_AMBIGUOUS_RESOURCES')
+            self.assertEqual(summary['preparation']['early_health'], 'WARN_UNSTABLE_PREPARATION')
+            self.assertEqual(summary['preparation']['early_exceedances'][0]['io_full_avg10'], 1.47)
+            self.assertEqual(len(instances), 1)
+
+
 class CorrectnessContractTests(unittest.TestCase):
     def test_old_one_listing_new_two_listings(self):
         for images, inspections in [(1, 1), (15, 1), (16, 1), (17, 2), (146, 10), (256, 16)]:
