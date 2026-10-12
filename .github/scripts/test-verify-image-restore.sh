@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
-mkdir "$test_root/bin"
+script_dir="$test_root/scripts"
+mkdir -p "$test_root/bin" "$script_dir" "$test_root/release/image-cleanup-reviews"
+cd -- "$test_root"
+for file in verify-image-restore.sh verify-images-only-request.sh images-only-approval.sh \
+  retention-continuity.sh select-images-only-review.sh retention-predelete-recovery.sh; do
+  cp -- "$source_dir/$file" "$script_dir/$file"
+done
 cat > "$test_root/bin/git" <<'GIT'
 #!/usr/bin/env bash
 case "$1" in
   rev-parse) printf '%s\n' "$GITHUB_SHA" ;;
   diff|merge-base) exit 0 ;;
+  status) printf '%s' "${TEST_STATUS:-}" ;;
   submodule) printf ' clean\n' ;;
   ls-remote) printf '%s\trefs/heads/main\n' "${TEST_REMOTE:-$GITHUB_SHA}" ;;
   *) exit 97 ;;
@@ -40,6 +47,7 @@ export GITHUB_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa EXPECTED_SHA=aaaaaaaa
 export GITHUB_WORKFLOW_SHA=$GITHUB_SHA GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1
 export GITHUB_WORKFLOW_REF=Hao-Monster/Xboardme/.github/workflows/production-image-cleanup.yml@refs/heads/main
 export IMAGE_CLEANUP_ACTION=cleanup
+export IMAGE_CLEANUP_REVIEW_ID=default GITHUB_EVENT_NAME=workflow_dispatch
 export TEST_REVISION=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export TEST_IMAGE_ID="sha256:$(printf 'f%.0s' {1..64})"
 export TEST_DIGEST="ghcr.io/hao-monster/xboardme@sha256:$(printf 'd%.0s' {1..64})"
@@ -68,6 +76,15 @@ new_case() {
   : > "$TEST_DOCKER_CALLS"
 }
 invoke() { bash "$script_dir/verify-image-restore.sh" "$test_root/review.json"; }
+assert_redacted() {
+  local status
+  if grep -Fq 'SENSITIVE_FIXTURE_DO_NOT_LOG' "$1"; then
+    echo 'IMAGE_RESTORE_TEST_FAIL=sensitive_output_leaked' >&2; exit 1
+  else
+    status=$?
+    [[ "$status" == 1 ]] || { echo 'IMAGE_RESTORE_TEST_FAIL=unreadable_evidence' >&2; exit 1; }
+  fi
+}
 passed=0
 failure() {
   local expected=$1
@@ -76,7 +93,7 @@ failure() {
   if "$@" > "$RUNNER_TEMP/result" 2>&1; then echo "unexpected success:$expected" >&2; exit 1; fi
   grep -Eq "(IMAGE_RESTORE_FAIL|IMAGE_REQUEST_FAIL)=$expected" "$RUNNER_TEMP/result"
   [[ ! -e "$RUNNER_TEMP/images-only-restore.json" ]]
-  ! grep -Fq 'SENSITIVE_FIXTURE_DO_NOT_LOG' "$RUNNER_TEMP/result"
+  assert_redacted "$RUNNER_TEMP/result"
   ((passed+=1))
 }
 make_review
@@ -87,7 +104,7 @@ jq -e --arg id "$TEST_IMAGE_ID" --arg digest "$TEST_DIGEST" --arg revision "$TES
     .revision==$revision and .platform=="linux/amd64" and .id_semantics=="image_id" and
     .workflow_sha==("a"*40) and .run_id=="123" and .run_attempt=="1"' "$RUNNER_TEMP/images-only-restore.json" >/dev/null
 [[ $(wc -l < "$TEST_DOCKER_CALLS") == 2 ]]
-! grep -Fq 'SENSITIVE_FIXTURE_DO_NOT_LOG' "$RUNNER_TEMP/result"
+assert_redacted "$RUNNER_TEMP/result"
 ((passed+=1))
 bash "$script_dir/verify-image-restore.sh" --check-evidence "$test_root/review.json" > "$RUNNER_TEMP/check-result"
 [[ $(wc -l < "$TEST_DOCKER_CALLS") == 2 ]]
@@ -129,5 +146,49 @@ grep -Fxq 'IMAGE_RESTORE_FAIL=evidence_already_exists' "$RUNNER_TEMP/result"
 ((passed+=1))
 jq '.approval_expires_at_epoch=(.audit_completed_at_epoch+1)' "$test_root/review.json" > "$test_root/expired.json"
 failure approved_fresh_review_required bash "$script_dir/verify-image-restore.sh" "$test_root/expired.json"
+[[ ! -s "$TEST_DOCKER_CALLS" ]]
+# No-argument compatibility and numbered selection must both stay on private
+# fixtures, with restore evidence bound to the selected full review hash.
+cp -- "$test_root/review.json" "$test_root/release/image-cleanup-review.json"
+new_case default_selection
+bash "$script_dir/verify-image-restore.sh" > "$RUNNER_TEMP/result"
+jq -e --arg hash "$(sha256sum < "$test_root/review.json" | awk '{print $1}')" \
+  '.review_sha256==$hash' "$RUNNER_TEMP/images-only-restore.json" >/dev/null
+[[ $(wc -l < "$TEST_DOCKER_CALLS") == 2 ]]
+((passed+=1))
+first="$script_dir/../release/image-cleanup-reviews/001.json"
+second="$script_dir/../release/image-cleanup-reviews/002.json"
+jq '.images[0].id=("sha256:"+("9"*64)) |
+  .sequence={schema_version:1,index:"001",predecessor_review_sha256:null,audit_artifact_sha256:("d"*64)} |
+  .recovery={schema_version:1,mode:"predelete_hold_v1",gate_sha256:("e"*64),plan_sha256:("f"*64),
+    review_sha256:("9"*64),workflow_sha:("8"*40),session_id:"11111111-1111-1111-1111-111111111111",
+    image_id:.images[0].id}' "$test_root/review.json" > "$first"
+jq --arg previous "$(sha256sum < "$first" | awk '{print $1}')" '
+  .sequence={schema_version:1,index:"002",predecessor_review_sha256:$previous,audit_artifact_sha256:("d"*64)}' \
+  "$test_root/review.json" > "$second"
+# The just-created default proof cannot authorize an otherwise identical image
+# under a different sequenced approval. No registry access is made by a check.
+before_calls=$(wc -l < "$TEST_DOCKER_CALLS")
+if IMAGE_CLEANUP_REVIEW_ID=002 bash "$script_dir/verify-image-restore.sh" --check-evidence > "$RUNNER_TEMP/check-result" 2>&1; then exit 1; fi
+grep -Fxq 'IMAGE_RESTORE_FAIL=invalid_restore_evidence' "$RUNNER_TEMP/check-result"
+[[ $(wc -l < "$TEST_DOCKER_CALLS") == "$before_calls" ]]
+((passed+=1))
+new_case selected_review
+IMAGE_CLEANUP_REVIEW_ID=002 bash "$script_dir/verify-image-restore.sh" > "$RUNNER_TEMP/result"
+jq -e --arg hash "$(sha256sum < "$second" | awk '{print $1}')" --arg id "$TEST_IMAGE_ID" \
+  '.review_sha256==$hash and .expected_image_id==$id' "$RUNNER_TEMP/images-only-restore.json" >/dev/null
+[[ $(wc -l < "$TEST_DOCKER_CALLS") == 2 ]]
+((passed+=1))
+IMAGE_CLEANUP_REVIEW_ID=002 bash "$script_dir/verify-image-restore.sh" --check-evidence > "$RUNNER_TEMP/check-result"
+[[ $(wc -l < "$TEST_DOCKER_CALLS") == 2 ]]
+((passed+=1))
+failure manual_first_attempt_required env IMAGE_CLEANUP_REVIEW_ID=002 GITHUB_RUN_ATTEMPT=2 \
+  bash "$script_dir/verify-image-restore.sh"
+[[ ! -s "$TEST_DOCKER_CALLS" ]]
+failure dirty_checkout env IMAGE_CLEANUP_REVIEW_ID=002 TEST_STATUS='?? unreviewed.json' \
+  bash "$script_dir/verify-image-restore.sh"
+[[ ! -s "$TEST_DOCKER_CALLS" ]]
+failure passive_cleanup_required env IMAGE_CLEANUP_ACTION=retirement-audit \
+  bash "$script_dir/verify-image-restore.sh"
 [[ ! -s "$TEST_DOCKER_CALLS" ]]
 echo "IMAGE_RESTORE_TEST=PASS cases=$passed production_connections=0 real_registry_pulls=0"

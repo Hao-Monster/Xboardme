@@ -4,9 +4,11 @@ set -Eeuo pipefail
 # Docker auth configuration to production. No image is run here or on the host.
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$script_dir/images-only-approval.sh"
+source "$script_dir/select-images-only-review.sh"
 operation=restore
 if [[ ${1:-} == --check-evidence ]]; then operation=check; shift; fi
-review=${1:-"$script_dir/../release/image-cleanup-review.json"}
+review=${1:-}
+if [[ -z "$review" ]]; then review=$(images_only_selected_review) || exit 1; fi
 fail() { printf 'IMAGE_RESTORE_FAIL=%s\n' "$1" >&2; exit 1; }
 bash "$script_dir/verify-images-only-request.sh" "$review"
 [[ "${IMAGE_CLEANUP_ACTION:-}" == cleanup ]] || fail passive_cleanup_required

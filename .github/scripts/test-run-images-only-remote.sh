@@ -6,8 +6,9 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
 mkdir -p "$test_root/scripts" "$test_root/release" "$test_root/bin"
+cd -- "$test_root"
 for file in run-images-only-remote.sh verify-images-only-request.sh images-only-approval.sh \
-  verify-image-restore.sh retention-continuity.sh; do
+  verify-image-restore.sh retention-continuity.sh select-images-only-review.sh retention-predelete-recovery.sh; do
   cp -- "$script_dir/$file" "$test_root/scripts/$file"
 done
 cat > "$test_root/scripts/production-runtime-discovery.sh" <<'DISCOVERY'
@@ -15,7 +16,14 @@ xboard_find_compose_anchor() { XBOARD_ANCHOR_WORKDIR=$TEST_REMOTE_WORKDIR; }
 DISCOVERY
 for file in release-state.sh retention-safety.sh image-startup-references.sh; do : > "$test_root/scripts/$file"; done
 printf 'echo TEST_AUDIT=PASS\n' > "$test_root/scripts/audit-xboard-images-only.sh"
-printf 'echo TEST_CLEANUP=PASS\n' > "$test_root/scripts/cleanup-xboard-images-only.sh"
+printf 'echo TEST_RETIREMENT_AUDIT=PASS\n' > "$test_root/scripts/audit-retirement-readiness.sh"
+cat > "$test_root/scripts/cleanup-xboard-images-only.sh" <<'CLEANUP'
+echo TEST_CLEANUP=PASS
+actual_hash=$(printf '%s' "$RETENTION_REVIEW_MANIFEST_B64" | base64 -d | sha256sum | awk '{print $1}')
+[[ "$actual_hash" == "$EXPECTED_RETENTION_REVIEW_SHA256" ]] || exit 97
+printf 'TEST_CLEANUP_REVIEW_SHA256=%s\n' "$actual_hash"
+printf '%s' "$RETENTION_REVIEW_MANIFEST_B64" | base64 -d | jq -r '"TEST_CLEANUP_IMAGE="+.images[0].id'
+CLEANUP
 cat > "$test_root/scripts/ssh-with-password.sh" <<'SSH'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -33,6 +41,7 @@ cat > "$test_root/bin/git" <<'GIT'
 case "$1" in
   rev-parse) printf '%s\n' "$GITHUB_SHA" ;;
   diff|merge-base) exit 0 ;;
+  status) printf '%s' "${TEST_STATUS:-}" ;;
   submodule) printf ' clean\n' ;;
   ls-remote) printf '%s\trefs/heads/main\n' "${TEST_REMOTE_HEAD:-$GITHUB_SHA}" ;;
   *) exit 97 ;;
@@ -48,9 +57,11 @@ export GITHUB_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa EXPECTED_SHA=aaaaaaaa
 export GITHUB_WORKFLOW_SHA=$GITHUB_SHA GITHUB_RUN_ID=123 GITHUB_RUN_ATTEMPT=1
 export GITHUB_WORKFLOW_REF=Hao-Monster/Xboardme/.github/workflows/production-image-cleanup.yml@refs/heads/main
 export IMAGE_CLEANUP_ACTION=cleanup
+export IMAGE_CLEANUP_REVIEW_ID=default GITHUB_EVENT_NAME=workflow_dispatch
 export DEPLOY_HOST=example.invalid DEPLOY_PORT=22 DEPLOY_USER=fixture
 export POST_EVIDENCE_SHA256="$(printf 'f%.0s' {1..64})"
-review="$test_root/release/image-cleanup-review.json"
+default_review="$test_root/scripts/../release/image-cleanup-review.json"
+review=$default_review
 jq -n --argjson now "$(date +%s)" --arg sha "$GITHUB_SHA" '
   ("c"*64) as $h | {
     schema_version:3,status:"approved",operation:"image_cleanup",active_release_id:"123-1",active_release_sha:$sha,
@@ -68,6 +79,7 @@ jq -n --argjson now "$(date +%s)" --arg sha "$GITHUB_SHA" '
   }' > "$test_root/passive.json"
 new_case() {
   local name=$1
+  review=$default_review
   export TEST_REMOTE_WORKDIR="$test_root/$name/host" RUNNER_TEMP="$test_root/$name/runner"
   export TEST_SSH_LOG="$test_root/$name/ssh.log" TEST_SSH_PAYLOAD="$test_root/$name/payload"
   mkdir -p "$TEST_REMOTE_WORKDIR/.codex-v2-release" "$RUNNER_TEMP"
@@ -105,6 +117,15 @@ restore_fixture() {
 }
 invoke() { bash "$test_root/scripts/run-images-only-remote.sh" "$1" > "$result" 2>&1; }
 unchanged_hash() { sha256sum < "$gate" | awk '{print $1}'; }
+assert_absent() {
+  local pattern=$1 file=$2 status
+  if grep -Eq "$pattern" "$file"; then
+    echo "IMAGE_TRANSPORT_TEST_FAIL=forbidden_payload:$pattern" >&2; exit 1
+  else
+    status=$?
+    [[ "$status" == 1 ]] || { echo 'IMAGE_TRANSPORT_TEST_FAIL=unreadable_evidence' >&2; exit 1; }
+  fi
+}
 cases=0
 for operation in cleanup post-success; do
   new_case "missing_restore_$operation"
@@ -119,7 +140,7 @@ if ! invoke post-failure; then cat "$result" >&2; echo 'IMAGE_TRANSPORT_TEST_FAI
 jq -e '.status=="HOLD" and .post_verification=="failed" and .failure_reason=="independent_post_verification_failed"' "$gate" >/dev/null
 [[ $(wc -l < "$TEST_SSH_LOG") == 1 ]]
 grep -Fxq 'RETENTION_CONTINUITY_POST_VERIFICATION=failure' "$result"
-! grep -Eq 'SSHPASS|GHCR_TOKEN|DEPLOY_HOST' "$TEST_SSH_PAYLOAD"
+assert_absent 'SSHPASS|GHCR_TOKEN|DEPLOY_HOST' "$TEST_SSH_PAYLOAD"
 ((cases+=1))
 
 new_case completed_pending_missing_restore
@@ -194,5 +215,86 @@ mv -- "$review.next" "$review"
 invoke cleanup
 grep -Fxq 'TEST_CLEANUP=PASS' "$result"
 [[ $(wc -l < "$TEST_SSH_LOG") == 1 && ! -e "$RUNNER_TEMP/images-only-restore.json" ]]
+((cases+=1))
+# Read-only retirement audit never needs restore evidence and must never append
+# the cleanup executor or mutate the existing gate, even when it is held.
+new_case retirement_audit
+write_gate HOLD
+original=$(unchanged_hash)
+IMAGE_CLEANUP_ACTION=retirement-audit invoke retirement-audit
+grep -Fxq 'TEST_AUDIT=PASS' "$result"
+grep -Fxq 'TEST_RETIREMENT_AUDIT=PASS' "$result"
+assert_absent 'TEST_CLEANUP=' "$result"
+assert_absent 'TEST_CLEANUP=' "$TEST_SSH_PAYLOAD"
+assert_absent 'RETENTION_REVIEW_MANIFEST_B64=' "$TEST_SSH_PAYLOAD"
+[[ $(wc -l < "$TEST_SSH_LOG") == 1 && $(unchanged_hash) == "$original" &&
+   ! -e "$RUNNER_TEMP/images-only-restore.json" ]]
+((cases+=1))
+for operation in cleanup post-success post-failure; do
+  new_case "retirement_rejects_$operation"
+  original=$(unchanged_hash)
+  if IMAGE_CLEANUP_ACTION=retirement-audit invoke "$operation"; then exit 1; fi
+  [[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+  ((cases+=1))
+done
+for action in audit cleanup; do
+  new_case "retirement_action_mismatch_$action"
+  restore_fixture
+  original=$(unchanged_hash)
+  if IMAGE_CLEANUP_ACTION=$action invoke retirement-audit; then exit 1; fi
+  [[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+  ((cases+=1))
+done
+new_case retirement_retry
+original=$(unchanged_hash)
+if IMAGE_CLEANUP_ACTION=retirement-audit GITHUB_RUN_ATTEMPT=2 invoke retirement-audit; then exit 1; fi
+grep -Fxq 'IMAGE_REQUEST_FAIL=manual_first_attempt_required' "$result"
+[[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+((cases+=1))
+new_case retirement_scheduled
+original=$(unchanged_hash)
+if IMAGE_CLEANUP_ACTION=retirement-audit GITHUB_EVENT_NAME=schedule invoke retirement-audit; then exit 1; fi
+grep -Fxq 'IMAGE_REQUEST_FAIL=manual_first_attempt_required' "$result"
+[[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+((cases+=1))
+new_case retirement_dirty
+original=$(unchanged_hash)
+if IMAGE_CLEANUP_ACTION=retirement-audit TEST_STATUS='?? unreviewed.json' invoke retirement-audit; then exit 1; fi
+grep -Fxq 'IMAGE_REQUEST_FAIL=dirty_checkout' "$result"
+[[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+((cases+=1))
+
+# The runner and remote payload must bind the selected bytes, not the default
+# manifest. The remote executor remains synthetic; transport/restore are real.
+new_case selected_review
+mkdir -p "$test_root/release/image-cleanup-reviews"
+first="$test_root/scripts/../release/image-cleanup-reviews/001.json"
+selected="$test_root/scripts/../release/image-cleanup-reviews/002.json"
+jq '.sequence={schema_version:1,index:"001",predecessor_review_sha256:null,audit_artifact_sha256:("d"*64)} |
+  .recovery={schema_version:1,mode:"predelete_hold_v1",gate_sha256:("e"*64),plan_sha256:("f"*64),
+    review_sha256:("9"*64),workflow_sha:("8"*40),session_id:"11111111-1111-1111-1111-111111111111",
+    image_id:.images[0].id}' "$review" > "$first"
+jq --arg previous "$(sha256sum < "$first" | awk '{print $1}')" '
+  .sequence.index="002" | .sequence.predecessor_review_sha256=$previous |
+  .images[0].id=("sha256:"+("e"*64)) | del(.recovery)' "$first" > "$selected"
+# A valid default-image proof is deliberately wrong for selected review 002.
+restore_fixture
+original=$(unchanged_hash)
+if IMAGE_CLEANUP_REVIEW_ID=002 invoke cleanup; then exit 1; fi
+grep -Fxq 'IMAGE_RESTORE_FAIL=invalid_restore_evidence' "$result"
+[[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
+((cases+=1))
+review=$selected
+restore_fixture
+IMAGE_CLEANUP_REVIEW_ID=002 invoke cleanup
+grep -Fxq "TEST_CLEANUP_REVIEW_SHA256=$(sha256sum < "$selected" | awk '{print $1}')" "$result"
+grep -Fxq "TEST_CLEANUP_IMAGE=sha256:$(printf 'e%.0s' {1..64})" "$result"
+assert_absent 'TEST_RETIREMENT_AUDIT=PASS' "$TEST_SSH_PAYLOAD"
+[[ $(wc -l < "$TEST_SSH_LOG") == 1 && $(unchanged_hash) == "$original" ]]
+((cases+=1))
+new_case invalid_review_identifier
+original=$(unchanged_hash)
+if IMAGE_CLEANUP_REVIEW_ID='../001' invoke cleanup; then exit 1; fi
+[[ ! -s "$TEST_SSH_LOG" && $(unchanged_hash) == "$original" ]]
 ((cases+=1))
 echo "IMAGE_TRANSPORT_TEST=PASS cases=$cases production_connections=0 real_registry_pulls=0"

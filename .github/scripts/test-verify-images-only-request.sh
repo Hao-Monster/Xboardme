@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
-mkdir "$test_root/bin"
+script_dir="$test_root/scripts"
+mkdir -p "$test_root/bin" "$script_dir" "$test_root/release/image-cleanup-reviews"
+cd -- "$test_root"
+for file in verify-images-only-request.sh images-only-approval.sh retention-continuity.sh \
+  select-images-only-review.sh retention-predelete-recovery.sh; do
+  cp -- "$source_dir/$file" "$script_dir/$file"
+done
+# Even audit/default selection must resolve a private fixture, never the real
+# production approval committed in the source checkout.
+printf '{}\n' > "$test_root/release/image-cleanup-review.json"
 cat > "$test_root/bin/git" <<'GIT'
 #!/usr/bin/env bash
 case "$1" in
   rev-parse) printf '%s\n' "${TEST_HEAD:-$GITHUB_SHA}" ;;
   diff) [[ ${TEST_DIRTY:-false} == false ]] ;;
+  status) [[ ${TEST_STATUS_FAIL:-false} == false ]] || exit 97; printf '%s' "${TEST_STATUS:-}" ;;
   submodule) printf '%s\n' "${TEST_SUBMODULE:- clean}" ;;
   ls-remote) printf '%s\trefs/heads/main\n' "${TEST_REMOTE:-$GITHUB_SHA}" ;;
   merge-base) [[ ${TEST_ANCESTOR:-true} == true ]] ;;
@@ -22,6 +32,7 @@ export GITHUB_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa EXPECTED_SHA=aaaaaaaa
 export GITHUB_WORKFLOW_SHA=$GITHUB_SHA
 export GITHUB_WORKFLOW_REF=Hao-Monster/Xboardme/.github/workflows/production-image-cleanup.yml@refs/heads/main
 export IMAGE_CLEANUP_ACTION=audit
+export IMAGE_CLEANUP_REVIEW_ID=default GITHUB_EVENT_NAME=workflow_dispatch GITHUB_RUN_ATTEMPT=1
 check_failure() {
   local expected=$1
   shift
@@ -80,4 +91,80 @@ jq '.monitoring.post_delete_observe_seconds=299' "$test_root/passive.json" > "$t
 check_failure monitoring_review_required env IMAGE_CLEANUP_ACTION=cleanup bash "$script_dir/verify-images-only-request.sh" "$test_root/invalid.json"
 jq '.schema_version=2' "$test_root/passive.json" > "$test_root/invalid.json"
 check_failure approved_fresh_review_required env IMAGE_CLEANUP_ACTION=cleanup bash "$script_dir/verify-images-only-request.sh" "$test_root/invalid.json"
-echo 'IMAGE_REQUEST_TEST=PASS cases=19 production_connections=0'
+cases=19
+checked_failure() { check_failure "$@"; ((cases+=1)); }
+IMAGE_CLEANUP_ACTION=retirement-audit bash "$script_dir/verify-images-only-request.sh" > "$test_root/result"
+grep -Fxq "IMAGE_REQUEST=PASS action=retirement-audit sha=$GITHUB_SHA" "$test_root/result"
+((cases+=1))
+for event in push schedule workflow_call ''; do
+  checked_failure manual_first_attempt_required env IMAGE_CLEANUP_ACTION=retirement-audit \
+    GITHUB_EVENT_NAME="$event" bash "$script_dir/verify-images-only-request.sh"
+done
+for attempt in 0 2 01 ''; do
+  checked_failure manual_first_attempt_required env IMAGE_CLEANUP_ACTION=retirement-audit \
+    GITHUB_RUN_ATTEMPT="$attempt" bash "$script_dir/verify-images-only-request.sh"
+done
+checked_failure dirty_checkout env IMAGE_CLEANUP_ACTION=retirement-audit TEST_STATUS='?? unexpected.json' \
+  bash "$script_dir/verify-images-only-request.sh"
+checked_failure checkout_inventory env IMAGE_CLEANUP_ACTION=retirement-audit TEST_STATUS_FAIL=true \
+  bash "$script_dir/verify-images-only-request.sh"
+
+first="$script_dir/../release/image-cleanup-reviews/001.json"
+second="$script_dir/../release/image-cleanup-reviews/002.json"
+jq '.sequence={schema_version:1,index:"001",predecessor_review_sha256:null,audit_artifact_sha256:("d"*64)} |
+  .recovery={schema_version:1,mode:"predelete_hold_v1",gate_sha256:("e"*64),plan_sha256:("f"*64),
+    review_sha256:("9"*64),workflow_sha:("8"*40),session_id:"11111111-1111-1111-1111-111111111111",
+    image_id:.images[0].id}' "$test_root/passive.json" > "$first"
+IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=001 bash "$script_dir/verify-images-only-request.sh" > "$test_root/result"
+grep -Fxq "IMAGE_REQUEST_REVIEW_SHA256=$(sha256sum < "$first" | awk '{print $1}')" "$test_root/result"
+((cases+=1))
+jq --arg previous "$(sha256sum < "$first" | awk '{print $1}')" '
+  .sequence.index="002" | .sequence.predecessor_review_sha256=$previous |
+  .images[0].id=("sha256:"+("e"*64)) | del(.recovery)' "$first" > "$second"
+IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 bash "$script_dir/verify-images-only-request.sh" > "$test_root/result"
+grep -Fxq "IMAGE_REQUEST_REVIEW_SHA256=$(sha256sum < "$second" | awk '{print $1}')" "$test_root/result"
+((cases+=1))
+for identifier in 000 1 1000 '../001' '/tmp/002' '001.json' '001;touch injected' $'001\n002'; do
+  checked_failure invalid_review_selection env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID="$identifier" \
+    bash "$script_dir/verify-images-only-request.sh"
+done
+checked_failure manual_first_attempt_required env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 \
+  GITHUB_EVENT_NAME=schedule bash "$script_dir/verify-images-only-request.sh"
+checked_failure manual_first_attempt_required env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 \
+  GITHUB_RUN_ATTEMPT=2 bash "$script_dir/verify-images-only-request.sh"
+checked_failure dirty_checkout env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 TEST_STATUS='?? unexpected.json' \
+  bash "$script_dir/verify-images-only-request.sh"
+cp -- "$second" "$test_root/custom.json"
+checked_failure invalid_review_selection env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 \
+  bash "$script_dir/verify-images-only-request.sh" "$test_root/custom.json"
+cp -- "$second" "$test_root/second.saved"
+for filter in '.sequence.index="003"' '.sequence.predecessor_review_sha256=("7"*64)' \
+  '.sequence.audit_artifact_sha256=("0"*64)'; do
+  jq "$filter" "$test_root/second.saved" > "$second"
+  checked_failure invalid_review_sequence env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 \
+    bash "$script_dir/verify-images-only-request.sh"
+done
+cp -- "$test_root/second.saved" "$second"
+cp -- "$first" "$test_root/first.saved"
+printf '\n' >> "$first"
+checked_failure invalid_review_sequence env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 \
+  bash "$script_dir/verify-images-only-request.sh"
+rm -- "$first"
+checked_failure predecessor_review_missing env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 \
+  bash "$script_dir/verify-images-only-request.sh"
+ln -s "$test_root/first.saved" "$first"
+checked_failure predecessor_review_missing env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 \
+  bash "$script_dir/verify-images-only-request.sh"
+rm -- "$first"
+jq 'del(.recovery)' "$test_root/first.saved" > "$first"
+checked_failure recovery_review_required env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=001 \
+  bash "$script_dir/verify-images-only-request.sh"
+jq '.recovery.gate_sha256=("0"*64)' "$test_root/first.saved" > "$first"
+checked_failure invalid_recovery_review env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=001 \
+  bash "$script_dir/verify-images-only-request.sh"
+cp -- "$test_root/first.saved" "$first"
+jq --slurpfile first "$first" '.recovery=$first[0].recovery | .recovery.image_id=.images[0].id' \
+  "$test_root/second.saved" > "$second"
+checked_failure invalid_review_sequence env IMAGE_CLEANUP_ACTION=cleanup IMAGE_CLEANUP_REVIEW_ID=002 \
+  bash "$script_dir/verify-images-only-request.sh"
+echo "IMAGE_REQUEST_TEST=PASS cases=$cases production_connections=0"

@@ -9,13 +9,19 @@ on:
         required: true
         type: string
       action:
-        description: Audit only by default; cleanup requires the fixed approved one-image manifest
+        description: Read-only audit by default; cleanup requires an approved one-image manifest
         required: true
         default: audit
         type: choice
         options:
           - audit
+          - retirement-audit
           - cleanup
+      review_id:
+        description: Committed one-image review identifier (default or exactly three digits)
+        required: true
+        default: default
+        type: string
 
 permissions:
   contents: read
@@ -37,6 +43,7 @@ jobs:
     env:
       EXPECTED_SHA: ${{ inputs.expected_sha }}
       IMAGE_CLEANUP_ACTION: ${{ inputs.action }}
+      IMAGE_CLEANUP_REVIEW_ID: ${{ inputs.review_id }}
     steps:
       - name: Checkout exact production workflow with submodules
         uses: actions/checkout@v7
@@ -50,9 +57,11 @@ jobs:
         run: |
           bash .github/scripts/verify-images-only-request.sh
           if [[ "$IMAGE_CLEANUP_ACTION" == cleanup ]]; then
-            echo "active_sha=$(jq -er .active_release_sha .github/release/image-cleanup-review.json)" >> "$GITHUB_OUTPUT"
-            echo "active_id=$(jq -er .active_release_id .github/release/image-cleanup-review.json)" >> "$GITHUB_OUTPUT"
-            echo "monitoring_mode=$(jq -er 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' .github/release/image-cleanup-review.json)" >> "$GITHUB_OUTPUT"
+            source .github/scripts/select-images-only-review.sh
+            review=$(images_only_selected_review)
+            echo "active_sha=$(jq -er .active_release_sha "$review")" >> "$GITHUB_OUTPUT"
+            echo "active_id=$(jq -er .active_release_id "$review")" >> "$GITHUB_OUTPUT"
+            echo "monitoring_mode=$(jq -er 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' "$review")" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Verify immutable image recovery on the runner before host access
@@ -132,7 +141,9 @@ jobs:
       - name: Bind independent post-verification evidence
         if: ${{ success() && inputs.action == 'cleanup' }}
         run: |
-          mode=$(jq -er 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' .github/release/image-cleanup-review.json)
+          source .github/scripts/select-images-only-review.sh
+          review=$(images_only_selected_review)
+          mode=$(jq -er 'if .schema_version==3 then .monitoring.mode else "legacy_live_v1" end' "$review")
           if [[ "$mode" == passive_runtime_v1 ]]; then
             bash .github/scripts/verify-image-restore.sh --check-evidence
             printf 'PASSIVE_RUNTIME_POST_AUDIT=PASS workflow=%s run=%s attempt=%s connection_continuity=unverified\n' \

@@ -283,6 +283,152 @@ expect_failure _rc_http public
 unset RC_HTTP_TEST_EXIT
 ((cases+=5))
 
+# Exercise the real gate writer and recovery validator together. Host snapshots
+# and probes remain synthetic, but the locks, original failed gate, archive,
+# evidence validation, fresh gate generation and baseline state machine do not.
+source "$script_dir/retention-safety.sh"
+source "$script_dir/retention-predelete-recovery.sh"
+fixture recovery-write-boundary
+_rc_paths "$workdir"
+mkdir "$RC_ROOT/$EXPECTED_ACTIVE_RELEASE_ID"
+chmod 700 "$RC_ROOT/$EXPECTED_ACTIVE_RELEASE_ID"
+active_state_file="$RC_ROOT/$EXPECTED_ACTIVE_RELEASE_ID/state.json"
+retention_snapshot_file="$RC_ROOT/inventory.json"
+retention_startup_file="$RC_ROOT/startup.json"
+jq -cnS --arg active "$EXPECTED_ACTIVE_RELEASE_SHA" '{schema_version:2,release_id:"123-1",release_sha:$active,
+  project_name:"xboard-v2-123-1",traffic_state:"active_v2",rollback_supported:"true",
+  legacy_release_sha:("1"*40),legacy_anchor_id:("2"*64),legacy_web_id:("3"*64),legacy_ws_id:("4"*64),
+  legacy_edge_id:("5"*64),legacy_horizon_id:("6"*64),legacy_scheduler_id:("7"*64),
+  maintenance_container:"xboard-v2-maintenance-123-1"}' > "$active_state_file"
+jq -cnS --slurpfile review "$review" --arg target "$test_image" '{
+  containers:[$review[0].monitoring.protected_containers[]|. + {image_id:("sha256:"+("f"*64))}],
+  images:[{id:$target,size_bytes:1024,created_at:"2026-09-01T00:00:00Z",revision:("e"*40),
+    source:"https://github.com/Hao-Monster/Xboardme",tags:["ghcr.io/hao-monster/xboardme:fixture-old"],
+    digests:[("ghcr.io/hao-monster/xboardme@"+$target)]}]}' > "$retention_snapshot_file"
+jq -cnS '{schema_version:1,image_ids:[],revisions:[],digests:[],references:[]}' > "$retention_startup_file"
+recovery_protection=$(jq -cnS --slurpfile inventory "$retention_snapshot_file" '{upstream:"127.0.0.1:7002",
+  caddy_file:"/etc/caddy/Caddyfile",caddy_sha256:("9"*64),app_data_identity:"1:42",
+  redis_volume:"fixture-redis",containers:$inventory[0].containers}')
+retention_live_protection() { printf '%s\n' "$recovery_protection"; }
+recovery_resource=$(retention_resource_fingerprint "$retention_snapshot_file" "$recovery_protection")
+recovery_protection_hash=$(printf '%s\n' "$recovery_protection" | retention_hash)
+recovery_image_hash=$(jq -cS '.images[0]' "$retention_snapshot_file" | retention_hash)
+jq --arg resource "$recovery_resource" --arg protection "$recovery_protection_hash" \
+  --arg image_hash "$recovery_image_hash" --arg startup_hash "$(retention_hash < "$retention_startup_file")" '
+    .schema_version=3 | .resource_fingerprint=$resource | .protection_fingerprint=$protection |
+    .images[0].snapshot_sha256=$image_hash | .images[0].evidence.startup_reference_review_sha256=$startup_hash |
+    .monitoring.mode="passive_runtime_v1" | .monitoring.active_port=7002 |
+    .monitoring.baseline_seconds=120 | .monitoring.post_delete_observe_seconds=300 |
+    del(.monitoring.public,.monitoring.origin,.monitoring.live_signals,.monitoring.evidence)
+  ' "$review" > "$workdir/passive-review.json"
+review="$workdir/passive-review.json"
+chmod 600 "$review" "$active_state_file" "$retention_snapshot_file" "$retention_startup_file"
+EXPECTED_RETENTION_REVIEW_SHA256=$(retention_hash < "$review")
+RC_TEST_FAILURE=first_probe_failed
+expect_failure retention_continuity_begin "$review"
+status_is HOLD
+jq -e '.sample_count==0 and .baseline_started_at_uptime==null and .intent_at_uptime==null' "$RC_GATE" >/dev/null
+recovery_old_workflow=$EXPECTED_WORKFLOW_SHA
+recovery_old_review=$EXPECTED_RETENTION_REVIEW_SHA256
+recovery_old_session=$(jq -er .session_id "$RC_GATE")
+recovery_old_gate_hash=$(retention_hash < "$RC_GATE")
+recovery_old_plan="$RC_ROOT/image-cleanup-plan-$recovery_old_review.json"
+jq -cnS --arg workflow "$recovery_old_workflow" --arg review "$recovery_old_review" \
+  --arg state "$(retention_hash < "$active_state_file")" --slurpfile inventory "$retention_snapshot_file" \
+  --slurpfile startup "$retention_startup_file" '{schema_version:2,operation:"image_cleanup",workflow_sha:$workflow,
+    review_sha256:$review,active_state_sha256:$state,inventory:$inventory[0],startup:$startup[0],
+    containers:[],images:[$inventory[0].images[0]]}' > "$recovery_old_plan"
+chmod 600 "$recovery_old_plan"
+recovery_old_plan_hash=$(retention_hash < "$recovery_old_plan")
+jq --arg workflow "$recovery_old_workflow" --arg review "$recovery_old_review" --arg session "$recovery_old_session" \
+  --arg gate_hash "$recovery_old_gate_hash" --arg plan_hash "$recovery_old_plan_hash" '
+    .recovery={schema_version:1,mode:"predelete_hold_v1",workflow_sha:$workflow,review_sha256:$review,
+      session_id:$session,gate_sha256:$gate_hash,plan_sha256:$plan_hash,image_id:.images[0].id}
+  ' "$review" > "$workdir/recovery-review.json"
+review="$workdir/recovery-review.json"
+chmod 600 "$review"
+EXPECTED_WORKFLOW_SHA=$(printf 'e%.0s' {1..40})
+EXPECTED_RETENTION_REVIEW_SHA256=$(retention_hash < "$review")
+RC_REVIEW=$review
+RC_REVIEW_HASH=$EXPECTED_RETENTION_REVIEW_SHA256
+RC_SESSION=12345678-1234-1234-1234-123456789abc
+RC_TEST_FAILURE=''
+RC_TEST_NOW=2000
+recovery_history="$RC_ROOT/image-cleanup-gate-history-$recovery_old_session.json"
+fresh_gate="$workdir/fresh-gate.json"
+jq --arg workflow "$EXPECTED_WORKFLOW_SHA" --arg hash "$RC_REVIEW_HASH" --arg session "$RC_SESSION" '
+  .status="RUNNING" | .workflow_sha=$workflow | .review_sha256=$hash | .session_id=$session |
+  .failure_reason=null | .started_at_uptime=2000' "$RC_GATE" > "$fresh_gate"
+chmod 600 "$fresh_gate"
+recovery_original_identity() {
+  stat -Lc '%d:%i:%u:%a:%h' -- "$RC_GATE" "$recovery_old_plan"
+  retention_hash < "$RC_GATE"
+  retention_hash < "$recovery_old_plan"
+}
+recovery_before=$(recovery_original_identity)
+reject_fresh_gate() {
+  local selector=$1 candidate="$workdir/candidate-gate.json" candidate_hash
+  jq "$selector" "$fresh_gate" > "$candidate"
+  chmod 600 "$candidate"
+  candidate_hash=$(retention_hash < "$candidate")
+  if _rc_create_gate "$candidate" > "$workdir/failure.log" 2>&1; then
+    fail "fresh_gate_unexpected_success:$selector"
+  fi
+  [[ "$(recovery_original_identity)" == "$recovery_before" ]] || fail recovery_rejection_changed_original_evidence
+  [[ ! -e "$recovery_history" && ! -L "$recovery_history" ]] || fail invalid_gate_was_archived
+  [[ "$(retention_hash < "$candidate")" == "$candidate_hash" ]] || fail rejected_temporary_changed
+  status_is HOLD
+  ((cases+=1))
+}
+for selector in '.status="HOLD"' '.workflow_sha=("f"*40)' '.review_sha256=("f"*64)' \
+  '.image_id=("sha256:"+("f"*64))' '.session_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"' \
+  '.active_release_id="456-1"' '.active_release_sha=("f"*40)' '.protection_fingerprint=("f"*64)' \
+  '.sample_count=1' '.cleanup_validated=true' '.failure_reason="already_failed"' '.post_verification="failed"' \
+  'del(.failure_reason)' '.schema_version=1 | del(.monitoring_mode) | .baseline_seconds=600 | .observe_seconds=900' \
+  '.baseline_seconds=600' '.observe_seconds=900' '.sample_interval_seconds=5'; do
+  reject_fresh_gate "$selector"
+done
+for key in last_heartbeat_uptime baseline_started_at_uptime baseline_completed_at_uptime intent_at_uptime \
+  removed_at_uptime observation_completed_at_uptime completed_at_uptime post_evidence_sha256 post_verified_at_uptime; do
+  reject_fresh_gate ".$key=2001"
+  reject_fresh_gate "del(.$key)"
+done
+saved_session=$RC_SESSION
+RC_SESSION=$recovery_old_session
+reject_fresh_gate ".session_id=\"$recovery_old_session\""
+RC_SESSION=$saved_session
+
+# An archive collision must preserve the old HOLD and the immutable plan.
+printf 'conflicting recovery history\n' > "$recovery_history"
+chmod 600 "$recovery_history"
+recovery_conflict_hash=$(retention_hash < "$recovery_history")
+expect_failure _rc_create_gate "$fresh_gate"
+[[ "$(recovery_original_identity)" == "$recovery_before" ]]
+[[ "$(retention_hash < "$recovery_history")" == "$recovery_conflict_hash" ]]
+rm -- "$recovery_history"
+((cases+=1))
+
+# Positive control: the exact same evidence must permit a fresh real baseline,
+# not a fabricated COMPLETE or an empty gate that reopens deployment admission.
+retention_continuity_begin "$review"
+status_is RUNNING
+[[ $(retention_hash < "$recovery_history") == "$recovery_old_gate_hash" ]]
+[[ $(stat -Lc '%u:%a:%h' -- "$recovery_history") == "$EUID:600:1" ]]
+[[ $(retention_hash < "$recovery_old_plan") == "$recovery_old_plan_hash" ]]
+jq -e --arg old_session "$recovery_old_session" --arg workflow "$EXPECTED_WORKFLOW_SHA" \
+  --arg review "$RC_REVIEW_HASH" --arg image "$test_image" '
+    .session_id!=$old_session and .workflow_sha==$workflow and .review_sha256==$review and .image_id==$image and
+    .schema_version==2 and .monitoring_mode=="passive_runtime_v1" and .status=="RUNNING" and
+    .baseline_completed_at_uptime-.baseline_started_at_uptime>=120 and .sample_count>=12 and
+    .cleanup_validated==false and .intent_at_uptime==null and .removed_at_uptime==null and
+    .observation_completed_at_uptime==null and .completed_at_uptime==null and .post_verification=="pending"
+  ' "$RC_GATE" >/dev/null
+expect_failure retention_continuity_admit_deployment "$workdir"
+retention_continuity_hold recovery_fixture_done
+status_is HOLD
+expect_failure retention_continuity_admit_deployment "$workdir"
+((cases+=1))
+
 # Keep a real-clock boundary test: fake clocks must not conceal a timeout that
 # is shorter than an ordinary wait, or a monitor which cannot terminate.
 real_wait_started=$SECONDS
