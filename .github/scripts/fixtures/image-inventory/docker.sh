@@ -37,10 +37,19 @@ elif [[ "$1 $2 $3" == 'image inspect --format' ]]; then
     duplicate) data=$(jq -c '.[1]=.[0]' <<< "$data") ;;
     foreign) data=$(jq -c '.[0].Id="sha256:"+("f"*64)' <<< "$data") ;;
     mandatory_null) data=$(jq -c '.[0].Created=null' <<< "$data") ;;
+    mandatory_missing) data=$(jq -c 'del(.[0].Created)' <<< "$data") ;;
     bad_size) data=$(jq -c '.[0].Size=9007199254740992' <<< "$data") ;;
     bad_alias) data=$(jq -c '.[0].RepoTags=[7]' <<< "$data") ;;
     partial_nonzero) data=$(jq -c '.[1:]' <<< "$data") ;;
     batch_cap) head -c 1048577 /dev/zero | tr '\000' x; exit 0 ;;
+    # Exactly cap+1 bytes reach the sink before a deterministic nonzero exit.
+    # Do not assume GNU tools always turn EPIPE into signal exit status 141:
+    # an inherited ignored SIGPIPE makes them report a write error and exit 1.
+    batch_cap_status141) head -c 1048577 /dev/zero | tr '\000' x; exit 141 ;;
+    batch_cap_pipe)
+      if head -c 2097152 /dev/zero | tr '\000' x; then status=0; else status=$?; fi
+      printf '%s\n' "$status" > "$root/oversize-pipe-status"
+      exit "$status" ;;
     malformed) printf '{\n'; exit 0 ;;
     nul) printf '\000'; exit 0 ;;
     hang) trap '' TERM; sleep 30; exit 0 ;;

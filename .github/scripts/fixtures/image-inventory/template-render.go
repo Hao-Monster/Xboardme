@@ -12,7 +12,9 @@ func main() {
 	if len(os.Args) != 2 {
 		os.Exit(2)
 	}
-	t, err := template.New("safe").Funcs(template.FuncMap{"json": func(v any) (string, error) { b, e := json.Marshal(v); return string(b), e }}).Parse(os.Args[1])
+	// Docker's raw-inspect fallback rejects missing dot-lookup keys. Do not let
+	// Go's permissive default conceal optional-field template incompatibility.
+	t, err := template.New("safe").Option("missingkey=error").Funcs(template.FuncMap{"json": func(v any) (string, error) { b, e := json.Marshal(v); return string(b), e }}).Parse(os.Args[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "TEMPLATE_FAIL")
 		os.Exit(1)

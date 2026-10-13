@@ -548,8 +548,9 @@ class LinuxBoundaryTests(unittest.TestCase):
                 ',"--reparent-signal-probe",' + repr(str(record)) + '],start_new_session=True)')
             recorded = None
             try:
+                deadline = time.monotonic() + 6
                 out, err, status, unused = mod.CI.supervised([sys.executable, '-B', '-c', script],
-                                                           budget=6, allow_nonzero=True)
+                                                           budget=deadline - time.monotonic(), allow_nonzero=True)
                 self.assertEqual(status, 0, err.decode())
                 result = json.loads(out)
                 self.assertEqual(result['adoptive_parent'], os.getpid())
@@ -559,7 +560,15 @@ class LinuxBoundaryTests(unittest.TestCase):
                 self.assertEqual(result['pidfd_signals'], 0)
                 recorded = tuple(json.loads(record.read_text()))
                 self.assertEqual(boundary.identity(recorded[0]), (os.getpid(), recorded[1]))
-                self.assertEqual(os.waitpid(recorded[0], os.WNOHANG)[0], recorded[0])
+                # Pipe EOF may precede the adopted child's waitable exit. Wait
+                # for its natural exit within the original supervisor budget.
+                reaped, exit_status = os.waitpid(recorded[0], os.WNOHANG)
+                while reaped == 0 and time.monotonic() < deadline:
+                    time.sleep(min(0.005, max(0, deadline - time.monotonic())))
+                    reaped, exit_status = os.waitpid(recorded[0], os.WNOHANG)
+                self.assertEqual(reaped, recorded[0])
+                self.assertTrue(os.WIFEXITED(exit_status))
+                self.assertEqual(os.WEXITSTATUS(exit_status), 0)
             finally:
                 if recorded is None and record.is_file():
                     recorded = tuple(json.loads(record.read_text()))
@@ -867,11 +876,11 @@ class PublicationTests(unittest.TestCase):
 class SourceContractTests(unittest.TestCase):
     def test_reviewed_safety_inventory_and_harness_are_pinned(self):
         import hashlib
-        # Inventory identity includes the reviewed fixed-phase/exit diagnostics.
+        # Inventory identity includes the reviewed fixed-phase/capture diagnostics.
         # The safety and benchmark harness pins remain unchanged; do not replace
         # these exact byte assertions with dynamically calculated expectations.
         hashes = {'test-image-inventory-docker.py': '485534124d2bde63308b0df959b2f1a1877cfcc5225c2cbe58e8fab0b865d818',
-                  'images-only-inventory.sh': '82b5a1397f75d3971f05f0281b374fa531d0846c6b9daeb37b2587cdae235200',
+                  'images-only-inventory.sh': 'f347d521a704982ec27c5a1d364452be44a5378852284afce1429049cc6e6dfa',
                   'retention-safety.sh': '92e4ae6310727b9557cde03a974915a3fac07f2a8b4fa0532c1644d4dd4ea89b'}
         for name, wanted in hashes.items():
             with self.subTest(name=name):

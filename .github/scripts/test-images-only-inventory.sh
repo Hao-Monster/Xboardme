@@ -30,10 +30,18 @@ jq -nc '[range(1;25)|{Id:(("0"*64)+(tostring))[-64:],Name:("/created-"+tostring)
   HostConfig:{LogConfig:{Config:{labels:"SYNTHETIC_HOST_SECRET_CANARY"}}},
   State:{Status:"created",StartedAt:"0001-01-01T00:00:00Z"},RestartCount:0,NetworkSettings:{},Mounts:[]}]' > "$root/containers.json"
 cases=0
+# The probe must retain Docker CLI raw-fallback strict missing-key semantics,
+# independently of how the production template reads optional metadata.
+if printf '[{}]\n' | "$root/bin/template-render" '{{json .Missing}}' > "$root/template-output" 2> "$root/template-error"; then
+  echo 'TEMPLATE_STRICT_MISSING_KEY_UNEXPECTED_PASS'; exit 1
+fi
+[[ ! -s "$root/template-output" && $(wc -l < "$root/template-error") == 1 ]]
+grep -Fxq TEMPLATE_FAIL "$root/template-error"
+cases=$((cases+1))
 reset_case() {
   printf '%s\n' "$1" > "$root/mode"
   printf '0\n' > "$root/lists"; printf '0\n' > "$root/inspects"
-  : > "$root/calls"; : > "$root/batch-sizes"
+  : > "$root/calls"; : > "$root/batch-sizes"; : > "$root/oversize-pipe-status"
   cp "$root/raw-base.json" "$root/raw.json"
   [[ ! -d $root/inflight ]] || rmdir "$root/inflight"
 }
@@ -42,14 +50,27 @@ run_case() {
   reset_case "$mode"
   if images_only_all_snapshots > "$root/output" 2> "$root/error"; then
     [[ $expected == pass ]] || { echo "UNEXPECTED_PASS=$mode"; return 1; }
+    [[ ! -s "$root/error" ]] || { echo "UNEXPECTED_SUCCESS_DIAGNOSTIC=$mode"; return 1; }
   else
     [[ $expected == fail && ! -s $root/output ]] || { echo "UNEXPECTED_FAIL=$mode"; cat "$root/error"; return 1; }
     grep -Fxq 'IMAGE_INVENTORY_FAIL=bounded_snapshot' "$root/error"
-    grep -Eq '^IMAGE_INVENTORY_DIAGNOSTIC=phase:[a-z_]+ worker_exit:([0-9]+|unavailable)$' "$root/error"
+    if ! grep -Eq '^IMAGE_INVENTORY_DIAGNOSTIC=phase:[a-z_]+ worker_exit:([0-9]+|unavailable) capture_reason:[a-z_]+ upstream_exit:([0-9]+|unavailable) sink_exit:([0-9]+|unavailable) worker_reason:[a-z_]+ batch_index:([0-9]+|unavailable) batch_count:([0-9]+|unavailable)$' "$root/error"; then
+      printf 'DIAGNOSTIC_CONTRACT_FAIL=%s\n' "$mode"
+      cat "$root/error"
+      return 1
+    fi
     [[ $(wc -l < "$root/error") == 2 ]]
   fi
   ! grep -Eq 'SECRET_CANARY|Config|Env|unrelated.secret' "$root/output" "$root/error"
   cases=$((cases+1))
+}
+expect_inventory_diagnostic() {
+  local expected="IMAGE_INVENTORY_DIAGNOSTIC=phase:$1 worker_exit:1 capture_reason:$2 upstream_exit:$3 sink_exit:$4 worker_reason:$5 batch_index:$6 batch_count:$7"
+  grep -Fxq "$expected" "$root/error" || {
+    printf 'DIAGNOSTIC_VALUE_FAIL=%s\n' "$(< "$root/mode")"
+    cat "$root/error"
+    return 1
+  }
 }
 run_case normal pass
 [[ $(< "$root/inspects") == 10 && $(< "$root/lists") == 2 ]]
@@ -65,8 +86,26 @@ printf '[]\n' > "$root/containers.json"
 run_case empty pass
 [[ $(jq -c '.images' "$root/output") == '[]' ]]
 run_case duplicate_listing pass
-for mode in bad_listing blank_listing listing_cap unique_cap listing_nonzero missing duplicate foreign mandatory_null bad_size bad_alias partial_nonzero complete_nonzero batch_cap malformed nul extra_key duplicate_key second_batch_fail drift; do
+for mode in bad_listing blank_listing listing_cap unique_cap listing_nonzero missing duplicate foreign mandatory_null mandatory_missing bad_size bad_alias partial_nonzero complete_nonzero batch_cap batch_cap_status141 batch_cap_pipe malformed nul extra_key duplicate_key second_batch_fail drift; do
   run_case "$mode" fail
+  case "$mode" in
+    listing_nonzero) expect_inventory_diagnostic image_list upstream_nonzero 4 0 listing 0 0 ;;
+    partial_nonzero|complete_nonzero) expect_inventory_diagnostic image_inspect upstream_nonzero 7 0 inspect 1 16 ;;
+    batch_cap) expect_inventory_diagnostic image_inspect output_cap_exceeded 0 0 inspect 1 16 ;;
+    batch_cap_status141) expect_inventory_diagnostic image_inspect output_cap_exceeded 141 0 inspect 1 16 ;;
+    batch_cap_pipe)
+      # Real oversized output must fail closed with cap precedence. Compare the
+      # diagnostic against the fixture's independently recorded pipeline exit,
+      # not a platform-dependent assumption about inherited SIGPIPE disposition.
+      upstream=$(< "$root/oversize-pipe-status")
+      [[ $upstream =~ ^[1-9][0-9]{0,2}$ ]] && ((upstream<=255))
+      expect_inventory_diagnostic image_inspect output_cap_exceeded "$upstream" 0 inspect 1 16 ;;
+    nul) expect_inventory_diagnostic image_inspect output_nul 0 0 inspect 1 16 ;;
+    second_batch_fail) expect_inventory_diagnostic image_inspect upstream_nonzero 7 0 inspect 2 1 ;;
+    malformed|extra_key|duplicate_key)
+      expect_inventory_diagnostic image_protocol unavailable unavailable unavailable protocol 1 16 ;;
+    drift) expect_inventory_diagnostic image_relist unavailable unavailable unavailable inventory_drift 0 0 ;;
+  esac
 done
 jq '.[0].Config=null|del(.[1].Config)|.[2].Config.Labels=null|del(.[3].Config.Labels)|
   .[4].Config.Labels={}|.[5].Config.Labels["org.opencontainers.image.source"]="a\"b\nc中文<&>"|
@@ -245,7 +284,7 @@ if _images_only_append_container "$root/container-cap"; then echo CONTAINER_RECO
 [[ ! -s $root/container-cap/containers ]]
 cases=$((cases+2))
 # Failure diagnostics are fixed scalars, never worker stderr or metadata.
-# The real fixture/parser/watchdog cases above remain unchanged.
+# The real fixture/parser/watchdog assertions above remain active.
 original_inventory_worker=$(declare -f images_only_inventory_worker)
 images_only_inventory_worker() {
   case "$IMAGE_INVENTORY_DIAGNOSTIC_FIXTURE" in
@@ -268,11 +307,137 @@ for diagnostic_fixture in known invalid multiple nul oversized missing; do
   [[ ! -s "$root/diagnostic-output" ]]
   diagnostic_phase=unavailable
   [[ $diagnostic_fixture != known ]] || diagnostic_phase=image_protocol
-  grep -Fxq "IMAGE_INVENTORY_DIAGNOSTIC=phase:$diagnostic_phase worker_exit:7" "$root/diagnostic-error"
+  grep -Fxq "IMAGE_INVENTORY_DIAGNOSTIC=phase:$diagnostic_phase worker_exit:7 capture_reason:unavailable upstream_exit:unavailable sink_exit:unavailable worker_reason:unavailable batch_index:unavailable batch_count:unavailable" "$root/diagnostic-error"
   grep -Fxq 'IMAGE_INVENTORY_FAIL=bounded_snapshot' "$root/diagnostic-error"
+  [[ $(wc -l < "$root/diagnostic-error") == 2 ]]
   ! grep -q SECRET "$root/diagnostic-error"
   cases=$((cases+1))
 done
 unset IMAGE_INVENTORY_DIAGNOSTIC_FIXTURE
 eval "$original_inventory_worker"
+
+# Inject a clock read failure or an already-expired deadline at the actual
+# production helper boundary. The production function is neither copied nor
+# replaced, and no Docker metadata command may start after this rejection.
+for diagnostic_fault in clock budget; do
+  reset_case normal
+  diagnostic_work="$root/capture-$diagnostic_fault"
+  mkdir "$diagnostic_work"
+  if (
+    diagnostic_fault_injected=false
+    set -T
+    trap 'if [[ $diagnostic_fault_injected == false ]]; then
+      if [[ $diagnostic_fault == clock && ${FUNCNAME[0]:-} == _rib_now &&
+            ${FUNCNAME[1]:-} == _rib_budget && ${BASH_COMMAND:-} == '\''read -r seconds unused < "$clock"'\'' ]]; then
+        diagnostic_fault_injected=true
+        clock=/dev/null
+        printf injected > "$diagnostic_work/injected"
+      elif [[ $diagnostic_fault == budget && ${FUNCNAME[0]:-} == _rib_budget &&
+              ${BASH_COMMAND:-} == '\''((now>=start && now<deadline))'\'' ]]; then
+        diagnostic_fault_injected=true
+        deadline=$now
+        printf injected > "$diagnostic_work/injected"
+      fi
+    fi' DEBUG
+    images_only_images_snapshot_worker "$diagnostic_work"
+  ) > "$diagnostic_work/output" 2> "$diagnostic_work/error"; then
+    printf 'CAPTURE_BOUNDARY_UNEXPECTED_PASS=%s\n' "$diagnostic_fault"; exit 1
+  fi
+  [[ -s "$diagnostic_work/injected" && ! -s "$diagnostic_work/output" && ! -s "$root/calls" ]]
+  reason=clock_unavailable
+  [[ $diagnostic_fault != budget ]] || reason=budget_exhausted
+  [[ $(< "$diagnostic_work/capture-diagnostic") == "$reason unavailable unavailable" &&
+     $(< "$diagnostic_work/worker-reason") == listing &&
+     $(< "$diagnostic_work/capture-batch") == '0 0' ]]
+  grep -Fxq 'IMAGE_INVENTORY_WORKER_FAIL=listing' "$diagnostic_work/error"
+  ! grep -q SECRET "$diagnostic_work/error"
+  cases=$((cases+1))
+done
+
+# Exercise the real fixed-scalar reader directly. Malformed tuples invalidate
+# that tuple only; raw values and unrelated worker stderr must never escape.
+diagnostic_root="$root/scalar-diagnostic"
+mkdir "$diagnostic_root"
+reset_diagnostic_scalars() {
+  printf 'image_inspect\n' > "$diagnostic_root/phase"
+  printf '7\n' > "$diagnostic_root/worker-status"
+  printf 'upstream_nonzero 7 0\n' > "$diagnostic_root/capture-diagnostic"
+  printf 'inspect\n' > "$diagnostic_root/worker-reason"
+  printf '2 1\n' > "$diagnostic_root/capture-batch"
+}
+check_diagnostic_scalars() {
+  local name=$1 status=${2:-7} reason=${3:-upstream_nonzero} upstream=${4:-7} sink=${5:-0}
+  local worker=${6:-inspect} index=${7:-2} count=${8:-1} expected
+  expected="IMAGE_INVENTORY_DIAGNOSTIC=phase:image_inspect worker_exit:$status capture_reason:$reason upstream_exit:$upstream sink_exit:$sink worker_reason:$worker batch_index:$index batch_count:$count"
+  _images_only_failure_diagnostic "$diagnostic_root" > "$root/scalar-output" 2> "$root/scalar-error"
+  [[ ! -s "$root/scalar-output" && $(wc -l < "$root/scalar-error") == 1 ]] || {
+    printf 'DIAGNOSTIC_SCALAR_OUTPUT_FAIL=%s\n' "$name"; return 1;
+  }
+  grep -Fxq "$expected" "$root/scalar-error" || {
+    printf 'DIAGNOSTIC_SCALAR_VALUE_FAIL=%s\n' "$name"; return 1;
+  }
+  ! grep -q 'SECRET_CANARY' "$root/scalar-error"
+  cases=$((cases+1))
+}
+reset_diagnostic_scalars
+check_diagnostic_scalars valid
+reset_diagnostic_scalars
+printf 'budget_exhausted unavailable unavailable\n' > "$diagnostic_root/capture-diagnostic"
+check_diagnostic_scalars capture_without_pipeline 7 budget_exhausted unavailable unavailable
+for reason in clock_unavailable budget_exhausted capture_stat_failed capture_size_invalid output_cap_exceeded sink_nonzero upstream_nonzero output_nul deadline_exceeded; do
+  reset_diagnostic_scalars
+  printf '%s 255 255\n' "$reason" > "$diagnostic_root/capture-diagnostic"
+  check_diagnostic_scalars "capture_reason_$reason" 7 "$reason" 255 255
+done
+for data in \
+  'SYNTHETIC_DIAGNOSTIC_SECRET_CANARY 7 0\n' \
+  'upstream_nonzero 256 0\n' 'upstream_nonzero -1 0\n' 'upstream_nonzero 00 0\n' \
+  'upstream_nonzero 1.0 0\n' 'upstream_nonzero 0 256\n' 'upstream_nonzero 0 -1\n' \
+  'upstream_nonzero 0 00\n' 'upstream_nonzero 0 1.0\n' \
+  'upstream_nonzero 7 0' 'upstream_nonzero 7 0\n\n' \
+  'upstream_nonzero 7 0\nSYNTHETIC_DIAGNOSTIC_SECRET_CANARY\n' \
+  'upstream_nonzero 7 0\000\n' 'upstream_nonzero 7 0 SYNTHETIC_DIAGNOSTIC_SECRET_CANARY\n'; do
+  reset_diagnostic_scalars
+  printf '%b' "$data" > "$diagnostic_root/capture-diagnostic"
+  check_diagnostic_scalars invalid_capture 7 unavailable unavailable unavailable
+done
+reset_diagnostic_scalars
+printf '%0512d\n' 0 > "$diagnostic_root/capture-diagnostic"
+check_diagnostic_scalars oversized_capture 7 unavailable unavailable unavailable
+for data in 'SYNTHETIC_DIAGNOSTIC_SECRET_CANARY\n' 'inspect\000\n' 'inspect' \
+  'inspect\n\n' 'inspect\nSYNTHETIC_DIAGNOSTIC_SECRET_CANARY\n'; do
+  reset_diagnostic_scalars
+  printf '%b' "$data" > "$diagnostic_root/worker-reason"
+  check_diagnostic_scalars invalid_worker_reason 7 upstream_nonzero 7 0 unavailable
+done
+reset_diagnostic_scalars
+printf '%0256d\n' 0 > "$diagnostic_root/worker-reason"
+check_diagnostic_scalars oversized_worker_reason 7 upstream_nonzero 7 0 unavailable
+for data in '17 1\n' '1 17\n' '0 1\n' '1 0\n' '-1 1\n' '1 -1\n' '00 1\n' '1 00\n' '1.0 1\n' \
+  '2 1' '2 1\n\n' '2 1\000\n' '2 1\nSYNTHETIC_DIAGNOSTIC_SECRET_CANARY\n' \
+  '2 1 SYNTHETIC_DIAGNOSTIC_SECRET_CANARY\n'; do
+  reset_diagnostic_scalars
+  printf '%b' "$data" > "$diagnostic_root/capture-batch"
+  check_diagnostic_scalars invalid_batch 7 upstream_nonzero 7 0 inspect unavailable unavailable
+done
+reset_diagnostic_scalars
+printf '%0128d\n' 0 > "$diagnostic_root/capture-batch"
+check_diagnostic_scalars oversized_batch 7 upstream_nonzero 7 0 inspect unavailable unavailable
+for status in 0 255; do
+  reset_diagnostic_scalars
+  printf '%s\n' "$status" > "$diagnostic_root/worker-status"
+  check_diagnostic_scalars valid_status "$status"
+done
+for data in '256\n' '-1\n' '00\n' '1.0\n' '7' '7\n\n' '7\000\n' \
+  '7\nSYNTHETIC_DIAGNOSTIC_SECRET_CANARY\n' 'SYNTHETIC_DIAGNOSTIC_SECRET_CANARY\n'; do
+  reset_diagnostic_scalars
+  printf '%b' "$data" > "$diagnostic_root/worker-status"
+  check_diagnostic_scalars invalid_status unavailable
+done
+for data in '0 0' '16 16'; do
+  reset_diagnostic_scalars
+  printf '%s\n' "$data" > "$diagnostic_root/capture-batch"
+  read -r index count <<< "$data"
+  check_diagnostic_scalars valid_batch 7 upstream_nonzero 7 0 inspect "$index" "$count"
+done
 printf 'IMAGE_INVENTORY_TEST=PASS cases=%s full_images=146 full_containers=24 real_docker=NOT_RUN production=NOT_RUN\n' "$cases"
