@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "purpose": "sampled_predelete_resource_evidence",
+  "source": {
+    "repository": "Hao-Monster/Xboardme",
+    "run_id": "38360368858",
+    "run_attempt": 1,
+    "workflow_sha": "cdc78de2014d6e47df6a8397462dc5e4c0fe059c",
+    "event": "workflow_dispatch",
+    "branch": "main",
+    "conclusion": "failure",
+    "raw_workflow_log_sha256": "517fffe52ede05073e0174a78ee68ee20b2aa7118a5612f4767c1ab537d1b2cc",
+    "operation_artifact_sha256": "bf1bc076a1337ab30cdad6c2b7abbb79446449b38097d503bc2e5bb66a001314",
+    "alignment_report_sha256": "8bc5121791b3ee3edae170e81d4bc89370afb042d47ad18e670bd0989a1fde94"
+  },
+  "events": [
+    {
+      "operation_line": 206,
+      "at": "2026-10-13T07:08:43.6799856Z"
+    },
+    {
+      "operation_line": 207,
+      "at": "2026-10-13T07:08:44.1192232Z"
+    },
+    {
+      "operation_line": 208,
+      "at": "2026-10-13T07:08:53.8385954Z"
+    },
+    {
+      "operation_line": 209,
+      "at": "2026-10-13T07:08:54.1636037Z"
+    },
+    {
+      "operation_line": 210,
+      "at": "2026-10-13T07:09:03.8066013Z"
+    },
+    {
+      "operation_line": 211,
+      "at": "2026-10-13T07:09:04.1989860Z"
+    },
+    {
+      "operation_line": 212,
+      "at": "2026-10-13T07:09:13.7730308Z"
+    },
+    {
+      "operation_line": 213,
+      "at": "2026-10-13T07:09:14.1337507Z"
+    },
+    {
+      "operation_line": 214,
+      "at": "2026-10-13T07:09:23.7556892Z"
+    },
+    {
+      "operation_line": 215,
+      "at": "2026-10-13T07:09:24.0971562Z"
+    },
+    {
+      "operation_line": 216,
+      "at": "2026-10-13T07:09:33.6967531Z"
+    },
+    {
+      "operation_line": 217,
+      "at": "2026-10-13T07:09:34.0282576Z"
+    },
+    {
+      "operation_line": 218,
+      "at": "2026-10-13T07:09:43.7609245Z"
+    },
+    {
+      "operation_line": 219,
+      "at": "2026-10-13T07:09:44.2268545Z"
+    },
+    {
+      "operation_line": 220,
+      "at": "2026-10-13T07:09:53.7849418Z"
+    },
+    {
+      "operation_line": 221,
+      "at": "2026-10-13T07:09:54.1220532Z"
+    },
+    {
+      "operation_line": 222,
+      "at": "2026-10-13T07:10:03.7817601Z"
+    },
+    {
+      "operation_line": 223,
+      "at": "2026-10-13T07:10:04.1608859Z"
+    },
+    {
+      "operation_line": 224,
+      "at": "2026-10-13T07:10:13.8529453Z"
+    },
+    {
+      "operation_line": 225,
+      "at": "2026-10-13T07:10:14.2123743Z"
+    },
+    {
+      "operation_line": 226,
+      "at": "2026-10-13T07:10:23.8545210Z"
+    },
+    {
+      "operation_line": 227,
+      "at": "2026-10-13T07:10:24.2164595Z"
+    },
+    {
+      "operation_line": 228,
+      "at": "2026-10-13T07:10:33.7565065Z"
+    },
+    {
+      "operation_line": 229,
+      "at": "2026-10-13T07:10:34.1816108Z"
+    },
+    {
+      "operation_line": 230,
+      "at": "2026-10-13T07:10:43.8724172Z"
+    },
+    {
+      "operation_line": 231,
+      "at": "2026-10-13T07:10:44.2650937Z"
+    },
+    {
+      "operation_line": 232,
+      "at": "2026-10-13T07:10:45.4092784Z"
+    },
+    {
+      "operation_line": 233,
+      "at": "2026-10-13T07:10:53.9534707Z"
+    },
+    {
+      "operation_line": 234,
+      "at": "2026-10-13T07:10:54.3571124Z"
+    },
+    {
+      "operation_line": 235,
+      "at": "2026-10-13T07:11:04.0257444Z"
+    },
+    {
+      "operation_line": 236,
+      "at": "2026-10-13T07:11:04.4281670Z"
+    },
+    {
+      "operation_line": 237,
+      "at": "2026-10-13T07:11:14.1819700Z"
+    },
+    {
+      "operation_line": 238,
+      "at": "2026-10-13T07:11:14.5489062Z"
+    },
+    {
+      "operation_line": 239,
+      "at": "2026-10-13T07:11:24.2762066Z"
+    },
+    {
+      "operation_line": 240,
+      "at": "2026-10-13T07:11:24.5795509Z"
+    },
+    {
+      "operation_line": 241,
+      "at": "2026-10-13T07:11:34.2857060Z"
+    },
+    {
+      "operation_line": 242,
+      "at": "2026-10-13T07:11:34.6492638Z"
+    },
+    {
+      "operation_line": 243,
+      "at": "2026-10-13T07:11:44.2622629Z"
+    },
+    {
+      "operation_line": 244,
+      "at": "2026-10-13T07:11:44.6945755Z"
+    },
+    {
+      "operation_line": 245,
+      "at": "2026-10-13T07:11:54.3538232Z"
+    },
+    {
+      "operation_line": 246,
+      "at": "2026-10-13T07:11:54.7500483Z"
+    },
+    {
+      "operation_line": 247,
+      "at": "2026-10-13T07:11:54.7513828Z"
+    },
+    {
+      "operation_line": 248,
+      "at": "2026-10-13T07:12:13.3432867Z"
+    },
+    {
+      "operation_line": 249,
+      "at": "2026-10-13T07:12:13.3433218Z"
+    },
+    {
+      "operation_line": 250,
+      "at": "2026-10-13T07:12:13.3433429Z"
+    },
+    {
+      "operation_line": 251,
+      "at": "2026-10-13T07:12:13.7304250Z"
+    }
+  ]
+}

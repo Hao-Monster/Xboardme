@@ -2,7 +2,7 @@
   "active_release_id": "37503793113-1",
   "active_release_sha": "17bad07edbbf1da2b8c1263fc5bb33499e22affc",
   "approval_expires_at_epoch": 1791957688,
-  "audit_completed_at_epoch": 1791871288,
+  "audit_completed_at_epoch": 1791879096,
   "containers": [],
   "images": [
     {
@@ -194,6 +194,7 @@
     "ghcr.io/hao-monster/xboardme@sha256:f985a4d32fddd87e3627acecb4bea4ba869773400fb758e273b0873f41b68ab4"
   ],
   "protected_image_revisions": [
+    "08e751d3f4a9b5d606d35e24ef08e9b0219779ab",
     "0c29ed01bbdaaa33b10299aeaf011408b0dabb06",
     "17bad07edbbf1da2b8c1263fc5bb33499e22affc",
     "611fb3c8db60ca005ed6f46fb866edac4a613ccd",
@@ -213,9 +214,9 @@
   },
   "schema_version": 3,
   "sequence": {
-    "audit_artifact_sha256": "382549938d71f73190107595404d2eb34a28dcbda20831940cd6ea1ec19a863a",
+    "audit_artifact_sha256": "71d208ad35c80dcb1c862c5797e484c7416e282f3c48e53c5c0987ed33a0a280",
     "index": "014",
-    "predecessor_review_sha256": "23e9baa84eba6ff065c8f8061da9766265f0f18e2c50ca1a916d99d686250c75",
+    "predecessor_review_sha256": "f90423b5c1dd345da441fb751e7d410cf5798b2f81b8bed2e11a35f69fb368a5",
     "schema_version": 1
   },
   "status": "approved"

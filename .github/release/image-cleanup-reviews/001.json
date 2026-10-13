@@ -2,7 +2,7 @@
   "active_release_id": "37503793113-1",
   "active_release_sha": "17bad07edbbf1da2b8c1263fc5bb33499e22affc",
   "approval_expires_at_epoch": 1791957688,
-  "audit_completed_at_epoch": 1791871288,
+  "audit_completed_at_epoch": 1791879096,
   "containers": [],
   "images": [
     {
@@ -194,6 +194,7 @@
     "ghcr.io/hao-monster/xboardme@sha256:f985a4d32fddd87e3627acecb4bea4ba869773400fb758e273b0873f41b68ab4"
   ],
   "protected_image_revisions": [
+    "08e751d3f4a9b5d606d35e24ef08e9b0219779ab",
     "0c29ed01bbdaaa33b10299aeaf011408b0dabb06",
     "17bad07edbbf1da2b8c1263fc5bb33499e22affc",
     "611fb3c8db60ca005ed6f46fb866edac4a613ccd",
@@ -207,15 +208,15 @@
   "protection_fingerprint": "e3193761cad71b4bf98c6adcd54417c93238dfc3195e0dfe9b52297fc2c647ee",
   "reason": "Draft only: independent review, exact-main CI, immutable restore, current locked inventory and predecessor post-verification are still required.",
   "recovery": {
-    "gate_sha256": "08f169d7f03d5e61bec7449f366e1c810c9ce5a37c011d752b77fdf9772afdf6",
+    "gate_sha256": "6f4f3c88d41507e2d4770815e912380376c56420cdfc2d1e7afc3a446687c795",
     "image_id": "sha256:42e9170c0ab7c56014ec54a4e04a8ad78bc45bbb95cef090b2353267c514317a",
     "mode": "predelete_sampled_hold_v2",
-    "plan_sha256": "e508dfef8bca806d770c2a172e35353ca7c5afb2ab09bf2a59435c6142dd4c77",
-    "proof_sha256": "d2e2ea4f7b6a43cd8b0a2a8ca2ed968ee9861e0d9659a150a3332ede954383f1",
-    "review_sha256": "756ed33f7409804d02a5b11373a92a483f8f54657ab90a6265543a07b0a8c0dc",
+    "plan_sha256": "ff29a6c69d6c9e4d147a566da51e6a79d1ed94224d846cbb61d944620a6bc546",
+    "proof_sha256": "2f9523ebf289f60e5652fa98b2b960fa98b6dccd1f753a96a990147542181a5a",
+    "review_sha256": "26abd355cfddfb19b14d78ed657271eb31fbde5e83ca1b0b4797bd3382e9c037",
     "schema_version": 2,
-    "session_id": "6b46aa43-8767-401b-82f1-92e2d0a40d60",
-    "workflow_sha": "354608ffd90e1febe51f36c3063d3a71816e4f76"
+    "session_id": "6ac8357b-dcb3-49c2-bb18-0e39f16169bd",
+    "workflow_sha": "cdc78de2014d6e47df6a8397462dc5e4c0fe059c"
   },
   "resource_fingerprint": "6ccd78749f8eb5fdce9ff54238a2256da89a430a8c30ba6a36534f635b294e7e",
   "review_evidence": {
@@ -224,7 +225,7 @@
   },
   "schema_version": 3,
   "sequence": {
-    "audit_artifact_sha256": "382549938d71f73190107595404d2eb34a28dcbda20831940cd6ea1ec19a863a",
+    "audit_artifact_sha256": "71d208ad35c80dcb1c862c5797e484c7416e282f3c48e53c5c0987ed33a0a280",
     "index": "001",
     "predecessor_review_sha256": null,
     "schema_version": 1
