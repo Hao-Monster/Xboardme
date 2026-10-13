@@ -52,14 +52,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  inventory-benchmark:
+  inventory-benchmark-prechecks:
     if: >-
       github.repository == 'Hao-Monster/Xboardme' &&
       github.event_name == 'workflow_dispatch' && inputs.benchmark && !inputs.diagnostic &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 70
-    # Dedicated runner: do not share the MySQL-backed verify job's load.
+    timeout-minutes: 25
+    # Keep the original pre-tests as a hard dependency on a separate runner.
     steps:
       - uses: actions/checkout@v7
         with:
@@ -72,6 +72,23 @@ jobs:
         run: python3 -B .github/scripts/test-image-inventory-docker.py --mode self-test
       - name: CI ownership, coverage and final-source binding regressions
         run: python3 -B .github/scripts/test-image-inventory-ci.py
+
+  inventory-benchmark:
+    needs: inventory-benchmark-prechecks
+    if: >-
+      github.repository == 'Hao-Monster/Xboardme' &&
+      github.event_name == 'workflow_dispatch' && inputs.benchmark && !inputs.diagnostic &&
+      github.ref == 'refs/heads/main' &&
+      needs['inventory-benchmark-prechecks'].result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    # Dedicated runner: do not share the MySQL-backed verify job's load.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          persist-credentials: false
       - name: Correctness then actual-duration serial comparative benchmark
         env:
           IMAGE_INVENTORY_CI_ALLOW_LOCAL: benchmark
