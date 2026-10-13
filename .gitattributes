@@ -5,6 +5,8 @@
 .github/release/image-cleanup-recovery-proofs/*.json text eol=lf
 .github/release/image-cleanup-recovery-evidence/*.json text eol=lf
 .github/release/image-cleanup-sequence-2026-10-12.md text eol=lf
+.github/release/image-cleanup-sequence-2026-10-13.md text eol=lf
+.github/release/image-cleanup-sampled-seed-2026-10-13.json text eol=lf
 Dockerfile text eol=lf
 *.css linguist-vendored
 *.scss linguist-vendored

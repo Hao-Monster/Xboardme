@@ -1,8 +1,8 @@
 {
   "active_release_id": "37503793113-1",
   "active_release_sha": "17bad07edbbf1da2b8c1263fc5bb33499e22affc",
-  "approval_expires_at_epoch": 1791898031,
-  "audit_completed_at_epoch": 1791811631,
+  "approval_expires_at_epoch": 1791957688,
+  "audit_completed_at_epoch": 1791871288,
   "containers": [],
   "images": [
     {
@@ -201,20 +201,21 @@
     "ba89a8a4d9039e5f079f5beea17a15e287e6a6af",
     "c078add837315ed23949437267843d21a130c854",
     "d611ea1dceb37cf85e27b3cd5a9291c98b2ed9db",
+    "e1c98b36a02f5523735235113e2cd913ef922554",
     "eced8e6ad551efe025dcbd6d6cd563be2e1557a0"
   ],
   "protection_fingerprint": "e3193761cad71b4bf98c6adcd54417c93238dfc3195e0dfe9b52297fc2c647ee",
-  "reason": "Reviewed sequential single-image content; offline formatting is not authorization. Exact-main CI, immutable restore, fresh locked inventory and predecessor post-verification remain required.",
+  "reason": "Draft only: independent review, exact-main CI, immutable restore, current locked inventory and predecessor post-verification are still required.",
   "resource_fingerprint": "a75601ece5238edd646a3e5435d6ba4ba6cadbc19c8f0fcce343cd37d5d60efe",
   "review_evidence": {
     "isolated_docker_review_sha256": "ed17f73acf156b21b1f541030b169b63412da6765c2f72ca383de655ad5f47fe",
-    "scope_review_sha256": "00c4a0745bb59f44d8b51fa390834ed3d75e8a3e9e64b329c87ae8a515c85bbf"
+    "scope_review_sha256": "fa0d46860e11b5b48a9a510d0ad1f7eb0a8ac9c537a81db899faab860e89b41f"
   },
   "schema_version": 3,
   "sequence": {
-    "audit_artifact_sha256": "2021439339a89449ef5fb97661ce613419b1ab4818733d36b82bbda01d458e2b",
+    "audit_artifact_sha256": "382549938d71f73190107595404d2eb34a28dcbda20831940cd6ea1ec19a863a",
     "index": "035",
-    "predecessor_review_sha256": "493a808b4a74c3c977bb81f089752471e9fce9f066532329bf654dc6188241ab",
+    "predecessor_review_sha256": "b276cfb66937874b903e048e8719d63b2f9a8012adaac3273c184a65ca6c4e74",
     "schema_version": 1
   },
   "status": "approved"
