@@ -117,7 +117,8 @@ function passive(line, value, initial) {
   return Number(match[1]);
 }
 
-export function traceEvidence(operationRaw, timelineRaw, expectedSource) {
+export function traceEvidence(operationRaw, timelineRaw, expectedSource, priorProofHash) {
+  demand(priorProofHash === undefined || matches(HASH, priorProofHash), 'prior_recovery_context');
   demand(typeof operationRaw === 'string' && operationRaw.length <= 16 * 1024 * 1024 &&
     !operationRaw.includes('\u0000') && !operationRaw.includes('\x1b'), 'invalid_artifact');
   const timeline = strictJson(timelineRaw);
@@ -134,18 +135,24 @@ export function traceEvidence(operationRaw, timelineRaw, expectedSource) {
   if (lines.at(-1) === '') lines.pop();
   const start = lines.indexOf('IMAGE_AUDIT=PASS mode=read_only lifecycle=preserved');
   demand(start >= 3 && lines.lastIndexOf(lines[start]) === start, 'missing_complete_base_audit');
-  let reviewHash = null; let identityCount = 0;
+  let reviewHash = null; let identityCount = 0; let priorMarkerCount = 0; let auditStarted = false;
   for (const line of lines.slice(0, start)) {
     demand(!/(?:_FAIL=|=FAIL|ERROR|RETENTION_|IMAGE_CLEANUP)/.test(line), 'unexpected_prelude');
+    if (line.startsWith('IMAGE_AUDIT_')) auditStarted = true;
     if (line.startsWith('IMAGE_REQUEST_REVIEW_SHA256=')) {
       const hash = line.slice(28); demand(HASH.test(hash) && (reviewHash === null || reviewHash === hash), 'admission_binding'); reviewHash = hash;
     } else if (line.startsWith('IMAGE_REQUEST=PASS action=cleanup sha=')) {
       demand(line === `IMAGE_REQUEST=PASS action=cleanup sha=${source.workflow_sha}`, 'admission_binding'); identityCount++;
+    } else if (line.startsWith('SAMPLED_RECOVERY_PROOF=')) {
+      demand(priorProofHash !== undefined && !auditStarted && reviewHash !== null && identityCount >= 1 &&
+        line === `SAMPLED_RECOVERY_PROOF=PASS proof_sha256=${priorProofHash} historical_only=true` &&
+        ++priorMarkerCount === 1, 'prior_recovery_marker');
     } else demand(line === 'IMAGE_REQUEST_MONITORING_MODE=passive_runtime_v1' ||
       line === 'IMAGE_RESTORE_EVIDENCE=PASS mode=passive_runtime_v1' ||
       (line.includes('=') && AUDIT_SCALARS.has(line.split('=', 1)[0])) ||
       /^IMAGE_AUDIT_(?:CONTAINER|IMAGE)_SNAPSHOT id=/.test(line), 'unexpected_prelude');
   }
+  demand(priorMarkerCount === (priorProofHash === undefined ? 0 : 1), 'prior_recovery_marker');
   demand(reviewHash !== null && identityCount >= 1, 'admission_binding');
   const events = []; const samples = []; let baseline = null; let finalResource = null; let cursor = start + 1;
   while (cursor < lines.length) {

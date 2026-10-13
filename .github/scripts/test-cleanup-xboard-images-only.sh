@@ -99,6 +99,10 @@ timeout() {
 # still evaluates real canonical inventory, candidate and startup hashes.
 retention_live_protection() { jq -cS '.protection' "$case_root/live.json"; }
 retention_startup_references() { jq -cS . "$case_root/startup.json"; }
+retention_startup_revalidate() {
+  [[ "$(retention_hash < "$1")" == "$2" &&
+     "$(retention_startup_references | retention_hash)" == "$2" ]]
+}
 retention_continuity_begin() {
   printf 'begin\n' >> "$case_root/monitor.log"
   if [[ "${image_cleanup_review_temporary:-false}" == true ]]; then

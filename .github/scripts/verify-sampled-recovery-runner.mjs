@@ -56,7 +56,11 @@ try{
     const download=mkdtempSync(join(temp,'.sampled-recovery-source-'));
     gh(['run','download',s.run_id,'--name',`production-image-cleanup-${s.workflow_sha}-${s.run_id}-1`,'--dir',download],120000);
     const operationRaw=readSafe(join(download,'images-only-operation.txt'),8388608);
-    verifyHistoricalProof({proofRaw,proofHash:r.proof_sha256,operationRaw,timelineRaw,alignmentRaw});
+    const priorRecovery=operationRaw.split(/\r?\n/).some(line=>line.startsWith('SAMPLED_RECOVERY_PROOF=')) ? {
+      proofRaw:readSafe(join(download,'images-only-sampled-proof.json'),16384),
+      receiptRaw:readSafe(join(download,'images-only-sampled-proof-verified.json'),4096),
+    } : undefined;
+    verifyHistoricalProof({proofRaw,proofHash:r.proof_sha256,operationRaw,timelineRaw,alignmentRaw,priorRecovery});
     // Neither existing evidence nor an incomplete previous attempt is overwritten.
     writeFileSync(destination,proofRaw,{flag:'wx',mode:0o600});
     writeFileSync(receiptPath,canonical(receipt)+'\n',{flag:'wx',mode:0o600});
