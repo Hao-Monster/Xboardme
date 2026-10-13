@@ -80,6 +80,7 @@ _images_only_supervise() {
   launching=false
   ((interrupted==0)) || exit "$interrupted"
   if wait "$pid" 2>/dev/null; then :; else status=$?; fi
+  printf '%s\n' "$status" > "$root/worker-status" || exit 1
   if kill -0 -- "-$pid" 2>/dev/null; then
     exit 1
   fi
@@ -106,6 +107,36 @@ _images_only_append_container() {
   cat -- "$root/container-snapshot" >> "$root/containers"
 }
 
+# Only fixed phase names and the supervisor's numeric wait status may leave the
+# private directory. Raw Docker/jq stderr remains discarded, including secrets.
+_images_only_failure_diagnostic() {
+  local root=$1 phase=unavailable status=unavailable value bytes nul file
+  file="$root/phase"
+  if [[ -f $file && ! -L $file ]] && bytes=$(stat -c %s -- "$file") &&
+     [[ $bytes =~ ^[0-9]+$ ]] && ((bytes>0 && bytes<=64)); then
+    if IFS= read -r -d '' nul < "$file"; then :; else
+      value=$(< "$file")
+      if ((bytes==${#value}+1)); then
+        case "$value" in
+          container_list|container_snapshot|image_list|image_inspect|image_protocol|image_relist|image_aggregate|final_aggregate|complete)
+            phase=$value ;;
+        esac
+      fi
+    fi
+  fi
+  file="$root/worker-status"
+  if [[ -f $file && ! -L $file ]] && bytes=$(stat -c %s -- "$file") &&
+     [[ $bytes =~ ^[0-9]+$ ]] && ((bytes>0 && bytes<=4)); then
+    if IFS= read -r -d '' nul < "$file"; then :; else
+      value=$(< "$file")
+      if [[ $value =~ ^(0|[1-9][0-9]{0,2})$ ]] && ((value<=255 && bytes==${#value}+1)); then
+        status=$value
+      fi
+    fi
+  fi
+  printf 'IMAGE_INVENTORY_DIAGNOSTIC=phase:%s worker_exit:%s\n' "$phase" "$status" >&2
+}
+
 images_only_inventory_worker() {
   local root=$1 ids id
   # The unchanged container helper resolves this local adapter. Inner metadata
@@ -119,8 +150,10 @@ images_only_inventory_worker() {
     if IFS= read -r -d '' nul < "$root/container-read"; then return 1; fi
     cat -- "$root/container-read"
   )
+  printf 'container_list\n' > "$root/phase" || return 1
   ids=$(docker ps -aq --no-trunc | command sort -u) || return 1
   : > "$root/containers" || return 1
+  printf 'container_snapshot\n' > "$root/phase" || return 1
   while IFS= read -r id; do
     [[ -n $id ]] || continue
     [[ $id =~ ^[a-f0-9]{64}$ ]] || return 1
@@ -130,8 +163,10 @@ images_only_inventory_worker() {
     _images_only_append_container "$root" || return 1
   done <<< "$ids"
   images_only_images_snapshot_worker "$root" > "$root/images" || return 1
+  printf 'final_aggregate\n' > "$root/phase" || return 1
   jq -cnS --slurpfile containers "$root/containers" --slurpfile images "$root/images" \
-    '{containers:($containers|sort_by(.id)),images:$images[0]}'
+    '{containers:($containers|sort_by(.id)),images:$images[0]}' || return 1
+  printf 'complete\n' > "$root/phase"
 }
 
 # Synchronous public entry: preserve the caller's traps and shell options.
@@ -162,7 +197,7 @@ images_only_all_snapshots() (
     # Exact generated filenames only; never recursive cleanup or unknown data.
     rm -f -- "$root/worker" "$root/wire" "$root/accepted" "$root/containers" "$root/images" \
       "$root/list" "$root/raw" "$root/batch" "$root/batches" "$root/final" \
-      "$root/container-read" "$root/container-snapshot" 2>/dev/null || result=1
+      "$root/container-read" "$root/container-snapshot" "$root/phase" "$root/worker-status" 2>/dev/null || result=1
     rmdir -- "$root" 2>/dev/null || result=1
     exit "$result"
   }
@@ -187,7 +222,10 @@ images_only_all_snapshots() (
     if ((end>=start && end-start<=120000)); then code=0; fi
   fi
   supervisor=''
-  if ((code!=0)); then echo 'IMAGE_INVENTORY_FAIL=bounded_snapshot' >&2; fi
+  if ((code!=0)); then
+    _images_only_failure_diagnostic "$root"
+    echo 'IMAGE_INVENTORY_FAIL=bounded_snapshot' >&2
+  fi
   ((code!=0)) || printf '%s\n' "$result"
   return "$code"
 )
@@ -253,6 +291,7 @@ images_only_images_snapshot_worker() (
   _rib_now || { _rib_fail clock; exit 1; }
   start=$now; deadline=$((start+120000))
   : > "$temp/batches" || { _rib_fail temporary_write; exit 1; }
+  printf 'image_list\n' > "$root/phase" || exit 1
   _rib_list || { _rib_fail listing; exit 1; }
   if [[ -n "$ids" ]]; then
     mapfile -t selected <<< "$ids" || { _rib_fail listing_parse; exit 1; }
@@ -266,10 +305,12 @@ images_only_images_snapshot_worker() (
     expected='['
     for id in "${chunk[@]}"; do expected+="\"$id\","; done
     expected=${expected%,}']'
+    printf 'image_inspect\n' > "$root/phase" || exit 1
     _rib_capture 1048576 10000 "$temp/raw" docker image inspect --format "$format" "${chunk[@]}" || {
       _rib_fail inspect; exit 1;
     }
     _rib_budget 5000 || { _rib_fail deadline; exit 1; }
+    printf 'image_protocol\n' > "$root/phase" || exit 1
     # Streaming paths retain duplicate-key evidence that ordinary fromjson loses.
     # Every object is rebuilt only after rejecting duplicate/unknown/nested keys.
     if command timeout --foreground --signal=TERM --kill-after=2s "$duration" jq --stream -nceS --argjson expected "$expected" '
@@ -314,9 +355,11 @@ images_only_images_snapshot_worker() (
       printf '%s\n' "$output" >> "$temp/batches" || { _rib_fail temporary_write; exit 1; }
     done < "$temp/batch" || { _rib_fail temporary_read; exit 1; }
   done
+  printf 'image_relist\n' > "$root/phase" || exit 1
   _rib_list || { _rib_fail relisting; exit 1; }
   [[ "$ids" == "$original_ids" ]] || { _rib_fail inventory_drift; exit 1; }
   _rib_budget 5000 || { _rib_fail deadline; exit 1; }
+  printf 'image_aggregate\n' > "$root/phase" || exit 1
   if command timeout --foreground --signal=TERM --kill-after=2s "$duration" jq -cesS --argjson expected "$all_expected" '
     (add//[])|sort_by(.id)|
     if [.[].id]==($expected|sort) and ([.[].id]|unique|length)==length then . else error("invalid_final_inventory") end
