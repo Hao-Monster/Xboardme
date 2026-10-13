@@ -1,7 +1,7 @@
 // Entirely synthetic historical evidence. Never a production approval.
 import {canonical,sha256,GATE_ORDER} from '../../verify-sampled-recovery-proof.mjs';
 import {LIMITS,CASCADE} from '../../sampled-recovery-trace.mjs';
-export function fixture(){
+export function fixture(options={}){
   const h=n=>n.toString(16).padStart(64,'0'),sh=n=>n.toString(16).padStart(40,'0');
   const hash=x=>sha256(canonical(x)+'\n'),b64=x=>Buffer.from(canonical(x)).toString('base64');
   const images=Array.from({length:7},(_,n)=>({id:'sha256:'+h(n+101),size_bytes:1024,
@@ -12,8 +12,8 @@ export function fixture(){
     config_sha256:h(201),host_config_sha256:h(202),ports:{},networks:{},mounts:[]}));
   const inventory={containers,images},startup={schema_version:1,image_ids:[],revisions:[],digests:[],references:[],files:[],compose_metadata_sha256:h(301)};
   const protection={upstream:'127.0.0.1:7002',containers};
-  const gate={schema_version:2,status:'HOLD',owner_uid:0,session_id:'11111111-1111-4111-8111-111111111111',
-    workflow_sha:sh(50),review_sha256:h(501),active_release_id:'123-1',active_release_sha:sh(1),
+  const gate={schema_version:2,status:'HOLD',owner_uid:0,session_id:options.sessionId??'11111111-1111-4111-8111-111111111111',
+    workflow_sha:options.workflowSha??sh(50),review_sha256:options.reviewHash??h(501),active_release_id:'123-1',active_release_sha:sh(1),
     protection_fingerprint:hash(protection),image_id:images[6].id,baseline_seconds:120,observe_seconds:300,
     sample_interval_seconds:10,started_at_uptime:1000,last_heartbeat_uptime:1200,baseline_started_at_uptime:1020,
     baseline_completed_at_uptime:1141,intent_at_uptime:null,removed_at_uptime:null,observation_completed_at_uptime:null,
@@ -25,6 +25,7 @@ export function fixture(){
     active_state_sha256:audit.active_state_sha256,containers:[],images:[images[6]],inventory,startup};
   const lines=[`IMAGE_REQUEST_REVIEW_SHA256=${gate.review_sha256}`,'IMAGE_REQUEST_MONITORING_MODE=passive_runtime_v1',
     `IMAGE_REQUEST=PASS action=cleanup sha=${gate.workflow_sha}`,'IMAGE_RESTORE_EVIDENCE=PASS mode=passive_runtime_v1'];
+  if(options.priorProofHash)lines.push(`SAMPLED_RECOVERY_PROOF=PASS proof_sha256=${options.priorProofHash} historical_only=true`);
   const fields={SCHEMA:'1',WORKFLOW_SHA:gate.workflow_sha,ACTIVE_RELEASE_ID:gate.active_release_id,ACTIVE_REVISION:gate.active_release_sha,
     ACTIVE_STATE_SHA256:audit.active_state_sha256,ACTIVE_UPSTREAM:protection.upstream,TRAFFIC_STATE:'finalized',ROLLBACK_SUPPORTED:'false',
     RESOURCE_FINGERPRINT:audit.resource_fingerprint,INVENTORY_SHA256:audit.inventory_sha256,CONTAINER_COUNT:'6',IMAGE_COUNT:'7',
@@ -49,7 +50,7 @@ export function fixture(){
     cpu_some_avg10:20.34,cpu_busy_percent:10,cpu_iowait_percent:0,thresholds:LIMITS,violations:['max_cpu_some_avg10']}),190000);
   CASCADE.forEach((line,n)=>event(line,190500+n*500));
   const operationRaw=lines.join('\n')+'\n';
-  const source={repository:'Hao-Monster/Xboardme',run_id:'123456',run_attempt:1,workflow_sha:gate.workflow_sha,
+  const source={repository:'Hao-Monster/Xboardme',run_id:options.runId??'123456',run_attempt:1,workflow_sha:gate.workflow_sha,
     event:'workflow_dispatch',branch:'main',conclusion:'failure',raw_workflow_log_sha256:h(801),operation_artifact_sha256:sha256(operationRaw)};
   const alignmentRaw=canonical({schema_version:1,purpose:'github_masked_non_event_alignment',repository:source.repository,run_id:source.run_id,
     run_attempt:1,raw_workflow_log_sha256:source.raw_workflow_log_sha256,operation_artifact_sha256:source.operation_artifact_sha256,
@@ -62,4 +63,15 @@ export function fixture(){
     trace:{sample_uptimes:Array.from({length:19},(_,n)=>1020+n*10),baseline_after_samples:13,baseline_wall_nanoseconds:'121100000000'}};
   const proofRaw=canonical(proof)+'\n',proofHash=sha256(proofRaw);
   return {proofRaw,proofHash,operationRaw,timelineRaw,alignmentRaw,proof,inventory,plan};
+}
+
+export function recoveryFixture(){
+  const prior=fixture();
+  const current=fixture({workflowSha:'b'.repeat(40),runId:'234567',reviewHash:'c'.repeat(64),
+    sessionId:'22222222-2222-4222-8222-222222222222',priorProofHash:prior.proofHash});
+  current.priorRecovery={proofRaw:prior.proofRaw,receiptRaw:canonical({schema_version:1,result:'PASS',
+    proof_sha256:prior.proofHash,workflow_sha:current.proof.source.workflow_sha,run_id:current.proof.source.run_id,
+    run_attempt:1,review_sha256:current.proof.gate.review_sha256,source_run_id:prior.proof.source.run_id,
+    source_run_attempt:1,source_workflow_sha:prior.proof.source.workflow_sha})+'\n'};
+  return current;
 }

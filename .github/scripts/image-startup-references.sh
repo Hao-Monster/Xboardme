@@ -139,11 +139,10 @@ _ris_yaml_values() {
   done < "$file"
 }
 
-retention_startup_references() (
-  set -o pipefail
-  local root path directory found files='' metadata selected working config id size sum=0 count=0
-  local value key values line hash after records='' raw_values='' refs='' revisions='' ids='' metadata_hash
-  local canonical files_json refs_json revisions_json ids_json record
+# Shared discovery, not a cached file list. Callers run in a subshell so these
+# three outputs cannot leak into the streamed executor's other helpers.
+_ris_discover_inputs() {
+  local root path directory found files='' metadata selected working config values line canonical metadata_hash
   local -a configs=()
   [[ -n "${workdir:-}" && "$workdir" == /* && ! -L "$workdir" &&
      "${XBOARD_ANCHOR_CONTAINER:-}" =~ ^[a-f0-9]{12,64}$ ]] || return 1
@@ -191,6 +190,17 @@ retention_startup_references() (
   done
   files=$(printf '%s\n' "$files" | _ris_run sed '/^$/d' | _ris_run sort -u) || return 1
   [[ -n "$files" ]] || return 1
+  _RIS_ROOT=$root
+  _RIS_FILES=$files
+  _RIS_METADATA_HASH=$metadata_hash
+}
+
+retention_startup_references() (
+  set -o pipefail
+  local root path files size sum=0 count=0 value key values hash after records='' raw_values=''
+  local refs='' revisions='' ids='' metadata_hash canonical files_json refs_json revisions_json ids_json record
+  _ris_discover_inputs || return 1
+  root=$_RIS_ROOT; files=$_RIS_FILES; metadata_hash=$_RIS_METADATA_HASH
   while IFS= read -r path; do
     ((count+=1)); ((count<=256)) || return 1
     [[ -f "$path" && ! -L "$path" && "$path" == "$root/"* ]] || return 1
@@ -246,4 +256,78 @@ retention_startup_references() (
     '{schema_version:1,files:$files,compose_metadata_sha256:$metadata,image_ids:$ids,revisions:$revisions,
       digests:([$references[]|select(contains("@sha256:"))|sub(":[^/:@]+@sha256:";"@sha256:")]|unique),
       references:$references}'
+)
+
+# The first locked audit still fully parses all inputs above. Repeated checks
+# can prove the same result without reparsing identical bytes or starting
+# thousands of short-lived processes. Every pass rediscovers the complete file
+# set and Compose metadata; no mtime-only cache or failed-check fallback exists.
+retention_startup_revalidate() (
+  set -o pipefail
+  local expected=$1 expected_hash=$2 paths checksums metadata path dependency canonical sizes size sum pass
+  local hashes identities initial_identities='' total expected_raw expected_size current_hash
+  local -a selected=() lengths=()
+  [[ "$expected_hash" =~ ^[a-f0-9]{64}$ && -f "$expected" && ! -L "$expected" ]] || return 1
+  [[ "$(_ris_hash_file "$expected")" == "$expected_hash" ]] || return 1
+  expected_size=$(_ris_run stat -c %s -- "$expected") || return 1
+  [[ "$expected_size" =~ ^[0-9]{1,9}$ ]] && ((expected_size>0 && expected_size<=8388608)) || return 1
+  # Bind the bytes actually consumed, not just the pathname before/after reads.
+  # The sentinel preserves trailing newlines removed by command substitution.
+  expected_raw=$(_ris_run head -c 8388609 -- "$expected" && printf '.') || return 1
+  expected_raw=${expected_raw%.}
+  current_hash=$(printf '%s' "$expected_raw" | _ris_run sha256sum) || return 1
+  [[ "${current_hash%% *}" == "$expected_hash" ]] || return 1
+  _ris_run jq -e 'type=="object" and .schema_version==1 and
+    (.compose_metadata_sha256|type=="string" and test("^[a-f0-9]{64}$")) and
+    (.files|type=="array" and length>0 and length<=256 and .==sort_by(.path) and
+      all(.[];(.path|type=="string" and startswith("/") and (test("[[:cntrl:]\\\\]")|not)) and
+        (.sha256|type=="string" and test("^[a-f0-9]{64}$"))) and
+      ([.[].path]|length==(unique|length)))' <<< "$expected_raw" >/dev/null || return 1
+  paths=$(_ris_run jq -r '.files[].path' <<< "$expected_raw") || return 1
+  checksums=$(_ris_run jq -r '.files[]|.sha256+"  "+.path' <<< "$expected_raw") || return 1
+  metadata=$(_ris_run jq -er .compose_metadata_sha256 <<< "$expected_raw") || return 1
+  mapfile -t selected <<< "$paths"
+  total=${#selected[@]}
+  for pass in 1 2 3; do
+    _ris_discover_inputs || return 1
+    [[ "$_RIS_METADATA_HASH" == "$metadata" ]] || return 1
+    _ris_run jq -e --arg paths "$_RIS_FILES" \
+      '([.files[].path]|sort)==($paths|split("\n")|sort)' <<< "$expected_raw" >/dev/null || return 1
+    for path in "${selected[@]}"; do
+      [[ "$path" == "$_RIS_ROOT/"* && -f "$path" && ! -L "$path" ]] || return 1
+      # The parser can also read these dotenv candidates. Do not reuse a
+      # manifest that omitted one, including a newly created indirect input.
+      if [[ "$path" == *.yaml || "$path" == *.yml ]]; then
+        for dependency in "${path%/*}/runtime.env" "${path%/*}/.env" "$_RIS_ROOT/.env"; do
+          [[ -e "$dependency" || -L "$dependency" ]] || continue
+          [[ -f "$dependency" && ! -L "$dependency" &&
+             $'\n'"$paths"$'\n' == *$'\n'"$dependency"$'\n'* ]] || return 1
+        done
+      fi
+    done
+    canonical=$(_ris_run realpath -e -- "${selected[@]}") || return 1
+    [[ "$canonical" == "$paths" ]] || return 1
+    sizes=$(_ris_run stat -c %s -- "${selected[@]}") || return 1
+    mapfile -t lengths <<< "$sizes"
+    ((${#lengths[@]}==total)) || return 1
+    sum=0
+    for size in "${lengths[@]}"; do
+      [[ "$size" =~ ^[0-9]{1,9}$ ]] && ((size<=262144)) || return 1
+      sum=$((sum+size)); ((sum<=8388608)) || return 1
+    done
+    identities=$(_ris_run stat -c '%d:%i:%s:%y:%z' -- "${selected[@]}") || return 1
+    if [[ "$pass" == 1 ]]; then initial_identities=$identities
+    else [[ "$identities" == "$initial_identities" ]] || return 1; fi
+    if ((pass<3)); then
+      hashes=$(_ris_run sha256sum -- "${selected[@]}") || return 1
+      [[ "$hashes" == "$checksums" ]] || return 1
+    fi
+  done
+  # Pass three rechecks discovery/dependencies after the second hash read.
+  # Reject a replacement during that read, as well as a changed baseline.
+  identities=$(_ris_run stat -c '%d:%i:%s:%y:%z' -- "${selected[@]}") || return 1
+  canonical=$(_ris_run realpath -e -- "${selected[@]}") || return 1
+  current_hash=$(_ris_hash_file "$expected") || return 1
+  [[ "$identities" == "$initial_identities" && "$canonical" == "$paths" &&
+     ! -L "$expected" && "$current_hash" == "$expected_hash" ]] || return 1
 )

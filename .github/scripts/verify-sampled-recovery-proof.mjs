@@ -151,14 +151,37 @@ function verifyAlignment(raw, p, lines, timeline) {
     seen.add(e.operation_line);
   }
 }
-export function verifyHistoricalProof({proofRaw,proofHash,operationRaw,timelineRaw,alignmentRaw}) {
+function validatePriorRecovery(context, current) {
+  if (context === undefined) return undefined;
+  check(exact(context,['proofRaw','receiptRaw']) && typeof context.proofRaw === 'string' &&
+    Buffer.byteLength(context.proofRaw) <= 16384 && typeof context.receiptRaw === 'string' &&
+    Buffer.byteLength(context.receiptRaw) <= 4096, 'prior_recovery_bytes');
+  const priorHash=sha256(context.proofRaw), prior=validateProof(context.proofRaw,priorHash);
+  const receipt=strictJson(context.receiptRaw);
+  check(context.receiptRaw === canonical(receipt)+'\n' && exact(receipt,['schema_version','result','proof_sha256',
+    'review_sha256','workflow_sha','run_id','run_attempt','source_run_id','source_run_attempt','source_workflow_sha']) &&
+    receipt.schema_version === 1 && receipt.result === 'PASS' && receipt.proof_sha256 === priorHash &&
+    receipt.review_sha256 === current.gate.review_sha256 && receipt.workflow_sha === current.source.workflow_sha &&
+    receipt.run_id === current.source.run_id && receipt.run_attempt === current.source.run_attempt &&
+    receipt.source_run_id === prior.source.run_id && receipt.source_run_attempt === prior.source.run_attempt &&
+    receipt.source_workflow_sha === prior.source.workflow_sha, 'prior_receipt_binding');
+  // The receipt is from the failed run being verified, not this verifier's run.
+  // It attests only to the previous proof; current gate/trace checks stay intact.
+  check(prior.source.run_id !== current.source.run_id && prior.source.workflow_sha !== current.source.workflow_sha &&
+    prior.gate.session_id !== current.gate.session_id &&
+    ['image_id','active_release_id','active_release_sha','protection_fingerprint'].every(k=>prior.gate[k] === current.gate[k]) &&
+    prior.audit.resource_fingerprint === current.audit.resource_fingerprint, 'prior_recovery_identity');
+  return priorHash;
+}
+export function verifyHistoricalProof({proofRaw,proofHash,operationRaw,timelineRaw,alignmentRaw,priorRecovery}) {
   const p=validateProof(proofRaw,proofHash);
   check(typeof operationRaw==='string' && Buffer.byteLength(operationRaw)<=8388608 &&
     sha256(operationRaw)===p.source.operation_artifact_sha256 && typeof timelineRaw==='string' &&
     Buffer.byteLength(timelineRaw)<=65536 && sha256(timelineRaw)===p.source.timeline_sha256 &&
     typeof alignmentRaw==='string' && Buffer.byteLength(alignmentRaw)<=65536, 'source_bytes');
   const {timeline_sha256:unused,...source}=p.source;
-  const trace=traceEvidence(operationRaw,timelineRaw,source);
+  const priorHash=validatePriorRecovery(priorRecovery,p);
+  const trace=traceEvidence(operationRaw,timelineRaw,source,priorHash);
   const audit=parseCompleteAudit(operationRaw,p);
   if(audit.lines.at(-1)==='')audit.lines.pop();
   verifyAlignment(alignmentRaw,p,audit.lines,strictJson(timelineRaw));

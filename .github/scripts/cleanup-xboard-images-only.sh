@@ -16,7 +16,7 @@ review_file=${RETENTION_REVIEW_FILE:-${review_file:-}}
 
 for helper in retention_images_review_validate retention_images_review_fresh retention_images_review_load retention_hash \
   retention_image_snapshot retention_container_snapshot images_only_all_snapshots retention_image_eligible \
-  retention_inventory_within_plan retention_live_protection retention_startup_references \
+  retention_inventory_within_plan retention_live_protection retention_startup_revalidate \
   retention_continuity_begin retention_continuity_check retention_continuity_intent \
   retention_continuity_observe retention_continuity_complete retention_continuity_hold; do
   declare -F "$helper" >/dev/null || image_cleanup_fail "missing_helper:$helper"
@@ -181,7 +181,8 @@ image_cleanup_track_temporary "$image_cleanup_temporary" .image-cleanup-plan. ||
 chmod 600 "$image_cleanup_current" "$image_cleanup_temporary"
 
 image_cleanup_check_fixed() {
-  local protection startup
+  local protection started=$SECONDS
+  echo 'IMAGE_CLEANUP_PHASE=fixed_check status=start'
   image_cleanup_assert_lock || return 1
   if [[ -n "$image_cleanup_plan_hash" ]]; then
     [[ -f "$image_cleanup_plan" && ! -L "$image_cleanup_plan" &&
@@ -193,8 +194,12 @@ image_cleanup_check_fixed() {
   [[ "$(retention_hash < "$active_state_file")" == "$image_cleanup_original_state_hash" ]] || { image_cleanup_fail active_state_changed; return 1; }
   protection=$(retention_live_protection) || { image_cleanup_fail live_protection_invalid; return 1; }
   [[ "$(printf '%s\n' "$protection" | retention_hash)" == "$image_cleanup_protection_hash" ]] || { image_cleanup_fail protected_resources_changed; return 1; }
-  startup=$(retention_startup_references) || { image_cleanup_fail startup_inspection_failed; return 1; }
-  [[ "$(printf '%s\n' "$startup" | retention_hash)" == "$image_cleanup_startup_hash" ]] || { image_cleanup_fail startup_references_changed; return 1; }
+  printf 'IMAGE_CLEANUP_PHASE=live_protection status=pass seconds=%s\n' "$((SECONDS-started))"
+  started=$SECONDS
+  retention_startup_revalidate "$retention_startup_file" "$image_cleanup_startup_hash" || {
+    image_cleanup_fail startup_references_changed; return 1;
+  }
+  printf 'IMAGE_CLEANUP_PHASE=startup_revalidate status=pass seconds=%s\n' "$((SECONDS-started))"
 }
 image_cleanup_check_containers() {
   local ids id snapshots='' snapshot current
@@ -231,6 +236,8 @@ image_cleanup_check_target() {
   image_cleanup_target=$snapshot
 }
 image_cleanup_check_inventory() {
+  local started=$SECONDS
+  echo 'IMAGE_CLEANUP_PHASE=inventory status=start'
   images_only_all_snapshots > "$image_cleanup_current" || { image_cleanup_fail inventory_read_failed; return 1; }
   if [[ "$image_cleanup_intent_recorded" == false ]]; then
     if [[ -n "$image_cleanup_plan_hash" ]]; then
@@ -245,6 +252,7 @@ image_cleanup_check_inventory() {
       image_cleanup_fail inventory_outside_reviewed_plan; return 1;
     }
   fi
+  printf 'IMAGE_CLEANUP_PHASE=inventory status=pass seconds=%s\n' "$((SECONDS-started))"
 }
 
 image_cleanup_check_fixed

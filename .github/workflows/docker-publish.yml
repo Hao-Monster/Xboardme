@@ -434,6 +434,7 @@ jobs:
           bash .github/scripts/test-retention-timeout.sh
           bash .github/scripts/test-images-only-approval.sh
           bash .github/scripts/test-image-startup-references.sh
+          bash .github/scripts/test-image-startup-revalidation.sh
           bash .github/scripts/test-verify-images-only-request.sh
           bash .github/scripts/test-retention-continuity.sh
           bash .github/scripts/test-passive-image-monitoring.sh
