@@ -865,10 +865,13 @@ class PublicationTests(unittest.TestCase):
 
 
 class SourceContractTests(unittest.TestCase):
-    def test_original_safety_inventory_and_harness_unchanged(self):
+    def test_reviewed_safety_inventory_and_harness_are_pinned(self):
         import hashlib
+        # Inventory identity includes the reviewed fixed-phase/exit diagnostics.
+        # The safety and benchmark harness pins remain unchanged; do not replace
+        # these exact byte assertions with dynamically calculated expectations.
         hashes = {'test-image-inventory-docker.py': '485534124d2bde63308b0df959b2f1a1877cfcc5225c2cbe58e8fab0b865d818',
-                  'images-only-inventory.sh': '94012936a626f1f7b59a6ebc0ec5c7500897d6a2513e0c83563917cb1b182146',
+                  'images-only-inventory.sh': '82b5a1397f75d3971f05f0281b374fa531d0846c6b9daeb37b2587cdae235200',
                   'retention-safety.sh': '92e4ae6310727b9557cde03a974915a3fac07f2a8b4fa0532c1644d4dd4ea89b'}
         for name, wanted in hashes.items():
             with self.subTest(name=name):

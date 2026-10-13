@@ -44,7 +44,9 @@ run_case() {
     [[ $expected == pass ]] || { echo "UNEXPECTED_PASS=$mode"; return 1; }
   else
     [[ $expected == fail && ! -s $root/output ]] || { echo "UNEXPECTED_FAIL=$mode"; cat "$root/error"; return 1; }
-    [[ $(< "$root/error") == IMAGE_INVENTORY_FAIL=bounded_snapshot ]]
+    grep -Fxq 'IMAGE_INVENTORY_FAIL=bounded_snapshot' "$root/error"
+    grep -Eq '^IMAGE_INVENTORY_DIAGNOSTIC=phase:[a-z_]+ worker_exit:([0-9]+|unavailable)$' "$root/error"
+    [[ $(wc -l < "$root/error") == 2 ]]
   fi
   ! grep -Eq 'SECRET_CANARY|Config|Env|unrelated.secret' "$root/output" "$root/error"
   cases=$((cases+1))
@@ -242,4 +244,35 @@ head -c 1048577 /dev/zero > "$root/container-cap/container-snapshot"
 if _images_only_append_container "$root/container-cap"; then echo CONTAINER_RECORD_CAP_UNEXPECTED_PASS; exit 1; fi
 [[ ! -s $root/container-cap/containers ]]
 cases=$((cases+2))
+# Failure diagnostics are fixed scalars, never worker stderr or metadata.
+# The real fixture/parser/watchdog cases above remain unchanged.
+original_inventory_worker=$(declare -f images_only_inventory_worker)
+images_only_inventory_worker() {
+  case "$IMAGE_INVENTORY_DIAGNOSTIC_FIXTURE" in
+    known) printf 'image_protocol\n' > "$1/phase" ;;
+    invalid) printf 'SECRET_DIAGNOSTIC_CANARY\n' > "$1/phase" ;;
+    multiple) printf 'image_protocol\nSECRET_DIAGNOSTIC_CANARY\n' > "$1/phase" ;;
+    nul) printf 'image_protocol\000\n' > "$1/phase" ;;
+    oversized) printf '%080d\n' 0 > "$1/phase" ;;
+    missing) : ;;
+    *) return 99 ;;
+  esac
+  printf 'SECRET_WORKER_STDERR_CANARY\n' >&2
+  return 7
+}
+for diagnostic_fixture in known invalid multiple nul oversized missing; do
+  export IMAGE_INVENTORY_DIAGNOSTIC_FIXTURE=$diagnostic_fixture
+  if images_only_all_snapshots > "$root/diagnostic-output" 2> "$root/diagnostic-error"; then
+    echo DIAGNOSTIC_UNEXPECTED_PASS; exit 1
+  fi
+  [[ ! -s "$root/diagnostic-output" ]]
+  diagnostic_phase=unavailable
+  [[ $diagnostic_fixture != known ]] || diagnostic_phase=image_protocol
+  grep -Fxq "IMAGE_INVENTORY_DIAGNOSTIC=phase:$diagnostic_phase worker_exit:7" "$root/diagnostic-error"
+  grep -Fxq 'IMAGE_INVENTORY_FAIL=bounded_snapshot' "$root/diagnostic-error"
+  ! grep -q SECRET "$root/diagnostic-error"
+  cases=$((cases+1))
+done
+unset IMAGE_INVENTORY_DIAGNOSTIC_FIXTURE
+eval "$original_inventory_worker"
 printf 'IMAGE_INVENTORY_TEST=PASS cases=%s full_images=146 full_containers=24 real_docker=NOT_RUN production=NOT_RUN\n' "$cases"

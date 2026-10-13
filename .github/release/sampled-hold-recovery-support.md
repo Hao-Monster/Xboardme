@@ -69,6 +69,16 @@ strict protocol parsing; partial/late/nonzero/residual-group results are rejecte
 This is a software timeout for fixed non-detaching tools, not a hard-real-time
 guarantee under uninterruptible kernel work or host failure.
 
+Failed snapshots additionally report a fixed phase enum and the worker's numeric
+wait status. These two private scalar files are removed by the existing exact
+temporary-file cleanup. Raw Docker/jq stderr, configuration, container IDs and
+environment values are not diagnostic output. Missing, invalid, multiline,
+oversized or NUL-bearing diagnostic values become `unavailable`; they never
+change a failed snapshot into success. The original deadlines, output caps,
+protocol validation and process-group cleanup remain unchanged. This enables a
+single reviewed read-only gate audit to locate a real host inventory failure;
+it neither retries that failure nor grants cleanup or HOLD-recovery authority.
+
 `Image Inventory CI` uses a dedicated GitHub-hosted Docker daemon with no
 production environment or credentials. Correctness uses 146 synthetic images
 and 24 created, never-started containers and compares complete global snapshots.
