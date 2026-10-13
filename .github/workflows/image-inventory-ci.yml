@@ -9,6 +9,10 @@ on:
         description: Run the long, separately opted-in comparative CI benchmark
         type: boolean
         default: false
+      diagnostic:
+        description: Run one main-only stage diagnostic without benchmark admission
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,7 +21,7 @@ jobs:
   inventory-correctness:
     if: >-
       github.repository == 'Hao-Monster/Xboardme' &&
-      (github.event_name == 'workflow_dispatch' && !inputs.benchmark ||
+      (github.event_name == 'workflow_dispatch' && !inputs.benchmark && !inputs.diagnostic ||
        github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -38,6 +42,8 @@ jobs:
         env:
           IMAGE_INVENTORY_CI_ALLOW_LOCAL: correctness
         run: python3 -B .github/scripts/test-image-inventory-docker.py
+      - name: Offline diagnostic coordinator and owned-process regressions
+        run: python3 -B .github/scripts/test-image-inventory-diagnostic.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -49,7 +55,7 @@ jobs:
   inventory-benchmark:
     if: >-
       github.repository == 'Hao-Monster/Xboardme' &&
-      github.event_name == 'workflow_dispatch' && inputs.benchmark &&
+      github.event_name == 'workflow_dispatch' && inputs.benchmark && !inputs.diagnostic &&
       github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 70
@@ -78,5 +84,48 @@ jobs:
             ${{ runner.temp }}/image-inventory-ci-results/summary.json
             ${{ runner.temp }}/image-inventory-ci-results/preparation.json
             ${{ runner.temp }}/image-inventory-ci-results/episode-*.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  reject-invalid-diagnostic:
+    if: >-
+      github.repository == 'Hao-Monster/Xboardme' &&
+      github.event_name == 'workflow_dispatch' && inputs.diagnostic &&
+      (inputs.benchmark || github.ref != 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Reject conflicting or non-main diagnostic input
+        run: exit 2
+
+  inventory-diagnostic:
+    if: >-
+      github.repository == 'Hao-Monster/Xboardme' &&
+      github.event_name == 'workflow_dispatch' && inputs.diagnostic && !inputs.benchmark &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # No pre-tests or Docker steps before the coordinator's first trace.
+    # No services, production environment/secrets, or id-token permission.
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          persist-credentials: false
+      - name: Fixed same-runner diagnostic with exact-owned recovery
+        env:
+          IMAGE_INVENTORY_CI_ALLOW_LOCAL: diagnostic
+          IMAGE_INVENTORY_CI_DIAGNOSTIC: ${{ inputs.diagnostic }}
+          IMAGE_INVENTORY_CI_BENCHMARK: ${{ inputs.benchmark }}
+        run: python3 -B .github/scripts/image-inventory-diagnostic.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-inventory-diagnostic-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/image-inventory-diagnostic-results/summary.json
+            ${{ runner.temp }}/image-inventory-diagnostic-results/trace-*.json
+            ${{ runner.temp }}/image-inventory-diagnostic-results/completion.json
           if-no-files-found: warn
           retention-days: 14

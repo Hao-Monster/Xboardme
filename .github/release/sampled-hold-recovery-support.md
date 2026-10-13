@@ -113,6 +113,96 @@ attribute that failure to fixture creation nor retroactively turn it green.
 A future successful run establishes only that run's CI conditions, not production
 cleanup authority, available capacity or uninterrupted public service.
 
+### One same-runner stage diagnostic
+
+The separate `diagnostic` dispatch input selects an exact-main-only job and is
+mutually exclusive with `benchmark`; selecting both fails without fixture work.
+No production environment, secrets, id-token, services or Docker override is
+available. The original correctness and benchmark harness paths are unchanged.
+The correctness job additionally runs the offline diagnostic regression suite
+after its original real-Docker correctness step, on that job's own runner.
+
+The diagnostic coordinator records checkout/workflow SHA and exact source
+hashes, then runs one fixed 60-second trace **before any project test or Docker
+call**. It runs the three original parser/watchdog, supervisor self-test and
+CI-boundary commands in the existing order, takes a second fixed trace, invokes
+the unchanged guarded fixture setup/correctness, then takes a third fixed trace.
+The fixture remains 146 images and 24 created-never-started containers. There
+are no benchmark observers, benchmark preparation, snapshot episodes, added
+waits, replacement points, retries, cache flushes or automatically chained runs.
+
+Each trace reuses the preparation source validator but has independent CPU
+history: seven slots at 0/10/20/30/40/50/60, actual start/end within one second,
+and a 65-second sampling envelope. Every original LIMIT violation remains
+visible; it is a diagnostic observation, not an admission failure in this
+synthetic-only path. Source, type, clock, timing or globally regressing PSI
+totals stop new workloads and retain partial evidence. Each of the five
+workloads has mandatory before/after scalar readings and total-usec deltas.
+Those intervals explicitly lack continuous ten-second sampling. Nonzero stall
+increments are raw measurements, not a newly invented acceptance threshold.
+
+All guard/identity reads, normal phases and pre-teardown evidence publication
+share immutable `D=start+900s`, including post-write checks. The unchanged exact
+owned teardown has its separate 300-second recovery allowance; resetting the
+harness deadline cannot extend D. A further independent 60-second final window
+covers all final trace/summary/receipt writes. The job timeout is 25 minutes.
+
+Pre-tests keep the original bounded subprocess supervisor and add a CI-only
+Linux subreaper boundary for their nested test sessions. It reads only its
+own direct-child list, with bounded reads/counts and
+PID/starttime validation plus identity-bound pidfd signals; lack of pidfd
+support rejects the diagnostic. No global process scan or broad kill occurs.
+For actual outer budget B, absolute work/recovery deadlines are calculated
+before Python startup at outer-start+B-8 and outer-start+B-3. This reserves five
+seconds for exact-owned reaping before the original supervisor's B-2 TERM and
+B-1 KILL fallback. On first entering recovery its effective end is the earlier
+of the absolute recovery deadline and recovery-start+5 seconds; early failures
+cannot borrow unused work time, and repeated signals never renew it. Control
+file preparation is also deducted from the outer supervisor's remaining budget.
+An invalid new child identity fails the command but does not bypass bounded
+recovery of other already identity-bound owned children. Nonleader-thread
+descendants are recovered by killing their
+known parent and repeatedly discovering newly adopted own children. It does not
+inspect grandchildren still managed by a live intermediate parent or claim to
+measure whole-tree concurrency; the 256 limit bounds simultaneously tracked
+direct/adopted children. Normal
+completion with residual descendants is failure. Cancellation latches and an
+owned one-byte signal file preserve the recovery allowance, including the
+Popen registration window; repeated signals cannot interrupt owned recovery.
+SIGKILL, kernel stalls and runner loss are not hard-real-time guarantees.
+The test fallback likewise records original PID/starttime, requires current
+ownership by the test's own subreaper before and after pidfd binding, and never
+signals a reused PID or another parent's process. A numeric PID alone is not
+proof of test ownership or of a surviving original process.
+
+Publication uses a separate bounded writer with atomic replacement and a
+128-KiB per-file cap. The disk summary deliberately says
+`PENDING_FINAL_PUBLICATION_STATUS`: it cannot certify its own completed write.
+`completion.json` binds that summary's hash, but is provisional and must be
+combined with the coordinator's zero exit and the successful terminal job.
+A missing/late/failed receipt, nonzero exit or failed job is incomplete even
+if the available traces contain a complete sampling sequence. Final console
+status reports the measured final-window result. No raw command output,
+command line, host path, environment or Docker inventory is published.
+
+Only three complete source/timing-valid traces, all five complete workload
+boundaries, globally nondecreasing PSI totals, valid D and successful exact
+owned teardown permit stage classification. Otherwise the result remains
+`UNRESOLVED_INVALID_OR_INCOMPLETE`. For exceeded booleans A/B/C corresponding to
+before-tests/after-tests/after-fixture, the first true position maps to
+`BASELINE_LIMIT_EXCEEDED`, `FIRST_EXCEEDANCE_AFTER_TESTS` or
+`FIRST_EXCEEDANCE_AFTER_FIXTURE`; all false is
+`UNRESOLVED_NO_SAMPLED_LIMIT_EXCEEDANCE`. Always retain the entire pattern,
+per-LIMIT indices, raw valid rows, and all six intervals per trace.
+
+The artifact is exclusively `DIAGNOSTIC_ONLY_NO_ADMISSION`, not the seven-file
+benchmark artifact and not production health. Extra traces change runner age
+and pressure history, so stage association is not process causality or an
+exact replay of failed benchmarks `38314674406` / `38319726963`. Neither old
+failure is rewritten. A subsequent proposal needs a new falsifiable fact and
+the concrete decision it changes; this path does not authorize repeated runs,
+production cleanup, deployment, or purchase of different infrastructure.
+
 ## Verification and remaining production gates
 
 Run the pure Node proof tests, real Linux runner/receipt tests (local gh
