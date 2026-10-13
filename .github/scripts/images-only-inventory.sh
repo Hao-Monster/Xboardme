@@ -111,6 +111,8 @@ _images_only_append_container() {
 # private directory. Raw Docker/jq stderr remains discarded, including secrets.
 _images_only_failure_diagnostic() {
   local root=$1 phase=unavailable status=unavailable value bytes nul file
+  local capture_reason=unavailable upstream=unavailable sink=unavailable worker_reason=unavailable
+  local batch_index=unavailable batch_count=unavailable reason candidate_upstream candidate_sink
   file="$root/phase"
   if [[ -f $file && ! -L $file ]] && bytes=$(stat -c %s -- "$file") &&
      [[ $bytes =~ ^[0-9]+$ ]] && ((bytes>0 && bytes<=64)); then
@@ -134,7 +136,52 @@ _images_only_failure_diagnostic() {
       fi
     fi
   fi
-  printf 'IMAGE_INVENTORY_DIAGNOSTIC=phase:%s worker_exit:%s\n' "$phase" "$status" >&2
+  file="$root/capture-diagnostic"
+  if [[ -f $file && ! -L $file ]] && bytes=$(stat -c %s -- "$file") &&
+     [[ $bytes =~ ^[0-9]+$ ]] && ((bytes>0 && bytes<=128)); then
+    if IFS= read -r -d '' nul < "$file"; then :; else
+      value=$(< "$file")
+      if ((bytes==${#value}+1)) &&
+         [[ $value =~ ^([a-z_]+)\ (unavailable|0|[1-9][0-9]{0,2})\ (unavailable|0|[1-9][0-9]{0,2})$ ]]; then
+        reason=${BASH_REMATCH[1]}; candidate_upstream=${BASH_REMATCH[2]}; candidate_sink=${BASH_REMATCH[3]}
+        if { [[ $candidate_upstream == unavailable ]] || ((candidate_upstream<=255)); } &&
+           { [[ $candidate_sink == unavailable ]] || ((candidate_sink<=255)); }; then
+          case "$reason" in
+            clock_unavailable|budget_exhausted|capture_stat_failed|capture_size_invalid|output_cap_exceeded|sink_nonzero|upstream_nonzero|output_nul|deadline_exceeded)
+              capture_reason=$reason; upstream=$candidate_upstream; sink=$candidate_sink ;;
+          esac
+        fi
+      fi
+    fi
+  fi
+  file="$root/worker-reason"
+  if [[ -f $file && ! -L $file ]] && bytes=$(stat -c %s -- "$file") &&
+     [[ $bytes =~ ^[0-9]+$ ]] && ((bytes>0 && bytes<=64)); then
+    if IFS= read -r -d '' nul < "$file"; then :; else
+      value=$(< "$file")
+      if ((bytes==${#value}+1)); then
+        case "$value" in
+          clock|temporary_write|listing|listing_parse|inspect|deadline|protocol|temporary_read|relisting|inventory_drift|aggregation)
+            worker_reason=$value ;;
+        esac
+      fi
+    fi
+  fi
+  file="$root/capture-batch"
+  if [[ -f $file && ! -L $file ]] && bytes=$(stat -c %s -- "$file") &&
+     [[ $bytes =~ ^[0-9]+$ ]] && ((bytes>0 && bytes<=6)); then
+    if IFS= read -r -d '' nul < "$file"; then :; else
+      value=$(< "$file")
+      if ((bytes==${#value}+1)) && [[ $value =~ ^(0|[1-9]|1[0-6])\ (0|[1-9]|1[0-6])$ ]]; then
+        if [[ ${BASH_REMATCH[1]} == 0 && ${BASH_REMATCH[2]} == 0 ]] ||
+           [[ ${BASH_REMATCH[1]} != 0 && ${BASH_REMATCH[2]} != 0 ]]; then
+          batch_index=${BASH_REMATCH[1]}; batch_count=${BASH_REMATCH[2]}
+        fi
+      fi
+    fi
+  fi
+  printf 'IMAGE_INVENTORY_DIAGNOSTIC=phase:%s worker_exit:%s capture_reason:%s upstream_exit:%s sink_exit:%s worker_reason:%s batch_index:%s batch_count:%s\n' \
+    "$phase" "$status" "$capture_reason" "$upstream" "$sink" "$worker_reason" "$batch_index" "$batch_count" >&2
 }
 
 images_only_inventory_worker() {
@@ -197,7 +244,8 @@ images_only_all_snapshots() (
     # Exact generated filenames only; never recursive cleanup or unknown data.
     rm -f -- "$root/worker" "$root/wire" "$root/accepted" "$root/containers" "$root/images" \
       "$root/list" "$root/raw" "$root/batch" "$root/batches" "$root/final" \
-      "$root/container-read" "$root/container-snapshot" "$root/phase" "$root/worker-status" 2>/dev/null || result=1
+      "$root/container-read" "$root/container-snapshot" "$root/phase" "$root/worker-status" \
+      "$root/capture-diagnostic" "$root/worker-reason" "$root/capture-batch" 2>/dev/null || result=1
     rmdir -- "$root" 2>/dev/null || result=1
     exit "$result"
   }
@@ -236,9 +284,13 @@ images_only_images_snapshot_worker() (
   export LC_ALL=C
   umask 077
   local root=$1 temp=$1 start deadline now duration output size
-  local ids='' after='' id expected='' all_expected='' batches='' result='' position
+  local ids='' after='' id expected='' all_expected='' batches='' result='' position budget_failure=unavailable
   local -a selected=() chunk=()
-  _rib_fail() { printf 'IMAGE_INVENTORY_WORKER_FAIL=%s\n' "$1" >&2; return 1; }
+  _rib_fail() {
+    printf '%s\n' "$1" > "$root/worker-reason" || return 1
+    printf 'IMAGE_INVENTORY_WORKER_FAIL=%s\n' "$1" >&2
+    return 1
+  }
   # Fixed fields only. Explicit guards handle absent/null Config and Labels.
   local format='{"Id":{{json .Id}},"Size":{{json .Size}},"Created":{{json .Created}},"revision":{{if .Config}}{{if .Config.Labels}}{{json (index .Config.Labels "org.opencontainers.image.revision")}}{{else}}null{{end}}{{else}}null{{end}},"source":{{if .Config}}{{if .Config.Labels}}{{json (index .Config.Labels "org.opencontainers.image.source")}}{{else}}null{{end}}{{else}}null{{end}},"RepoTags":{{json .RepoTags}},"RepoDigests":{{json .RepoDigests}}}'
   _rib_now() {
@@ -250,30 +302,54 @@ images_only_images_snapshot_worker() (
   }
   _rib_budget() {
     local maximum=$1 remaining
+    budget_failure=clock_unavailable
     _rib_now || return 1
+    budget_failure=budget_exhausted
     ((now>=start && now<deadline)) || return 1
     remaining=$((deadline-now-2000))
     ((remaining>0)) || return 1
     ((remaining<=maximum)) || remaining=$maximum
-    printf -v duration '%d.%03ds' "$((remaining/1000))" "$((remaining%1000))"
+    printf -v duration '%d.%03ds' "$((remaining/1000))" "$((remaining%1000))" || return 1
+    budget_failure=unavailable
   }
   _rib_check_deadline() { _rib_now && ((now>=start && now<=deadline)); }
+  _rib_capture_fail() {
+    printf '%s %s %s\n' "$1" "${capture_codes[0]:-unavailable}" "${capture_codes[1]:-unavailable}" \
+      > "$root/capture-diagnostic" || return 1
+    return 1
+  }
   _rib_capture() {
     local cap=$1 maximum=$2 destination=$3 bytes
+    local -a capture_codes=()
     shift 3
-    _rib_budget "$maximum" || return 1
+    : > "$root/capture-diagnostic" || return 1
+    _rib_budget "$maximum" || { _rib_capture_fail "$budget_failure"; return 1; }
     # Both sides are bounded; upstream failure is never hidden by head success.
+    # Save both statuses before stat/printf can replace PIPESTATUS. Raw stderr
+    # is still discarded; a timeout-compatible status is not proof of its cause.
     if { command timeout --foreground --signal=TERM --kill-after=2s "$duration" "$@" 2>/dev/null |
-       command head -c "$((cap+1))" > "$destination"; } 2>/dev/null; then :; else return 1; fi
-    bytes=$(stat -c %s -- "$destination") || return 1
-    [[ "$bytes" =~ ^[0-9]+$ ]] && ((bytes<=cap)) || return 1
+       command head -c "$((cap+1))" > "$destination"; } 2>/dev/null; then
+      capture_codes=("${PIPESTATUS[@]}")
+    else
+      capture_codes=("${PIPESTATUS[@]}")
+    fi
+    bytes=$(stat -c %s -- "$destination") || { _rib_capture_fail capture_stat_failed; return 1; }
+    [[ "$bytes" =~ ^[0-9]+$ ]] || { _rib_capture_fail capture_size_invalid; return 1; }
+    # A capped producer may see SIGPIPE: classify the proven cap before a
+    # generic nonzero status, without accepting its partial output.
+    ((bytes<=cap)) || { _rib_capture_fail output_cap_exceeded; return 1; }
+    ((${#capture_codes[@]}==2)) || { _rib_capture_fail sink_nonzero; return 1; }
+    ((capture_codes[1]==0)) || { _rib_capture_fail sink_nonzero; return 1; }
+    ((capture_codes[0]==0)) || { _rib_capture_fail upstream_nonzero; return 1; }
     # Bash cannot faithfully hold NULs. Reject before any command substitution.
-    if IFS= read -r -d '' output < "$destination"; then return 1; fi
-    _rib_check_deadline
+    if IFS= read -r -d '' output < "$destination"; then _rib_capture_fail output_nul; return 1; fi
+    _rib_now || { _rib_capture_fail clock_unavailable; return 1; }
+    ((now>=start && now<=deadline)) || { _rib_capture_fail deadline_exceeded; return 1; }
   }
   _rib_list() {
     local row collected='' count=0
     local -A seen=()
+    printf '0 0\n' > "$root/capture-batch" || return 1
     _rib_capture 131072 10000 "$temp/list" docker image ls -aq --no-trunc || return 1
     while IFS= read -r row || [[ -n "$row" ]]; do
       [[ "$row" =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
@@ -305,6 +381,7 @@ images_only_images_snapshot_worker() (
     expected='['
     for id in "${chunk[@]}"; do expected+="\"$id\","; done
     expected=${expected%,}']'
+    printf '%s %s\n' "$((position/16+1))" "${#chunk[@]}" > "$root/capture-batch" || exit 1
     printf 'image_inspect\n' > "$root/phase" || exit 1
     _rib_capture 1048576 10000 "$temp/raw" docker image inspect --format "$format" "${chunk[@]}" || {
       _rib_fail inspect; exit 1;

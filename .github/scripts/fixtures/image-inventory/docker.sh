@@ -41,6 +41,7 @@ elif [[ "$1 $2 $3" == 'image inspect --format' ]]; then
     bad_alias) data=$(jq -c '.[0].RepoTags=[7]' <<< "$data") ;;
     partial_nonzero) data=$(jq -c '.[1:]' <<< "$data") ;;
     batch_cap) head -c 1048577 /dev/zero | tr '\000' x; exit 0 ;;
+    batch_cap_sigpipe) head -c 2097152 /dev/zero | tr '\000' x; exit 0 ;;
     malformed) printf '{\n'; exit 0 ;;
     nul) printf '\000'; exit 0 ;;
     hang) trap '' TERM; sleep 30; exit 0 ;;

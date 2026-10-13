@@ -79,6 +79,16 @@ protocol validation and process-group cleanup remain unchanged. This enables a
 single reviewed read-only gate audit to locate a real host inventory failure;
 it neither retries that failure nor grants cleanup or HOLD-recovery authority.
 
+The diagnostic also retains the exact bounded-capture failure branch, both
+pipeline exit statuses, the worker's fixed failure reason and numeric batch
+index/count. Pipeline statuses are saved before any later command replaces
+them. An oversized capture is identified before interpreting its possible
+SIGPIPE; nonzero or partial output is still rejected. Missing, malformed or
+out-of-range private tuples become `unavailable`. Each capture clears its
+previous diagnostic. A status such as 124 or 137 alone does not prove timeout,
+because a child can return the same code. No raw stderr, image identity or
+configuration is emitted, and no production budget or acceptance rule changes.
+
 `Image Inventory CI` uses a dedicated GitHub-hosted Docker daemon with no
 production environment or credentials. Correctness uses 146 synthetic images
 and 24 created, never-started containers and compares complete global snapshots.
