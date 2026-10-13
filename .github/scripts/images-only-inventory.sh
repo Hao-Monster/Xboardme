@@ -292,7 +292,7 @@ images_only_images_snapshot_worker() (
     return 1
   }
   # Fixed fields only. Explicit guards handle absent/null Config and Labels.
-  local format='{"Id":{{json .Id}},"Size":{{json .Size}},"Created":{{json .Created}},"revision":{{if .Config}}{{if .Config.Labels}}{{json (index .Config.Labels "org.opencontainers.image.revision")}}{{else}}null{{end}}{{else}}null{{end}},"source":{{if .Config}}{{if .Config.Labels}}{{json (index .Config.Labels "org.opencontainers.image.source")}}{{else}}null{{end}}{{else}}null{{end}},"RepoTags":{{json .RepoTags}},"RepoDigests":{{json .RepoDigests}}}'
+  local format='{"Id":{{json .Id}},"Size":{{json .Size}},"Created":{{json .Created}},"revision":{{with (index . "Config")}}{{with (index . "Labels")}}{{json (index . "org.opencontainers.image.revision")}}{{else}}null{{end}}{{else}}null{{end}},"source":{{with (index . "Config")}}{{with (index . "Labels")}}{{json (index . "org.opencontainers.image.source")}}{{else}}null{{end}}{{else}}null{{end}},"RepoTags":{{json .RepoTags}},"RepoDigests":{{json .RepoDigests}}}'
   _rib_now() {
     local seconds fraction unused clock=/proc/uptime
     read -r seconds unused < "$clock" || return 1

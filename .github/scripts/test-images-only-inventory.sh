@@ -30,6 +30,14 @@ jq -nc '[range(1;25)|{Id:(("0"*64)+(tostring))[-64:],Name:("/created-"+tostring)
   HostConfig:{LogConfig:{Config:{labels:"SYNTHETIC_HOST_SECRET_CANARY"}}},
   State:{Status:"created",StartedAt:"0001-01-01T00:00:00Z"},RestartCount:0,NetworkSettings:{},Mounts:[]}]' > "$root/containers.json"
 cases=0
+# The probe must retain Docker CLI raw-fallback strict missing-key semantics,
+# independently of how the production template reads optional metadata.
+if printf '[{}]\n' | "$root/bin/template-render" '{{json .Missing}}' > "$root/template-output" 2> "$root/template-error"; then
+  echo 'TEMPLATE_STRICT_MISSING_KEY_UNEXPECTED_PASS'; exit 1
+fi
+[[ ! -s "$root/template-output" && $(wc -l < "$root/template-error") == 1 ]]
+grep -Fxq TEMPLATE_FAIL "$root/template-error"
+cases=$((cases+1))
 reset_case() {
   printf '%s\n' "$1" > "$root/mode"
   printf '0\n' > "$root/lists"; printf '0\n' > "$root/inspects"
@@ -78,7 +86,7 @@ printf '[]\n' > "$root/containers.json"
 run_case empty pass
 [[ $(jq -c '.images' "$root/output") == '[]' ]]
 run_case duplicate_listing pass
-for mode in bad_listing blank_listing listing_cap unique_cap listing_nonzero missing duplicate foreign mandatory_null bad_size bad_alias partial_nonzero complete_nonzero batch_cap batch_cap_status141 batch_cap_pipe malformed nul extra_key duplicate_key second_batch_fail drift; do
+for mode in bad_listing blank_listing listing_cap unique_cap listing_nonzero missing duplicate foreign mandatory_null mandatory_missing bad_size bad_alias partial_nonzero complete_nonzero batch_cap batch_cap_status141 batch_cap_pipe malformed nul extra_key duplicate_key second_batch_fail drift; do
   run_case "$mode" fail
   case "$mode" in
     listing_nonzero) expect_inventory_diagnostic image_list upstream_nonzero 4 0 listing 0 0 ;;

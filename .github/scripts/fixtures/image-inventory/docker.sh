@@ -37,6 +37,7 @@ elif [[ "$1 $2 $3" == 'image inspect --format' ]]; then
     duplicate) data=$(jq -c '.[1]=.[0]' <<< "$data") ;;
     foreign) data=$(jq -c '.[0].Id="sha256:"+("f"*64)' <<< "$data") ;;
     mandatory_null) data=$(jq -c '.[0].Created=null' <<< "$data") ;;
+    mandatory_missing) data=$(jq -c 'del(.[0].Created)' <<< "$data") ;;
     bad_size) data=$(jq -c '.[0].Size=9007199254740992' <<< "$data") ;;
     bad_alias) data=$(jq -c '.[0].RepoTags=[7]' <<< "$data") ;;
     partial_nonzero) data=$(jq -c '.[1:]' <<< "$data") ;;

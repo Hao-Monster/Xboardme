@@ -47,10 +47,21 @@ bash .github/scripts/test-audit-xboard-images-only.sh
 bash .github/scripts/test-cleanup-xboard-images-only.sh
 ```
 
-`docker.sh` never forwards to Docker. `template-render.go` uses Go's actual
-`text/template` implementation and JSON encoder, including null Config/Labels
-and special-character cases. It is not evidence that an actual Docker daemon
-rendered the template. The first positive fixture has 146 images and 24
+`docker.sh` never forwards to Docker. `template-render.go` models Docker CLI's
+raw-inspect fallback: JSON objects decoded into maps, Go's actual `text/template`
+and JSON encoder, and `Option("missingkey=error")`. Missing dot-lookup keys fail;
+the renderer must not use Go's permissive default to conceal incompatible
+optional-field access. The existing null/missing Config/Labels and
+special-character cases exercise the production template under this strict
+contract. A separate probe assertion enforces strict mode, and missing or null
+mandatory Created fields must still make inventory fail closed.
+
+This probe does not implement Docker's typed-inspect decoding or the decision
+to enter its raw fallback. In particular, typed image metadata exposes `ID`,
+whereas the raw JSON field is `Id`; the probe checks raw-map rendering, not a
+claim that every CLI version takes that path. It is not evidence that an actual
+Docker daemon rendered the template, or that this compatibility issue caused
+a production failure. The first positive fixture has 146 images and 24
 containers; malformed-input cases use smaller fixtures for test speed.
 
 The Bash tests exercise the final production parser, watchdog, absolute
