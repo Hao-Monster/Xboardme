@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "purpose": "github_masked_non_event_alignment",
+  "repository": "Hao-Monster/Xboardme",
+  "run_id": "38360368858",
+  "run_attempt": 1,
+  "raw_workflow_log_sha256": "517fffe52ede05073e0174a78ee68ee20b2aa7118a5612f4767c1ab537d1b2cc",
+  "operation_artifact_sha256": "bf1bc076a1337ab30cdad6c2b7abbb79446449b38097d503bc2e5bb66a001314",
+  "artifact_line_count": 251,
+  "exact_event_line_count": 46,
+  "exact_non_event_line_count": 199,
+  "inventory_from_masked_log": false,
+  "exceptions": [
+    {
+      "operation_line": 25,
+      "field": "IMAGE_AUDIT_PROTECTION_B64",
+      "artifact_line_sha256": "7388def6c2b95e9052a59c17e39543cc3e0a63ef190048bc23c949417d3e22a6",
+      "log_line_sha256": "6c1519ea3484ae8ab4b7f3450a56be63d12bec565f32aae9c72444f8de78ece7",
+      "artifact_line_bytes": 25399,
+      "log_line_bytes": 25398,
+      "replacements": 1
+    },
+    {
+      "operation_line": 27,
+      "field": "IMAGE_AUDIT_STARTUP_B64",
+      "artifact_line_sha256": "5960db308547800346ce859c682b4a8b4557c36445493f18ca1105e17256c8d3",
+      "log_line_sha256": "dd5d0f3ee94be2884e375e290b3d69972a98604034f48780b46667034d7522b9",
+      "artifact_line_bytes": 44136,
+      "log_line_bytes": 44133,
+      "replacements": 3
+    },
+    {
+      "operation_line": 31,
+      "field": "IMAGE_AUDIT_CONTAINER_SNAPSHOT",
+      "artifact_line_sha256": "703d352ed33fd287db4da24490cb5646817d94808a017833bc674a5dc841ca12",
+      "log_line_sha256": "d1c69bbcec3a46479684f5a4baa5ce2f4a909163373628d14c6b29f42f3441cc",
+      "artifact_line_bytes": 2236,
+      "log_line_bytes": 2235,
+      "replacements": 1
+    },
+    {
+      "operation_line": 69,
+      "field": "IMAGE_AUDIT_IMAGE_SNAPSHOT",
+      "artifact_line_sha256": "b9e5649da5a09260ce4cf183278c46c5150cd6c0b3e12e0a32c46f5d5441972c",
+      "log_line_sha256": "ecf9ffcee8b181f1f5a80fa3df271f6752ea3e20b4245b4dc04b4a9394a1c5a0",
+      "artifact_line_bytes": 1057,
+      "log_line_bytes": 1056,
+      "replacements": 1
+    },
+    {
+      "operation_line": 86,
+      "field": "IMAGE_AUDIT_IMAGE_SNAPSHOT",
+      "artifact_line_sha256": "24c310104522078b88a6df46149a6d8aa7a43a32f8d38a46f8f5d9bb2e16e051",
+      "log_line_sha256": "6e061a74fcab08e0d87868b63d5ebd14c6354a879a7d33a2b7adbe14476bdbc2",
+      "artifact_line_bytes": 857,
+      "log_line_bytes": 856,
+      "replacements": 1
+    },
+    {
+      "operation_line": 135,
+      "field": "IMAGE_AUDIT_IMAGE_SNAPSHOT",
+      "artifact_line_sha256": "254740e335340bfc7f94ad62e116e58e034cbcf68f429bda66717634ebbe1e89",
+      "log_line_sha256": "827e8467c64b0d89d0171dec4c1db6563bc39195d742d90f4d7bfb67887f6371",
+      "artifact_line_bytes": 1057,
+      "log_line_bytes": 1056,
+      "replacements": 1
+    }
+  ]
+}
