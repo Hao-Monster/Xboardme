@@ -33,7 +33,7 @@ cases=0
 reset_case() {
   printf '%s\n' "$1" > "$root/mode"
   printf '0\n' > "$root/lists"; printf '0\n' > "$root/inspects"
-  : > "$root/calls"; : > "$root/batch-sizes"
+  : > "$root/calls"; : > "$root/batch-sizes"; : > "$root/oversize-pipe-status"
   cp "$root/raw-base.json" "$root/raw.json"
   [[ ! -d $root/inflight ]] || rmdir "$root/inflight"
 }
@@ -78,13 +78,20 @@ printf '[]\n' > "$root/containers.json"
 run_case empty pass
 [[ $(jq -c '.images' "$root/output") == '[]' ]]
 run_case duplicate_listing pass
-for mode in bad_listing blank_listing listing_cap unique_cap listing_nonzero missing duplicate foreign mandatory_null bad_size bad_alias partial_nonzero complete_nonzero batch_cap batch_cap_sigpipe malformed nul extra_key duplicate_key second_batch_fail drift; do
+for mode in bad_listing blank_listing listing_cap unique_cap listing_nonzero missing duplicate foreign mandatory_null bad_size bad_alias partial_nonzero complete_nonzero batch_cap batch_cap_status141 batch_cap_pipe malformed nul extra_key duplicate_key second_batch_fail drift; do
   run_case "$mode" fail
   case "$mode" in
     listing_nonzero) expect_inventory_diagnostic image_list upstream_nonzero 4 0 listing 0 0 ;;
     partial_nonzero|complete_nonzero) expect_inventory_diagnostic image_inspect upstream_nonzero 7 0 inspect 1 16 ;;
     batch_cap) expect_inventory_diagnostic image_inspect output_cap_exceeded 0 0 inspect 1 16 ;;
-    batch_cap_sigpipe) expect_inventory_diagnostic image_inspect output_cap_exceeded 141 0 inspect 1 16 ;;
+    batch_cap_status141) expect_inventory_diagnostic image_inspect output_cap_exceeded 141 0 inspect 1 16 ;;
+    batch_cap_pipe)
+      # Real oversized output must fail closed with cap precedence. Compare the
+      # diagnostic against the fixture's independently recorded pipeline exit,
+      # not a platform-dependent assumption about inherited SIGPIPE disposition.
+      upstream=$(< "$root/oversize-pipe-status")
+      [[ $upstream =~ ^[1-9][0-9]{0,2}$ ]] && ((upstream<=255))
+      expect_inventory_diagnostic image_inspect output_cap_exceeded "$upstream" 0 inspect 1 16 ;;
     nul) expect_inventory_diagnostic image_inspect output_nul 0 0 inspect 1 16 ;;
     second_batch_fail) expect_inventory_diagnostic image_inspect upstream_nonzero 7 0 inspect 2 1 ;;
     malformed|extra_key|duplicate_key)
