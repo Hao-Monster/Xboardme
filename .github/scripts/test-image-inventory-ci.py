@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import sys
 import tempfile
@@ -807,6 +808,98 @@ class EnvironmentGuardTests(unittest.TestCase):
                     MOD.InventoryCI('correctness')
                 self.assertFalse(launched.called)
                 self.assertFalse(lookup.called)
+
+
+class BenchmarkPrecheckIsolationTests(unittest.TestCase):
+    """Narrow text contracts for these two fixed jobs, not a YAML evaluator."""
+    gate = ("github.repository == 'Hao-Monster/Xboardme' && "
+            "github.event_name == 'workflow_dispatch' && inputs.benchmark && !inputs.diagnostic && "
+            "github.ref == 'refs/heads/main'")
+    commands = [
+        'bash .github/scripts/test-images-only-inventory.sh',
+        'python3 -B .github/scripts/test-image-inventory-docker.py --mode self-test',
+        'python3 -B .github/scripts/test-image-inventory-ci.py',
+    ]
+
+    def setUp(self):
+        self.text = (SOURCE.parent.parent / 'workflows/image-inventory-ci.yml').read_text()
+
+    def job(self, text, name):
+        found = re.findall(r'(?ms)^  ' + re.escape(name) + r':\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)', text)
+        self.assertEqual(len(found), 1, 'expected exactly one ' + name)
+        return found[0]
+
+    def assert_isolation(self, text):
+        prechecks = self.job(text, 'inventory-benchmark-prechecks')
+        benchmark = self.job(text, 'inventory-benchmark')
+        self.assertIn('\npermissions:\n  contents: read\n\njobs:\n', text)
+        for body, condition in ((prechecks, self.gate),
+                                (benchmark, self.gate + " && needs['inventory-benchmark-prechecks'].result == 'success'")):
+            gate = re.search(r'(?ms)^    if: >-\n(.*?)^    runs-on:', body)
+            self.assertIsNotNone(gate)
+            self.assertEqual(' '.join(gate[1].split()), condition)
+            self.assertEqual(re.findall(r'(?m)^    runs-on: (.+)$', body), ['ubuntu-24.04'])
+            self.assertEqual(body.count('      - uses: actions/checkout@v7\n'), 1)
+            self.assertIn('          ref: ${{ github.sha }}\n          submodules: recursive\n'
+                          '          persist-credentials: false\n', body)
+            self.assertNotRegex(body, r'(?m)^\s+(?:permissions|environment|services|id-token|continue-on-error):')
+            self.assertNotRegex(body, r'secrets\.|DOCKER_HOST|DOCKER_CONTEXT|IMAGE_INVENTORY_TEST_RENDERER')
+        self.assertEqual(re.findall(r'(?m)^    needs: (.+)$', benchmark), ['inventory-benchmark-prechecks'])
+        self.assertNotRegex(prechecks, r'(?m)^\s+(?:needs|env):')
+        self.assertEqual(re.findall(r'(?m)^        run: (.+)$', prechecks), self.commands)
+        self.assertEqual(re.findall(r'(?m)^        run: (.+)$', benchmark),
+                         ['python3 -B .github/scripts/test-image-inventory-docker.py --mode benchmark'])
+        self.assertEqual(re.findall(r'(?m)^      - uses: (.+)$', prechecks), ['actions/checkout@v7'])
+        self.assertEqual(re.findall(r'(?m)^      - uses: (.+)$', benchmark),
+                         ['actions/checkout@v7', 'actions/upload-artifact@v4'])
+        self.assertEqual(re.findall(r'(?m)^    timeout-minutes: (.+)$', benchmark), ['70'])
+        self.assertIn('          IMAGE_INVENTORY_CI_ALLOW_LOCAL: benchmark\n', benchmark)
+        # Only the existing artifact upload may be unconditional. Neither a
+        # failed precheck nor a step-level override may begin measurement.
+        measurement = benchmark.split('      - uses: actions/upload-artifact@v4\n', 1)[0]
+        self.assertNotRegex(measurement.split('    steps:\n', 1)[1], r'(?m)^\s+if:')
+        self.assertNotRegex(prechecks.split('    steps:\n', 1)[1], r'(?m)^\s+if:')
+        self.assertIn('      - uses: actions/upload-artifact@v4\n        if: always()\n', benchmark)
+
+    def test_exact_main_same_sha_prechecks_are_a_hard_measurement_dependency(self):
+        self.assert_isolation(self.text)
+
+    def test_missing_failed_cancelled_or_skipped_dependency_rejects_contract(self):
+        changes = [('    needs: inventory-benchmark-prechecks\n', '')] + [
+            ("needs['inventory-benchmark-prechecks'].result == 'success'",
+             "needs['inventory-benchmark-prechecks'].result == '%s'" % result)
+            for result in ('failure', 'cancelled', 'skipped')]
+        for old, new in changes:
+            with self.subTest(replacement=new):
+                changed = self.text.replace(old, new, 1)
+                self.assertNotEqual(changed, self.text)
+                with self.assertRaises(AssertionError):
+                    self.assert_isolation(changed)
+
+    def test_wrong_opt_in_branch_or_error_bypass_rejects_contract(self):
+        benchmark = self.job(self.text, 'inventory-benchmark')
+        changes = [
+            ('inputs.benchmark && !inputs.diagnostic', 'inputs.benchmark'),
+            ("github.ref == 'refs/heads/main'", "github.ref == 'refs/heads/develop'"),
+            ("needs['inventory-benchmark-prechecks'].result == 'success'", 'always()'),
+            ('    timeout-minutes: 70', '    continue-on-error: true\n    timeout-minutes: 70'),
+            ('        run: python3 -B .github/scripts/test-image-inventory-docker.py --mode benchmark',
+             '        run: python3 -B .github/scripts/test-image-inventory-docker.py --mode benchmark || true'),
+        ]
+        for old, new in changes:
+            with self.subTest(replacement=new):
+                changed = benchmark.replace(old, new, 1)
+                self.assertNotEqual(changed, benchmark)
+                with self.assertRaises(AssertionError):
+                    self.assert_isolation(self.text.replace(benchmark, changed, 1))
+
+    def test_precheck_order_and_measurement_workload_cannot_be_substituted(self):
+        prechecks = self.job(self.text, 'inventory-benchmark-prechecks')
+        for changed in (prechecks.replace(self.commands[0], self.commands[1], 1),
+                        prechecks.replace('ubuntu-24.04', 'self-hosted', 1),
+                        prechecks.replace('${{ github.sha }}', 'main', 1)):
+            with self.subTest(changed=changed), self.assertRaises(AssertionError):
+                self.assert_isolation(self.text.replace(prechecks, changed, 1))
 
 
 class ProductionSourceBindingTests(unittest.TestCase):

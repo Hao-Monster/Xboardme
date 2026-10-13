@@ -77,6 +77,34 @@ observer-only plus old/new/new/old ordering. It neither starts services nor
 establishes production CPU headroom or real connection continuity. No broad
 prune, force removal, volume deletion or unknown-resource cleanup is permitted.
 
+### Same-SHA benchmark precheck isolation
+
+The main-only benchmark opt-in runs the three original parser/watchdog,
+supervisor self-test and CI-boundary commands, in that order, in the separate
+`inventory-benchmark-prechecks` job. Both jobs use `ubuntu-24.04`, the exact
+`${{ github.sha }}` checkout and recursive submodules, with persisted credentials
+disabled and only `contents: read`. The benchmark has a hard `needs` dependency
+and explicitly requires the precheck job's result to be `success`; failed,
+cancelled or skipped prechecks cannot start measurement. Neither job receives
+production credentials, services or a Docker override, and no renderer binary
+is transferred between runners. Correctness-only and diagnostic entry points
+are unchanged.
+
+This changes one assurance boundary: the negative compatibility pre-tests run
+on another runner of the same class, not on the measurement VM itself. Fixture
+setup, correctness, runtime checks and supervision still run on the measurement
+VM. Its original benchmark command, 70-minute job timeout, fixed preparation,
+unchanged limits and tail admission points, five formal episodes and exact-owned
+teardown are retained. There is no added wait, warm-up, cache flush or retry.
+Runner startup or background pressure can still reject preparation or an episode.
+
+A subsequent qualification is limited to one reviewed exact-main attempt 1 with
+successful precheck and benchmark jobs and all original seven evidence files.
+Success establishes only that run's CI qualification under the new scheduling
+protocol; it neither proves the cause of earlier failures nor clears production
+HOLD or authorizes cleanup or deployment. A failed or incomplete attempt remains
+not admitted and must not trigger an automatic repeat.
+
 ### Fixed CI benchmark preparation
 
 After fixture setup and correctness, benchmark mode runs one predeclared
