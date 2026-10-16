@@ -55,6 +55,8 @@ run_retain_online_case() (
   maint_id=$(printf '0%.0s' {1..63})2
   local old_cid
   old_cid=$(printf '9%.0s' {1..64})
+  local old_maint_id
+  old_maint_id=$(printf '7%.0s' {1..64})
 
   local img_app="sha256:$(printf '1%.0s' {1..64})"
   local img_caddy="sha256:$(printf '2%.0s' {1..64})"
@@ -65,23 +67,45 @@ run_retain_online_case() (
   local net_active_id="net_active_edge_id"
   local net_old_id="net_old_edge_id"
 
-  release_state_create "$state_file" \
-    v2_schema_version 1 \
-    release_id "$active_release_id" \
-    release_sha "$active_sha" \
-    project_name "$active_project" \
-    redis_volume_name xboard_redis-data \
-    app_data_path "$app_data" \
-    maintenance_container "xboard-v2-maintenance-$active_release_id" \
-    legacy_anchor_id "$old_cid" \
-    traffic_state active_v2 \
-    rollback_supported true
+  if [[ "$scenario" == already-finalized ]]; then
+    release_state_create "$state_file" \
+      v2_schema_version 1 \
+      release_id "$active_release_id" \
+      release_sha "$active_sha" \
+      project_name "$active_project" \
+      redis_volume_name xboard_redis-data \
+      app_data_path "$app_data" \
+      maintenance_container "xboard-v2-maintenance-$active_release_id" \
+      legacy_anchor_id "$old_cid" \
+      traffic_state finalized \
+      finalized_at "2026-10-16T03:37:46Z" \
+      rollback_supported false \
+      finalize_status complete
+  else
+    release_state_create "$state_file" \
+      v2_schema_version 1 \
+      release_id "$active_release_id" \
+      release_sha "$active_sha" \
+      project_name "$active_project" \
+      redis_volume_name xboard_redis-data \
+      app_data_path "$app_data" \
+      maintenance_container "xboard-v2-maintenance-$active_release_id" \
+      legacy_anchor_id "$old_cid" \
+      traffic_state active_v2 \
+      rollback_supported true
+  fi
 
   local state_dir="$test_root/mock-docker"
-  mkdir -p "$state_dir/containers" "$state_dir/images" "$state_dir/networks"
-  for cid in "$anchor_id" "$redis_id" "$web_id" "$ws_id" "$edge_id" "$horizon_id" "$scheduler_id" "$maint_id" "$old_cid"; do
+  mkdir -p "$state_dir/containers" "$state_dir/images" "$state_dir/networks" "$state_dir/running"
+  for cid in "$anchor_id" "$redis_id" "$web_id" "$ws_id" "$edge_id" "$horizon_id" "$scheduler_id" "$maint_id" "$old_cid" "$old_maint_id"; do
     : > "$state_dir/containers/$cid"
   done
+  for cid in "$redis_id" "$web_id" "$ws_id" "$edge_id" "$horizon_id" "$scheduler_id" "$maint_id" "$old_maint_id"; do
+    : > "$state_dir/running/$cid"
+  done
+  if [[ "$scenario" == old-running ]]; then
+    : > "$state_dir/running/$old_cid"
+  fi
   for iid in "$img_app" "$img_caddy" "$img_redis" "$img_anchor" "$img_old"; do
     : > "$state_dir/images/${iid#sha256:}"
   done
@@ -146,6 +170,11 @@ run_retain_online_case() (
           done
         fi
         ;;
+      stop)
+        local target=${*: -1}
+        [[ -e "$state_dir/containers/$target" ]] || return 1
+        rm -f -- "$state_dir/running/$target"
+        ;;
       volume)
         [[ ${1:-} == inspect && ${2:-} == xboard_redis-data ]]
         ;;
@@ -154,9 +183,13 @@ run_retain_online_case() (
         if [[ "$op" == inspect ]]; then
           [[ "$target" == "xboard-v2-maintenance-$active_release_id" ]] && target=$maint_id
           [[ -e "$state_dir/containers/$target" ]]
+        elif [[ "$op" == stop ]]; then
+          target=${*: -1}
+          [[ -e "$state_dir/containers/$target" ]] || return 1
+          rm -f -- "$state_dir/running/$target"
         elif [[ "$op" == rm ]]; then
           [[ -e "$state_dir/containers/$target" ]] || return 1
-          rm -f -- "$state_dir/containers/$target"
+          rm -f -- "$state_dir/containers/$target" "$state_dir/running/$target"
         else
           return 1
         fi
@@ -256,35 +289,58 @@ run_retain_online_case() (
             '{{ index .Config.Labels "com.docker.compose.project" }}')
               if [[ "$target" == "$old_cid" ]]; then
                 printf '%s\n' "$old_project"
+              elif [[ "$target" == "$old_maint_id" ]]; then
+                printf '<no value>\n'
               else
                 printf '%s\n' "$active_project"
+              fi
+              ;;
+            '{{ index .Config.Labels "codex.xboard.v2.maintenance" }}')
+              if [[ "$target" == "$maint_id" || "$target" == "$old_maint_id" ]]; then
+                printf 'true\n'
+              else
+                printf '<no value>\n'
+              fi
+              ;;
+            '{{ index .Config.Labels "codex.xboard.v2.release" }}')
+              if [[ "$target" == "$maint_id" ]]; then
+                printf '%s\n' "$active_release_id"
+              elif [[ "$target" == "$old_maint_id" ]]; then
+                printf '%s\n' "$old_release_id"
+              else
+                printf '<no value>\n'
+              fi
+              ;;
+            '{{range $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}')
+              if [[ "$target" == "$edge_id" ]]; then
+                printf '7002\n'
+              elif [[ "$target" == "$maint_id" ]]; then
+                printf '7004\n'
+              elif [[ "$target" == "$old_maint_id" ]]; then
+                printf '7003\n'
               fi
               ;;
             '{{.Image}}')
               case "$target" in
                 "$anchor_id") printf '%s\n' "$img_anchor" ;;
                 "$redis_id") printf '%s\n' "$img_redis" ;;
-                "$edge_id"|"$maint_id") printf '%s\n' "$img_caddy" ;;
+                "$edge_id"|"$maint_id"|"$old_maint_id") printf '%s\n' "$img_caddy" ;;
                 "$old_cid") printf '%s\n' "$img_old" ;;
                 *) printf '%s\n' "$img_app" ;;
               esac
               ;;
             '{{.State.Running}}')
-              if [[ "$target" == "$anchor_id" ]]; then
-                printf 'false\n'
-              elif [[ "$target" == "$old_cid" ]]; then
-                [[ "$scenario" == old-running ]] && printf 'true\n' || printf 'false\n'
-              else
+              if [[ -e "$state_dir/running/$target" ]]; then
                 printf 'true\n'
+              else
+                printf 'false\n'
               fi
               ;;
             '{{.State.Status}}')
-              if [[ "$target" == "$anchor_id" ]]; then
-                printf 'exited\n'
-              elif [[ "$target" == "$old_cid" ]]; then
-                [[ "$scenario" == old-running ]] && printf 'running\n' || printf 'exited\n'
-              else
+              if [[ -e "$state_dir/running/$target" ]]; then
                 printf 'running\n'
+              else
+                printf 'exited\n'
               fi
               ;;
             '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}')
@@ -309,6 +365,7 @@ run_retain_online_case() (
 
   if [[ "$mode" == cleanup ]]; then
     [[ ! -e "$state_dir/containers/$old_cid" ]]
+    [[ ! -e "$state_dir/containers/$old_maint_id" ]]
     [[ ! -e "$state_dir/networks/$net_old_id" ]]
     [[ ! -e "$state_dir/images/${img_old#sha256:}" ]]
     [[ ! -d "$old_dir" && ! -d "$legacy_dir" ]]
@@ -317,7 +374,12 @@ run_retain_online_case() (
     [[ ! -e "$lock_root/image-cleanup-plan-deadbeef.json" ]]
     [[ "$(release_state_get "$state_file" traffic_state)" == finalized ]]
     [[ "$(release_state_get "$state_file" rollback_supported)" == false ]]
-    [[ "$(release_state_get "$state_file" previous_release_retired_id)" == "$old_release_id" ]]
+    if [[ "$scenario" == already-finalized ]]; then
+      [[ "$(release_state_get "$state_file" finalized_at)" == "2026-10-16T03:37:46Z" ]]
+    else
+      [[ "$(release_state_get "$state_file" previous_release_retired_id)" == "$old_release_id" ]]
+      [[ "$(release_state_get "$state_file" previous_maintenance_retired)" == "$old_maint_id" ]]
+    fi
   fi
 )
 
@@ -327,7 +389,7 @@ trap 'rm -rf -- "$test_out"' EXIT
 run_retain_online_case audit happy > "$test_out/audit.out"
 grep -Fxq 'RETAIN_ONLINE_PROTECTED_CONTAINERS=8' "$test_out/audit.out"
 grep -Fxq 'RETAIN_ONLINE_PROTECTED_IMAGES=4' "$test_out/audit.out"
-grep -Fxq 'RETAIN_ONLINE_CANDIDATE_CONTAINERS=1' "$test_out/audit.out"
+grep -Fxq 'RETAIN_ONLINE_CANDIDATE_CONTAINERS=2' "$test_out/audit.out"
 grep -Fxq 'RETAIN_ONLINE_CANDIDATE_NETWORKS=1' "$test_out/audit.out"
 grep -Fxq 'RETAIN_ONLINE_CANDIDATE_DIRECTORIES=2' "$test_out/audit.out"
 grep -Fxq 'RETAIN_ONLINE_CANDIDATE_IMAGES=1' "$test_out/audit.out"
@@ -348,7 +410,7 @@ set -e
 grep -q 'RETAIN_ONLINE_CLEANUP_FAIL=candidate_network_has_endpoints' "$test_out/network-busy.out"
 
 run_retain_online_case cleanup happy > "$test_out/cleanup.out"
-grep -Fxq 'RETAIN_ONLINE_REMOVED_CONTAINERS=1' "$test_out/cleanup.out"
+grep -Fxq 'RETAIN_ONLINE_REMOVED_CONTAINERS=2' "$test_out/cleanup.out"
 grep -Fxq 'RETAIN_ONLINE_REMOVED_NETWORKS=1' "$test_out/cleanup.out"
 grep -Fxq 'RETAIN_ONLINE_REMOVED_DIRECTORIES=2' "$test_out/cleanup.out"
 grep -Fxq 'RETAIN_ONLINE_REMOVED_IMAGES=1' "$test_out/cleanup.out"
@@ -356,5 +418,8 @@ grep -Fxq 'RETAIN_ONLINE_REMAINING_CONTAINERS=8' "$test_out/cleanup.out"
 grep -Fxq 'RETAIN_ONLINE_REMAINING_IMAGES=4' "$test_out/cleanup.out"
 grep -Fxq 'RETAIN_ONLINE_RECLAIMED_KIB=33500000' "$test_out/cleanup.out"
 grep -q 'RETAIN_ONLINE_CLEANUP=PASS mode=cleanup' "$test_out/cleanup.out"
+
+run_retain_online_case cleanup already-finalized > "$test_out/already-finalized.out"
+grep -q 'RETAIN_ONLINE_CLEANUP=PASS mode=cleanup' "$test_out/already-finalized.out"
 
 echo 'RETAIN_ONLINE_CLEANUP_TEST=PASS'
