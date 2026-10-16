@@ -10,6 +10,64 @@ use Tests\TestCase;
 
 class DeviceStateServiceTest extends TestCase
 {
+    public function test_device_sync_serializes_cross_node_duplicates_as_an_ip_list(): void
+    {
+        $now = time();
+        Redis::shouldReceive('hgetall')
+            ->once()
+            ->with('user_devices:42')
+            ->andReturn([
+                '1:203.0.113.10' => $now,
+                '2:203.0.113.10' => $now - 10,
+                '2:2001:db8::10' => $now - 20,
+                '3:203.0.113.10' => $now - 30,
+                '3:2001:db8::10' => $now - 40,
+                '4:192.0.2.99' => $now - DeviceStateService::ONLINE_WINDOW_SECONDS - 10,
+            ]);
+
+        $devices = app(DeviceStateService::class)->getUsersDevices([42]);
+
+        $this->assertSame(
+            '{"users":{"42":["203.0.113.10","2001:db8::10"]}}',
+            json_encode(['users' => $devices], JSON_THROW_ON_ERROR)
+        );
+    }
+
+    public function test_device_sync_keeps_users_separate_and_omits_inactive_users(): void
+    {
+        $now = time();
+        $states = [
+            7 => ['1:2001:db8::10' => $now, '2:2001:db8::10' => $now],
+            41 => ['3:2001:db8::10' => $now, '3:203.0.113.10' => $now],
+            42 => [],
+            43 => ['1:192.0.2.99' => $now - DeviceStateService::ONLINE_WINDOW_SECONDS - 10],
+        ];
+        foreach ($states as $userId => $state) {
+            Redis::shouldReceive('hgetall')
+                ->once()
+                ->with('user_devices:' . $userId)
+                ->andReturn($state);
+        }
+
+        $devices = app(DeviceStateService::class)->getUsersDevices([7, 41, 42, 43]);
+
+        $this->assertSame([
+            7 => ['2001:db8::10'],
+            41 => ['2001:db8::10', '203.0.113.10'],
+        ], $devices);
+        $this->assertSame(
+            '{"users":{"7":["2001:db8::10"],"41":["2001:db8::10","203.0.113.10"]}}',
+            json_encode(['users' => $devices], JSON_THROW_ON_ERROR)
+        );
+    }
+
+    public function test_device_sync_with_no_users_does_not_read_redis(): void
+    {
+        Redis::shouldReceive('hgetall')->never();
+
+        $this->assertSame([], app(DeviceStateService::class)->getUsersDevices([]));
+    }
+
     public function test_device_count_deduplicates_the_same_ip_across_nodes_and_excludes_expired_states(): void
     {
         $now = time();
