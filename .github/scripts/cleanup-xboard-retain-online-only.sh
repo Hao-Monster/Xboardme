@@ -192,6 +192,22 @@ if [[ -z "$previous_release_id" ]]; then
 fi
 [[ -n "$previous_release_id" ]] || previous_release_id=retired
 
+retired_maintenance_id=$(release_state_get_optional "$active_state_file" previous_maintenance_retired)
+[[ "$retired_maintenance_id" =~ ^[0-9a-f]{64}$ ]] || retired_maintenance_id=none
+
+is_retired_maintenance_container() {
+  local cid=$1 c_maint c_rel c_port
+  c_maint=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.v2.maintenance" }}' "$cid" 2>/dev/null || true)
+  c_rel=$(docker inspect -f '{{ index .Config.Labels "codex.xboard.v2.release" }}' "$cid" 2>/dev/null || true)
+  [[ "$c_maint" == true && -n "$c_rel" && "$c_rel" != '<no value>' && "$c_rel" != "$active_release_id" ]] || return 1
+  c_port=$(docker inspect -f '{{range $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}' "$cid" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+  [[ "$c_port" != "$XBOARD_ACTIVE_PORT" ]] || return 1
+  if [[ -n "$c_port" ]] && grep -Eq "reverse_proxy[[:space:]]+127\\.0\\.0\\.1:${c_port}([[:space:]]|\$)" "$XBOARD_CADDY_FILE"; then
+    return 1
+  fi
+  return 0
+}
+
 declare -a candidate_containers=()
 while IFS= read -r cid; do
   [[ -n "$cid" ]] || continue
@@ -201,8 +217,19 @@ while IFS= read -r cid; do
   fi
   c_running=$(docker inspect -f '{{.State.Running}}' "$cid")
   c_status=$(docker inspect -f '{{.State.Status}}' "$cid")
-  [[ "$c_running" == false && "$c_status" == exited ]] ||
+  if [[ "$c_running" == true ]]; then
+    if is_retired_maintenance_container "$cid"; then
+      retired_maintenance_id=$cid
+      candidate_containers+=("$cid")
+      continue
+    fi
     retain_online_fail "non_protected_container_not_exited:$cid:$c_status"
+  fi
+  [[ "$c_status" == exited || "$c_status" == created || "$c_status" == dead ]] ||
+    retain_online_fail "non_protected_container_not_exited:$cid:$c_status"
+  if is_retired_maintenance_container "$cid"; then
+    retired_maintenance_id=$cid
+  fi
   candidate_containers+=("$cid")
 done < <(docker ps -aq --no-trunc | sort -u)
 
@@ -270,22 +297,31 @@ fi
 removed_containers=0
 for cid in "${candidate_containers[@]}"; do
   [[ -z "${protected_containers[$cid]:-}" ]] || retain_online_fail "attempted_protected_container:$cid"
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$cid")" == true ]]; then
+    is_retired_maintenance_container "$cid" || retain_online_fail "container_became_running:$cid"
+    retain_online_timeout 30s docker container stop --time 10 "$cid" >/dev/null
+  fi
   [[ "$(docker inspect -f '{{.State.Running}}' "$cid")" == false ]] || retain_online_fail "container_became_running:$cid"
   retain_online_timeout 60s docker container rm "$cid" >/dev/null
   ! docker container inspect "$cid" >/dev/null 2>&1 || retain_online_fail "container_remove_failed:$cid"
   ((removed_containers += 1))
 done
 
-release_state_set_many "$active_state_file" \
-  traffic_state finalized \
-  finalized_at "$(date -u +%FT%TZ)" \
-  rollback_supported false \
-  finalize_reason retention_window \
-  finalize_status complete \
-  previous_release_retired_id "$previous_release_id" \
-  previous_maintenance_retired none \
-  compose_anchor_preserved "$anchor_id" \
-  current_maintenance_preserved "$maintenance_id"
+current_traffic_state=$(release_state_get_optional "$active_state_file" traffic_state)
+current_rollback_supported=$(release_state_get_optional "$active_state_file" rollback_supported)
+current_finalize_status=$(release_state_get_optional "$active_state_file" finalize_status)
+if [[ "$current_traffic_state" != finalized || "$current_rollback_supported" != false || "$current_finalize_status" != complete ]]; then
+  release_state_set_many "$active_state_file" \
+    traffic_state finalized \
+    finalized_at "$(date -u +%FT%TZ)" \
+    rollback_supported false \
+    finalize_reason retention_window \
+    finalize_status complete \
+    previous_release_retired_id "$previous_release_id" \
+    previous_maintenance_retired "$retired_maintenance_id" \
+    compose_anchor_preserved "$anchor_id" \
+    current_maintenance_preserved "$maintenance_id"
+fi
 
 rm -f -- \
   "$lock_root/image-cleanup-gate.json" \

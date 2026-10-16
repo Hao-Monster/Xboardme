@@ -1675,3 +1675,252 @@ jobs:
           DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
           DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
           TARGET_PORT: ${{ needs.auto-rollback-failed-approved-release.outputs.rollback_port }}
+
+  converge-online-only-after-release:
+    name: Finalize active release and remove retired containers, networks, directories, and images
+    if: >-
+      ${{ github.ref == 'refs/heads/main' &&
+          inputs.maintenance_action == 'none' &&
+          needs.switch-approved-release.result == 'success' }}
+    needs:
+      - prepare-approved-release
+      - switch-approved-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify release identity and local cleanup contract
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_ID: ${{ needs.prepare-approved-release.outputs.release_id }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Hao-Monster/Xboardme
+          test "$GITHUB_REF" = refs/heads/main
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          bash -n .github/scripts/cleanup-xboard-retain-online-only.sh
+          bash .github/scripts/test-cleanup-xboard-retain-online-only.sh
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -T 10 -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Converge production to online-only containers, networks, directories, and images
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/cleanup-xboard-retain-online-only.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' CLEANUP_MODE='cleanup' bash -se" |
+            tee "$RUNNER_TEMP/post-release-online-only-cleanup.txt"
+          grep -Eq '^RETAIN_ONLINE_CLEANUP=PASS mode=cleanup ' "$RUNNER_TEMP/post-release-online-only-cleanup.txt"
+
+      - name: Verify finalized runtime and zero candidate debt after cleanup
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s" |
+            tee "$RUNNER_TEMP/post-release-cleanup-preflight.txt"
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/retention-safety.sh \
+              .github/scripts/audit-xboard-retention.sh \
+              .github/scripts/audit-xboard-network-debt.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' RETENTION_REQUIRE_FINALIZED=true RETENTION_ACQUIRE_LOCK=true bash -s" |
+            tee "$RUNNER_TEMP/post-release-cleanup-audit.txt"
+          grep -Fxq 'RETENTION_CANDIDATE_CONTAINER_COUNT=0' "$RUNNER_TEMP/post-release-cleanup-audit.txt"
+          grep -Fxq 'NETWORK_DEBT_CANDIDATE_COUNT=0' "$RUNNER_TEMP/post-release-cleanup-audit.txt"
+
+      - name: Verify public production and distributor assets after cleanup
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ inputs.expected_sha }}
+          v2_release_id: ${{ needs.prepare-approved-release.outputs.release_id }}
+          timeout_seconds: 300
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Verify live admin assets after cleanup
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ inputs.expected_sha }}
+        run: bash .github/scripts/smoke-admin-assets-remote.sh
+
+      - name: Preserve post-release online-only convergence evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-post-release-cleanup-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/post-release-online-only-cleanup.txt
+            ${{ runner.temp }}/post-release-cleanup-preflight.txt
+            ${{ runner.temp }}/post-release-cleanup-audit.txt
+          if-no-files-found: warn
+          retention-days: 90
+
+  converge-online-only-after-failure:
+    name: Remove failed candidate assets after rollback or pre-cutover abort
+    if: >-
+      ${{ always() &&
+          github.ref == 'refs/heads/main' &&
+          inputs.maintenance_action == 'none' &&
+          needs.plan-release-slot.result == 'success' &&
+          (
+            needs.stage-signed-image.result == 'failure' ||
+            needs.prepare-approved-release.result == 'failure' ||
+            needs.rotate-rollback-slot.result == 'failure' ||
+            (
+              needs.switch-approved-release.result == 'failure' &&
+              needs.auto-rollback-failed-approved-release.result == 'success' &&
+              needs.smoke-auto-rolled-back-approved-release.result == 'success'
+            )
+          ) }}
+    needs:
+      - plan-release-slot
+      - stage-signed-image
+      - prepare-approved-release
+      - rotate-rollback-slot
+      - switch-approved-release
+      - auto-rollback-failed-approved-release
+      - smoke-auto-rolled-back-approved-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: distributor-server
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout exact production commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify active predecessor identity and local cleanup contract
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          ACTIVE_RELEASE_ID: ${{ needs.plan-release-slot.outputs.active_release_id }}
+          ACTIVE_REVISION: ${{ needs.plan-release-slot.outputs.active_revision }}
+        run: |
+          test "$GITHUB_REPOSITORY" = Hao-Monster/Xboardme
+          test "$GITHUB_REF" = refs/heads/main
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$ACTIVE_RELEASE_ID" = "$(printf '%s' "$ACTIVE_RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
+          test "$ACTIVE_REVISION" = "$(printf '%s' "$ACTIVE_REVISION" | grep -E '^[0-9a-f]{40}$')"
+          bash -n .github/scripts/cleanup-xboard-retain-online-only.sh
+          bash .github/scripts/test-cleanup-xboard-retain-online-only.sh
+
+      - name: Trust deployment host key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -T 10 -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Remove failed candidate containers, networks, directories, and images
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/cleanup-xboard-retain-online-only.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=8 \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' CLEANUP_MODE='cleanup' bash -se" |
+            tee "$RUNNER_TEMP/post-failure-online-only-cleanup.txt"
+          grep -Eq '^RETAIN_ONLINE_CLEANUP=PASS mode=cleanup ' "$RUNNER_TEMP/post-failure-online-only-cleanup.txt"
+
+      - name: Verify active production runtime after failed candidate cleanup
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          ACTIVE_REVISION: ${{ needs.plan-release-slot.outputs.active_revision }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$ACTIVE_REVISION' bash -s" |
+            tee "$RUNNER_TEMP/post-failure-cleanup-preflight.txt"
+
+      - name: Verify public production after failed candidate cleanup
+        uses: ./.github/actions/distributor-smoke
+        with:
+          verify_public_assets: true
+          expected_asset_version: ${{ needs.plan-release-slot.outputs.active_revision }}
+          v2_release_id: ${{ needs.plan-release-slot.outputs.active_release_id }}
+          timeout_seconds: 300
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Preserve post-failure online-only convergence evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-post-failure-cleanup-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/post-failure-online-only-cleanup.txt
+            ${{ runner.temp }}/post-failure-cleanup-preflight.txt
+          if-no-files-found: warn
+          retention-days: 90

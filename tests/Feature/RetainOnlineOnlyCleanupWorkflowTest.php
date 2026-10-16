@@ -50,6 +50,7 @@ class RetainOnlineOnlyCleanupWorkflowTest extends TestCase
             'xboard_find_caddy_upstream',
             'xboard_resolve_active_runtime',
             'assert_active_runtime_healthy',
+            'is_retired_maintenance_container',
             'non_protected_container_not_exited',
             'candidate_network_has_endpoints',
             'release_assert_cleanup_admission',
@@ -57,5 +58,41 @@ class RetainOnlineOnlyCleanupWorkflowTest extends TestCase
         ] as $required) {
             $this->assertStringContainsString($required, $script);
         }
+    }
+
+    public function test_production_release_workflow_automatically_converges_online_only_assets_after_release_and_failure(): void
+    {
+        $workflow = Yaml::parseFile(base_path('.github/workflows/production-release.yml'));
+        $jobs = $workflow['jobs'] ?? [];
+
+        $this->assertArrayHasKey('converge-online-only-after-release', $jobs);
+        $this->assertArrayHasKey('converge-online-only-after-failure', $jobs);
+
+        $postRelease = $jobs['converge-online-only-after-release'];
+        $this->assertSame(['prepare-approved-release', 'switch-approved-release'], $postRelease['needs']);
+        $this->assertSame('distributor-server', $postRelease['environment']);
+        $this->assertStringContainsString("github.ref == 'refs/heads/main'", $postRelease['if']);
+        $this->assertStringContainsString("inputs.maintenance_action == 'none'", $postRelease['if']);
+        $this->assertStringContainsString("needs.switch-approved-release.result == 'success'", $postRelease['if']);
+
+        $postFailure = $jobs['converge-online-only-after-failure'];
+        $this->assertSame(
+            [
+                'plan-release-slot',
+                'stage-signed-image',
+                'prepare-approved-release',
+                'rotate-rollback-slot',
+                'switch-approved-release',
+                'auto-rollback-failed-approved-release',
+                'smoke-auto-rolled-back-approved-release',
+            ],
+            $postFailure['needs']
+        );
+        $this->assertSame('distributor-server', $postFailure['environment']);
+        $this->assertStringContainsString('always()', $postFailure['if']);
+        $this->assertStringContainsString("github.ref == 'refs/heads/main'", $postFailure['if']);
+        $this->assertStringContainsString("inputs.maintenance_action == 'none'", $postFailure['if']);
+        $this->assertStringContainsString("needs.auto-rollback-failed-approved-release.result == 'success'", $postFailure['if']);
+        $this->assertStringContainsString("needs.smoke-auto-rolled-back-approved-release.result == 'success'", $postFailure['if']);
     }
 }
