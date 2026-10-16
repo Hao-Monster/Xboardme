@@ -455,6 +455,9 @@ jobs:
           RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-retention-docker-protocol.sh
           bash .github/scripts/test-audit-xboard-network-debt.sh
           bash .github/scripts/test-cleanup-xboard-network-debt.sh
+          bash -n .github/scripts/cleanup-xboard-retain-online-only.sh
+          bash -n .github/scripts/test-cleanup-xboard-retain-online-only.sh
+          bash .github/scripts/test-cleanup-xboard-retain-online-only.sh
           bash .github/scripts/test-resolve-xboard-v2-port.sh
           bash .github/scripts/test-run-distributor-smoke-bounded.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh

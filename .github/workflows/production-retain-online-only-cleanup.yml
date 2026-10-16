@@ -1,0 +1,142 @@
+name: Production Retain Online-Only Cleanup
+run-name: Retain online-only ${{ inputs.mode }} at ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact full 40-character workflow SHA currently at main
+        required: true
+        type: string
+      mode:
+        description: Read-only audit by default; cleanup retains only active online services and anchors
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - cleanup
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -e -o pipefail {0}
+
+concurrency:
+  group: xboard-production-release
+  cancel-in-progress: false
+
+jobs:
+  retain-online-only:
+    if: ${{ github.ref == 'refs/heads/main' && github.repository == 'Hao-Monster/Xboardme' && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: distributor-server
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      CLEANUP_MODE: ${{ inputs.mode }}
+    steps:
+      - name: Checkout exact production workflow with submodules
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify exact main commit and local cleanup contract before host access
+        id: admission
+        run: |
+          test "$GITHUB_REPOSITORY" = Hao-Monster/Xboardme
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$EXPECTED_SHA" = "$GITHUB_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git ls-remote --exit-code origin refs/heads/main)" = "$EXPECTED_SHA"$'\trefs/heads/main'
+          case "$CLEANUP_MODE" in
+            audit|cleanup) ;;
+            *) exit 1 ;;
+          esac
+          bash -n .github/scripts/cleanup-xboard-retain-online-only.sh
+          bash -n .github/scripts/test-cleanup-xboard-retain-online-only.sh
+          bash .github/scripts/test-cleanup-xboard-retain-online-only.sh
+
+      - name: Trust deployment host key
+        id: host-key
+        env:
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_PORT"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          ssh-keyscan -T 10 -p "$DEPLOY_PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Execute retain-online-only audit or cleanup on production
+        id: operation
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/cleanup-xboard-retain-online-only.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_SHA' CLEANUP_MODE='$CLEANUP_MODE' bash -s" 2>&1 |
+            tee "$RUNNER_TEMP/retain-online-only-operation.txt"
+          active_id=$(awk -F= '$1 == "RETAIN_ONLINE_ACTIVE_RELEASE_ID" {print $2; exit}' "$RUNNER_TEMP/retain-online-only-operation.txt")
+          active_sha=$(awk -F= '$1 == "RETAIN_ONLINE_ACTIVE_REVISION" {print $2; exit}' "$RUNNER_TEMP/retain-online-only-operation.txt")
+          [[ "$active_id" =~ ^[0-9]+-[0-9]+$ ]]
+          [[ "$active_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "active_id=$active_id" >> "$GITHUB_OUTPUT"
+          echo "active_sha=$active_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Run production preflight after cleanup
+        if: ${{ success() && inputs.mode == 'cleanup' }}
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/preflight-xboard-compose.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s" 2>&1 |
+            tee "$RUNNER_TEMP/retain-online-only-preflight.txt"
+
+      - name: Verify active distributor runtime and public assets after cleanup
+        if: ${{ success() && inputs.mode == 'cleanup' }}
+        uses: ./.github/actions/distributor-smoke
+        with:
+          validation_mode: release
+          verify_public_assets: 'true'
+          expected_asset_version: ${{ steps.operation.outputs.active_sha }}
+          v2_release_id: ${{ steps.operation.outputs.active_id }}
+          timeout_seconds: '300'
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          DISTRIBUTOR_EMAIL: ${{ secrets.DISTRIBUTOR_TEST_EMAIL }}
+          DISTRIBUTOR_PASSWORD: ${{ secrets.DISTRIBUTOR_TEST_PASSWORD }}
+
+      - name: Preserve retain-online-only evidence artifact
+        if: ${{ always() && steps.admission.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-retain-online-only-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/retain-online-only-*
+          if-no-files-found: warn
+          retention-days: 90
