@@ -233,7 +233,20 @@ export function detectDevelopFastForwardSync(env = process.env) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
     }).trim();
-    return Boolean(headSha && mainSha && headSha === mainSha);
+    if (headSha && mainSha && headSha === mainSha) {
+      return true;
+    }
+    execFileSync("git", ["merge-base", "--is-ancestor", "origin/main", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const treeDiff = execFileSync("git", ["diff", "--name-only", "origin/main", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    })
+      .split(/\r?\n/)
+      .filter((f) => f.trim() !== "");
+    return treeDiff.length === 0;
   } catch {
     return false;
   }
@@ -241,6 +254,7 @@ export function detectDevelopFastForwardSync(env = process.env) {
 
 export function getChangedFiles(env = process.env) {
   const eventName = env.GITHUB_EVENT_NAME ?? "";
+  const ref = env.GITHUB_REF ?? "";
   const event = readEventPayload(env);
 
   if (eventName === "pull_request") {
@@ -267,6 +281,21 @@ export function getChangedFiles(env = process.env) {
       return out.split(/\r?\n/).filter((f) => f.trim() !== "");
     } catch {
       return [];
+    }
+  }
+
+  if (ref === "refs/heads/develop") {
+    try {
+      const branchOut = execFileSync("git", ["diff", "--name-only", "origin/main...HEAD"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      const branchFiles = branchOut.split(/\r?\n/).filter((f) => f.trim() !== "");
+      if (branchFiles.length > 0) {
+        return branchFiles;
+      }
+    } catch {
+      // Fall through to before..HEAD fallback
     }
   }
 

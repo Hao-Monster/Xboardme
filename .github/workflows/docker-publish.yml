@@ -544,7 +544,9 @@ jobs:
             run_heavy audit_net_debt bash .github/scripts/test-audit-xboard-network-debt.sh
             run_heavy cleanup_net_debt bash .github/scripts/test-cleanup-xboard-network-debt.sh
             run_heavy cleanup_online_only bash .github/scripts/test-cleanup-xboard-retain-online-only.sh
-            wait || touch "$heavy_logs/FAILED"
+            while [ -n "$(jobs -rp)" ]; do
+              wait -n || touch "$heavy_logs/FAILED"
+            done
             if [ -f "$heavy_logs/FAILED" ]; then
               rm -rf "$heavy_logs"
               exit 1
