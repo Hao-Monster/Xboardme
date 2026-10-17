@@ -33,4 +33,28 @@ class BranchGovernanceTest extends TestCase
         $manifest = file_get_contents(base_path('.github/scripts/production-image-manifest.php'));
         $this->assertStringContainsString("const PRODUCTION_REF = 'refs/heads/main';", $manifest);
     }
+
+    public function test_smart_ci_gate_scopes_verify_checks_without_affecting_main_production_pipeline(): void
+    {
+        $workflow = Yaml::parseFile(base_path('.github/workflows/docker-publish.yml'));
+
+        $this->assertStringContainsString(
+            "github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')",
+            (string) $workflow['concurrency']['cancel-in-progress']
+        );
+        $this->assertSame('${{ steps.scope.outputs.tier }}', $workflow['jobs']['verify']['outputs']['tier']);
+        $this->assertSame(
+            '${{ steps.scope.outputs.run_pr_image_build }}',
+            $workflow['jobs']['verify']['outputs']['run_pr_image_build']
+        );
+        $this->assertSame('scope', $workflow['jobs']['verify']['steps'][2]['id']);
+        $this->assertStringContainsString(
+            'node .github/scripts/detect-ci-scope.mjs',
+            $workflow['jobs']['verify']['steps'][2]['run']
+        );
+        $this->assertStringContainsString(
+            "needs.verify.outputs.run_pr_image_build == 'true'",
+            $workflow['jobs']['pr-image-build']['if']
+        );
+    }
 }

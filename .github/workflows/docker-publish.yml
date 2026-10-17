@@ -80,7 +80,7 @@ on:
 
 concurrency:
   group: xboard-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/develop') }}
 
 env:
   REGISTRY: ghcr.io
@@ -166,36 +166,15 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-    services:
-      mysql57:
-        image: mysql:5.7
-        env:
-          MYSQL_ROOT_PASSWORD: xboard-test
-          MYSQL_DATABASE: xboard_test
-        ports:
-          - 3307:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxboard-test --silent"
-          --health-interval=2s
-          --health-timeout=2s
-          --health-retries=30
-      mysql84:
-        image: mysql:8.4
-        env:
-          MYSQL_ROOT_PASSWORD: xboard-test
-          MYSQL_DATABASE: xboard_test
-        ports:
-          - 3308:3306
-        options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pxboard-test --silent"
-          --health-interval=2s
-          --health-timeout=2s
-          --health-retries=30
+    outputs:
+      tier: ${{ steps.scope.outputs.tier }}
+      run_pr_image_build: ${{ steps.scope.outputs.run_pr_image_build }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Reject pull requests from any branch except develop
@@ -204,20 +183,47 @@ jobs:
           echo 'Only this repository develop branch may target main.' >&2
           exit 1
 
+      - name: Detect smart CI gate scope and check whitespace
+        id: scope
+        run: |
+          git diff --check
+          node --test .github/scripts/test-detect-ci-scope.mjs
+          node .github/scripts/detect-ci-scope.mjs
+
       - name: Validate the local continuity observer before integration tests
+        if: ${{ steps.scope.outputs.run_heavy_deploy_tests == 'true' }}
         run: python3 .github/scripts/fixtures/images-only-docker/test_observe_service.py
 
       - name: Verify sampled HOLD proof and runner evidence without host access
+        if: ${{ steps.scope.outputs.run_heavy_deploy_tests == 'true' }}
         run: |
           node --test .github/scripts/test-sampled-recovery-proof.mjs .github/scripts/test-sampled-recovery-runner.mjs
 
       - name: Verify smoke-session cleanup with isolated local and CI context
+        if: ${{ steps.scope.outputs.run_heavy_deploy_tests == 'true' }}
         run: bash .github/scripts/test-smoke-distributor-session.sh
 
       - name: Exercise image-only cleanup with isolated real Docker resources
+        if: ${{ steps.scope.outputs.run_heavy_deploy_tests == 'true' }}
         run: sudo -n env RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-images-only-docker.sh
 
+      - name: Start MySQL 5.7 and 8.4 compatibility containers in background
+        if: ${{ steps.scope.outputs.run_mysql_compat == 'true' }}
+        run: |
+          docker rm -f xboard-ci-mysql57 xboard-ci-mysql84 >/dev/null 2>&1 || true
+          docker run -d --name xboard-ci-mysql57 \
+            -e MYSQL_ROOT_PASSWORD=xboard-test \
+            -e MYSQL_DATABASE=xboard_test \
+            -p 127.0.0.1:3307:3306 \
+            mysql:5.7 >/dev/null
+          docker run -d --name xboard-ci-mysql84 \
+            -e MYSQL_ROOT_PASSWORD=xboard-test \
+            -e MYSQL_DATABASE=xboard_test \
+            -p 127.0.0.1:3308:3306 \
+            mysql:8.4 >/dev/null
+
       - name: Set up PHP 8.3
+        if: ${{ steps.scope.outputs.run_php_core == 'true' }}
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
@@ -225,6 +231,7 @@ jobs:
           coverage: none
 
       - name: Install locked PHP dependencies once
+        if: ${{ steps.scope.outputs.run_php_core == 'true' }}
         env:
           COMPOSER_AUTH: >-
             {"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}
@@ -239,17 +246,36 @@ jobs:
           composer install --prefer-source --no-interaction --no-progress
 
       - name: Validate dependency metadata and security advisories
+        if: ${{ steps.scope.outputs.run_php_core == 'true' }}
         run: |
           composer validate --no-check-publish
           composer audit --locked --no-interaction
 
       - name: Run PHP 8.3 static analysis without new baseline violations
+        if: ${{ steps.scope.outputs.run_php_core == 'true' }}
         run: php vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
       - name: Run PHP 8.3 SQLite regression tests
+        if: ${{ steps.scope.outputs.run_php_core == 'true' }}
         run: php vendor/bin/phpunit
 
+      - name: Wait for MySQL 5.7 and 8.4 compatibility containers
+        if: ${{ steps.scope.outputs.run_mysql_compat == 'true' }}
+        run: |
+          for container in xboard-ci-mysql57 xboard-ci-mysql84; do
+            ready=0
+            for _ in $(seq 1 45); do
+              if docker exec "$container" mysqladmin ping -h 127.0.0.1 -uroot -pxboard-test --silent >/dev/null 2>&1; then
+                ready=1
+                break
+              fi
+              sleep 2
+            done
+            test "$ready" -eq 1
+          done
+
       - name: Run MySQL 5.7 compatibility regression
+        if: ${{ steps.scope.outputs.run_mysql_compat == 'true' }}
         env:
           APP_ENV: testing
           APP_DEBUG: 'true'
@@ -270,6 +296,7 @@ jobs:
         run: php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php tests
 
       - name: Run MySQL 8.4 compatibility regression
+        if: ${{ steps.scope.outputs.run_mysql_compat == 'true' }}
         env:
           APP_ENV: testing
           APP_DEBUG: 'true'
@@ -289,7 +316,12 @@ jobs:
           TELESCOPE_ENABLED: 'false'
         run: php vendor/bin/phpunit --no-configuration --bootstrap vendor/autoload.php tests
 
+      - name: Stop MySQL compatibility containers before Docker protocol tests
+        if: ${{ always() && steps.scope.outputs.run_mysql_compat == 'true' }}
+        run: docker rm -f xboard-ci-mysql57 xboard-ci-mysql84 >/dev/null 2>&1 || true
+
       - name: Set up PHP 8.4
+        if: ${{ steps.scope.outputs.run_php84_compat == 'true' }}
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
@@ -297,24 +329,14 @@ jobs:
           coverage: none
 
       - name: Validate PHP 8.4 platform and static analysis
+        if: ${{ steps.scope.outputs.run_php84_compat == 'true' }}
         run: |
           composer check-platform-reqs
           php vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
       - name: Run PHP 8.4 SQLite regression tests
+        if: ${{ steps.scope.outputs.run_php84_compat == 'true' }}
         run: php vendor/bin/phpunit
-
-      - name: Set up Node.js for locked browser regressions
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: npm
-
-      - name: Install locked JavaScript test dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Install the matching Playwright Chromium
-        run: npx --no-install playwright install --with-deps chromium
 
       - name: Validate companion JavaScript
         run: |
@@ -329,10 +351,28 @@ jobs:
           node --check theme/Xboard/assets/distributor-message-guard.js
           node --test tests/JavaScript/*.test.js
 
+      - name: Set up Node.js for locked browser regressions
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install locked JavaScript test dependencies
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
+        run: npm ci --ignore-scripts
+
+      - name: Install the matching Playwright Chromium
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
+        run: npx --no-install playwright install --with-deps chromium
+
       - name: Run distributor rename browser regressions
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
         run: npm run test:browser:distributor-rename
 
       - name: Validate deployment scripts
+        env:
+          RUN_HEAVY_DEPLOY_TESTS: ${{ steps.scope.outputs.run_heavy_deploy_tests }}
         run: |
           php -l .github/scripts/validate-approved-migrations.php
           php -l .github/scripts/build-theme-asset-manifest.php
@@ -422,42 +462,8 @@ jobs:
           sh -n .docker/redis/healthcheck-v2-redis.sh
           php -l .github/scripts/validate-v2-compose.php
           bash .github/scripts/validate-v2-compose.sh
-          bash .github/scripts/test-v2-redis.sh
-          bash .github/scripts/test-v2-low-memory-common.sh
-          bash .github/scripts/test-v2-rollback-network-cleanup.sh
-          bash .github/scripts/test-finalize-xboard-v2-low-memory.sh
-          bash .github/scripts/test-plan-xboard-release-slot.sh
-          bash .github/scripts/test-verify-xboard-v2-prepared-release.sh
-          bash .github/scripts/test-cleanup-xboard-retention.sh
-          bash .github/scripts/test-verify-retention-request.sh
-          bash .github/scripts/test-verify-retention-post-audit.sh
-          bash .github/scripts/test-retention-timeout.sh
-          bash .github/scripts/test-images-only-approval.sh
-          bash .github/scripts/test-image-startup-references.sh
-          bash .github/scripts/test-image-startup-revalidation.sh
-          bash .github/scripts/test-verify-images-only-request.sh
-          bash .github/scripts/test-retention-continuity.sh
-          bash .github/scripts/test-passive-image-monitoring.sh
-          bash .github/scripts/test-verify-image-restore.sh
-          bash .github/scripts/test-run-images-only-remote.sh
-          bash .github/scripts/test-retention-resource-sampling.sh
-          bash .github/scripts/test-resource-diagnostic-request.sh
-          bash .github/scripts/test-resource-diagnostic-remote.sh
-          bash .github/scripts/test-retention-predelete-recovery.sh
-          bash .github/scripts/test-retention-sampled-recovery.sh
-          bash .github/scripts/test-images-only-inventory.sh
-          bash .github/scripts/test-select-images-only-review.sh
-          bash .github/scripts/test-audit-retirement-readiness.sh
-          bash .github/scripts/test-cleanup-xboard-images-only.sh
-          bash .github/scripts/test-audit-xboard-images-only.sh
-          bash .github/scripts/test-deploy-admin-assets-admission.sh
-          bash .github/scripts/test-verify-images-only-post-audit.sh
-          RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-retention-docker-protocol.sh
-          bash .github/scripts/test-audit-xboard-network-debt.sh
-          bash .github/scripts/test-cleanup-xboard-network-debt.sh
           bash -n .github/scripts/cleanup-xboard-retain-online-only.sh
           bash -n .github/scripts/test-cleanup-xboard-retain-online-only.sh
-          bash .github/scripts/test-cleanup-xboard-retain-online-only.sh
           bash .github/scripts/test-resolve-xboard-v2-port.sh
           bash .github/scripts/test-run-distributor-smoke-bounded.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh
@@ -485,9 +491,70 @@ jobs:
           bash .github/scripts/test-preflight-scheduler-reaper.sh
           bash .github/scripts/test-production-runtime-discovery.sh
           bash .github/scripts/test-resolve-production-image.sh
+          if [ "${RUN_HEAVY_DEPLOY_TESTS:-true}" = "true" ]; then
+            heavy_logs=$(mktemp -d)
+            run_heavy() {
+              local name="$1"
+              shift
+              (
+                if "$@" >"$heavy_logs/$name.log" 2>&1; then
+                  cat "$heavy_logs/$name.log"
+                else
+                  rc=$?
+                  cat "$heavy_logs/$name.log" >&2
+                  touch "$heavy_logs/FAILED"
+                  exit "$rc"
+                fi
+              ) &
+              while [ "$(jobs -rp | wc -l)" -ge 4 ]; do
+                wait -n || touch "$heavy_logs/FAILED"
+              done
+              test ! -f "$heavy_logs/FAILED"
+            }
+            run_heavy finalize_v2 bash .github/scripts/test-finalize-xboard-v2-low-memory.sh
+            run_heavy cleanup_retention bash .github/scripts/test-cleanup-xboard-retention.sh
+            run_heavy retention_continuity bash .github/scripts/test-retention-continuity.sh
+            run_heavy passive_monitoring bash .github/scripts/test-passive-image-monitoring.sh
+            run_heavy admin_admission bash .github/scripts/test-deploy-admin-assets-admission.sh
+            run_heavy sampled_recovery bash .github/scripts/test-retention-sampled-recovery.sh
+            run_heavy images_inventory bash .github/scripts/test-images-only-inventory.sh
+            run_heavy predelete_recovery bash .github/scripts/test-retention-predelete-recovery.sh
+            run_heavy resource_diag_remote bash .github/scripts/test-resource-diagnostic-remote.sh
+            run_heavy image_startup_refs bash .github/scripts/test-image-startup-references.sh
+            run_heavy image_startup_reval bash .github/scripts/test-image-startup-revalidation.sh
+            run_heavy image_post_audit bash .github/scripts/test-verify-images-only-post-audit.sh
+            run_heavy image_remote bash .github/scripts/test-run-images-only-remote.sh
+            run_heavy v2_redis bash .github/scripts/test-v2-redis.sh
+            run_heavy v2_common bash .github/scripts/test-v2-low-memory-common.sh
+            run_heavy v2_rollback_net bash .github/scripts/test-v2-rollback-network-cleanup.sh
+            run_heavy plan_slot bash .github/scripts/test-plan-xboard-release-slot.sh
+            run_heavy verify_v2_prep bash .github/scripts/test-verify-xboard-v2-prepared-release.sh
+            run_heavy verify_ret_req bash .github/scripts/test-verify-retention-request.sh
+            run_heavy verify_ret_post bash .github/scripts/test-verify-retention-post-audit.sh
+            run_heavy ret_timeout bash .github/scripts/test-retention-timeout.sh
+            run_heavy img_approval bash .github/scripts/test-images-only-approval.sh
+            run_heavy verify_img_req bash .github/scripts/test-verify-images-only-request.sh
+            run_heavy verify_img_restore bash .github/scripts/test-verify-image-restore.sh
+            run_heavy ret_resource bash .github/scripts/test-retention-resource-sampling.sh
+            run_heavy resource_diag_req bash .github/scripts/test-resource-diagnostic-request.sh
+            run_heavy select_img_review bash .github/scripts/test-select-images-only-review.sh
+            run_heavy audit_retire bash .github/scripts/test-audit-retirement-readiness.sh
+            run_heavy cleanup_img_only bash .github/scripts/test-cleanup-xboard-images-only.sh
+            run_heavy audit_img_only bash .github/scripts/test-audit-xboard-images-only.sh
+            run_heavy audit_net_debt bash .github/scripts/test-audit-xboard-network-debt.sh
+            run_heavy cleanup_net_debt bash .github/scripts/test-cleanup-xboard-network-debt.sh
+            run_heavy cleanup_online_only bash .github/scripts/test-cleanup-xboard-retain-online-only.sh
+            wait || touch "$heavy_logs/FAILED"
+            if [ -f "$heavy_logs/FAILED" ]; then
+              rm -rf "$heavy_logs"
+              exit 1
+            fi
+            rm -rf "$heavy_logs"
+            RETENTION_DOCKER_TEST_ALLOW_LOCAL=true bash .github/scripts/test-retention-docker-protocol.sh
+          fi
 
   pr-image-build:
-    if: ${{ github.event_name == 'pull_request' }}
+    if: ${{ github.event_name == 'pull_request' && needs.verify.outputs.run_pr_image_build == 'true' }}
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 45
