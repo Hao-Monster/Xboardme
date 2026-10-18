@@ -108,6 +108,22 @@ class ServerService
                 'device_limit'
             ])
             ->get();
+
+        try {
+            $identityService = app(\App\Services\Diagnostics\OrderDiagnosticIdentityService::class);
+            $panelScope = $identityService->getPanelScope();
+            if ($panelScope !== null) {
+                foreach ($users as $user) {
+                    $uid = (int) ($user->id ?? 0);
+                    if ($uid > 0) {
+                        $user->diagnostic_id = \App\Services\Diagnostics\DiagnosticContract::computeDiagnosticId($panelScope, $uid);
+                    }
+                }
+            }
+        } catch (\Throwable) {
+            // Do not break proxy user synchronization if diagnostics scope is uninitialized or invalid
+        }
+
         return HookManager::filter('server.users.get', $users, $node);
     }
 
@@ -390,6 +406,17 @@ class ServerService
             }
             if (data_get($certConfig, 'cert_mode') !== 'none') {
                 $response['cert_config'] = $certConfig;
+            }
+        }
+
+        if (!empty($response)) {
+            try {
+                $panelScope = app(\App\Services\Diagnostics\OrderDiagnosticIdentityService::class)->getPanelScope();
+                if ($panelScope !== null) {
+                    $response['panel_scope'] = $panelScope;
+                }
+            } catch (\Throwable) {
+                // Ignore if diagnostics scope is unavailable
             }
         }
 

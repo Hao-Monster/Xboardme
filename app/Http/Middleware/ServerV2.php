@@ -14,10 +14,33 @@ use Illuminate\Http\Request;
  */
 class ServerV2
 {
-    public function handle(Request $request, Closure $next)
+    public function handle(Request $request, Closure $next, ?string $mode = null)
     {
         if (!$request->filled('token') && $request->bearerToken()) {
             $request->merge(['token' => $request->bearerToken()]);
+        }
+
+        $requiresMachine = $mode === 'machine'
+            || $request->is('api/v2/server/diagnostics/*')
+            || $request->is('*/server/diagnostics/*');
+
+        if ($requiresMachine) {
+            $rawMachineId = $request->input('machine_id');
+            $validMachineId = is_int($rawMachineId)
+                ? $rawMachineId > 0
+                : (is_string($rawMachineId) && preg_match('/\A[1-9]\d*\z/', trim($rawMachineId)) === 1);
+
+            if (!$request->filled('machine_id') || !$validMachineId) {
+                return response()->json([
+                    'status' => 'fail',
+                    'message' => 'V2 节点诊断接口必须提供有效的 machine_id，禁止回退共享 token',
+                    'data' => null,
+                    'error' => ['code' => 'machine_id_required'],
+                ], 422);
+            }
+
+            $this->authenticateByMachine($request);
+            return $next($request);
         }
 
         if ($request->filled('machine_id')) {

@@ -43,6 +43,8 @@ class NodeSyncService
      */
     public static function notifyConfigUpdated(int $nodeId): void
     {
+        self::reconcileActiveDiagnosticsIfNeeded();
+
         if (!self::isNodeOnline($nodeId))
             return;
 
@@ -58,6 +60,8 @@ class NodeSyncService
      */
     public static function notifyUsersUpdatedByGroup(int $groupId): void
     {
+        self::reconcileActiveDiagnosticsIfNeeded();
+
         $servers = Server::whereJsonContains('group_ids', (string) $groupId)
             ->get();
 
@@ -75,8 +79,20 @@ class NodeSyncService
      */
     public static function notifyUserChanged(User $user): void
     {
+        self::reconcileActiveDiagnosticsIfNeeded();
+
         if (!$user->group_id)
             return;
+
+        $diagnosticId = null;
+        if ($user->isAvailable() && (int) $user->id > 0) {
+            try {
+                $diagnosticId = app(\App\Services\Diagnostics\OrderDiagnosticIdentityService::class)
+                    ->computeUserDiagnosticId((int) $user->id);
+            } catch (\Throwable) {
+                $diagnosticId = null;
+            }
+        }
 
         $servers = Server::whereJsonContains('group_ids', (string) $user->group_id)->get();
         foreach ($servers as $server) {
@@ -84,16 +100,18 @@ class NodeSyncService
                 continue;
 
             if ($user->isAvailable()) {
+                $userPayload = [
+                    'id' => $user->id,
+                    'uuid' => $user->uuid,
+                    'speed_limit' => $user->speed_limit,
+                    'device_limit' => $user->device_limit,
+                ];
+                if ($diagnosticId !== null) {
+                    $userPayload['diagnostic_id'] = $diagnosticId;
+                }
                 self::push($server->id, 'sync.user.delta', [
                     'action' => 'add',
-                    'users' => [
-                        [
-                            'id' => $user->id,
-                            'uuid' => $user->uuid,
-                            'speed_limit' => $user->speed_limit,
-                            'device_limit' => $user->device_limit,
-                        ]
-                    ],
+                    'users' => [$userPayload],
                 ]);
             } else {
                 self::push($server->id, 'sync.user.delta', [
@@ -109,6 +127,8 @@ class NodeSyncService
      */
     public static function notifyUserRemovedFromGroup(int $userId, int $groupId): void
     {
+        self::reconcileActiveDiagnosticsIfNeeded();
+
         $servers = Server::whereJsonContains('group_ids', (string) $groupId)
             ->get();
 
@@ -128,6 +148,8 @@ class NodeSyncService
      */
     public static function notifyFullSync(int $nodeId): void
     {
+        self::reconcileActiveDiagnosticsIfNeeded();
+
         if (!self::isNodeOnline($nodeId))
             return;
 
@@ -139,6 +161,15 @@ class NodeSyncService
 
         $users = ServerService::getAvailableUsers($node)->toArray();
         self::push($nodeId, 'sync.users', ['users' => $users]);
+    }
+
+    private static function reconcileActiveDiagnosticsIfNeeded(): void
+    {
+        try {
+            app(\App\Services\Diagnostics\DiagnosticLeaseService::class)->reconcileActiveSessionsEligibility();
+        } catch (\Throwable) {
+            // Ignore when Redis or diagnostics store is not initialized in standalone tests
+        }
     }
 
     /**

@@ -33,7 +33,121 @@ class NodeEventHandlers
         Cache::put(\App\Utils\CacheKey::get('SERVER_' . $nodeType . '_LAST_CHECK_AT', $nodeId), time(), 3600);
         ServerService::updateMetrics($node, $data);
 
+        if (isset($data['diagnostics']) && is_array($data['diagnostics'])) {
+            $diag = $data['diagnostics'];
+            $runtimeId = isset($diag['runtime_id']) && is_string($diag['runtime_id'])
+                ? strtolower(trim($diag['runtime_id']))
+                : '';
+            if ($runtimeId !== '') {
+                try {
+                    app(\App\Services\Diagnostics\DiagnosticLeaseService::class)->recordNodeCapabilities(
+                        $nodeId,
+                        $runtimeId,
+                        $diag,
+                        NodeRegistry::connectionId($conn),
+                        false
+                    );
+                } catch (\Throwable $e) {
+                    Log::warning("[WS] Node#{$nodeId} diagnostics metrics update failed", [
+                        'exception' => $e::class,
+                    ]);
+                }
+            }
+        }
+
         Log::debug("[WS] Node#{$nodeId} status updated");
+    }
+
+    /**
+     * Handle node diagnostics capability advertisement (`diagnostics.capabilities`).
+     * Records capability without overwriting active snapshot ACK binding.
+     */
+    public static function handleDiagnosticsCapabilities(TcpConnection $conn, int $nodeId, array $data = []): void
+    {
+        $runtimeId = isset($data['runtime_id']) && is_string($data['runtime_id'])
+            ? strtolower(trim($data['runtime_id']))
+            : '';
+        if ($runtimeId === '') {
+            return;
+        }
+
+        try {
+            app(\App\Services\Diagnostics\DiagnosticLeaseService::class)->recordNodeCapabilities(
+                $nodeId,
+                $runtimeId,
+                $data,
+                NodeRegistry::connectionId($conn),
+                true
+            );
+        } catch (\Throwable $e) {
+            Log::warning("[WS] Node#{$nodeId} diagnostics.capabilities failed", [
+                'exception' => $e::class,
+            ]);
+        }
+    }
+
+    /**
+     * Handle authoritative diagnostic snapshot request (`request.diagnostics`) over WebSocket.
+     */
+    public static function handleDiagnosticsRequest(TcpConnection $conn, int $nodeId, array $data = []): void
+    {
+        $node = Server::find($nodeId);
+        if (!$node) {
+            return;
+        }
+
+        $connectionId = NodeRegistry::connectionId($conn);
+        if ($connectionId === '') {
+            return;
+        }
+
+        try {
+            $snapshot = app(\App\Services\Diagnostics\DiagnosticLeaseService::class)->buildNodeSnapshot(
+                $node,
+                $data,
+                'ws',
+                'ws:' . $connectionId,
+                $connectionId
+            );
+
+            NodeRegistry::send($nodeId, 'diagnostics.snapshot', $snapshot);
+        } catch (\Throwable $e) {
+            Log::warning("[WS] Node#{$nodeId} request.diagnostics failed", [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Handle node diagnostic lease ACK (`diagnostics.ack`) over WebSocket.
+     */
+    public static function handleDiagnosticsAck(TcpConnection $conn, int $nodeId, array $data = []): void
+    {
+        $node = Server::find($nodeId);
+        if (!$node) {
+            return;
+        }
+
+        $connectionId = NodeRegistry::connectionId($conn);
+        if ($connectionId === '') {
+            return;
+        }
+
+        try {
+            app(\App\Services\Diagnostics\DiagnosticLeaseService::class)->handleNodeAck(
+                $node,
+                $data,
+                'ws',
+                'ws:' . $connectionId,
+                $connectionId
+            );
+        } catch (\Throwable $e) {
+            Log::warning("[WS] Node#{$nodeId} diagnostics.ack failed", [
+                'exception' => $e::class,
+                'message' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**
