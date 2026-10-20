@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature\Diagnostics;
 
 use App\Http\Middleware\InitializePlugins;
+use App\Models\AdminAuditLog;
 use App\Models\Order;
 use App\Models\Plan;
 use App\Models\Server;
@@ -233,11 +234,24 @@ final class OrderDiagnosticsIdentityAndSyncTest extends TestCase
         ]);
 
         foreach (['uuid', 'token', 'subscribe_url', 'email', 'user_id', 'subscriber_user_id'] as $forbiddenField) {
-            $this->postJson($lookupUri, [
+            $secretValue = 'forbidden-secret-value-' . $forbiddenField;
+            $this->postJson($lookupUri . '?' . http_build_query([
+                $forbiddenField => $secretValue,
+                'email' => 'query-leak@example.com',
+            ]), [
                 'order_id' => $order->id,
-                $forbiddenField => 'forbidden-secret-value',
+                $forbiddenField => $secretValue,
             ])->assertStatus(422)
                 ->assertJsonPath('error.code', 'forbidden_identity_parameter');
+
+            $audit = AdminAuditLog::query()->where('action', 'order_diagnostics.lookup')->latest('id')->firstOrFail();
+            $auditRaw = (string) $audit->getRawOriginal('request_data');
+            $auditUri = (string) $audit->uri;
+            $this->assertStringNotContainsString($secretValue, $auditRaw);
+            $this->assertStringNotContainsString($forbiddenField, $auditRaw);
+            $this->assertStringNotContainsString($secretValue, $auditUri);
+            $this->assertStringNotContainsString($forbiddenField, $auditUri);
+            $this->assertStringNotContainsString('query-leak@example.com', $auditUri);
         }
 
         $res = $this->postJson($lookupUri, ['order_id' => $order->id])->assertOk();

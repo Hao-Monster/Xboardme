@@ -720,3 +720,78 @@ test('rapid customer/mode switch cancels stale requests, history back/forward re
   await expect(f.page.locator('[data-diag-error]')).toContainText('管理员登录已失效');
   await expect(f.page.locator('[data-diag-id-value]')).toHaveCount(0);
 });
+
+test('late connection detail response must not overwrite newer list snapshot time range or render stale detail', async (t) => {
+  const f = await createDiagnosticsFixture(t, 1440);
+  const rangeA = { from: '2026-10-20T10:00:00Z', to: '2026-10-20T10:15:00Z' };
+  const rangeB = { from: '2026-10-20T10:00:02Z', to: '2026-10-20T10:15:02Z' };
+  let listCount = 0;
+  let detailBody = null;
+  let releaseDetail;
+  const queryRequests = [];
+  let pageStatus;
+
+  await f.page.route('**/order/diagnostics/query', async route => {
+    const body = route.request().postDataJSON();
+    queryRequests.push(body);
+    if (body.cursor) {
+      pageStatus = ((!body.from || body.from === rangeB.from) && (!body.to || body.to === rangeB.to)) ? 200 : 422;
+      if (pageStatus === 422) {
+        return route.fulfill({
+          status: 422,
+          json: { status: 'fail', message: 'cursor_parameter_mismatch', error: { code: 'cursor_parameter_mismatch' } },
+        });
+      }
+    }
+    const range = (++listCount === 1) ? rangeA : rangeB;
+    return route.fulfill({
+      json: {
+        status: 'success',
+        data: {
+          mode: 'order',
+          order_id: 101,
+          diagnostic_id: f.data.order101Card.diagnostic_id,
+          identity_card: f.data.order101Card,
+          snapshot_id: listCount === 1 ? 'snapshot-a' : 'snapshot-b',
+          ...range,
+          items: [f.data.connItem101],
+          next_cursor: body.cursor ? null : 'cursor-b',
+          scan_truncated: false,
+          truncated: false,
+          coverage: { state: 'complete', reasons: [], nodes: [] },
+        },
+      },
+    });
+  });
+
+  await f.page.route('**/order/diagnostics/connection', async route => {
+    detailBody = route.request().postDataJSON();
+    await new Promise(resolve => { releaseDetail = resolve; });
+    return route.fulfill({
+      json: {
+        status: 'success',
+        data: { ...f.data.connDetail101, ...rangeA },
+      },
+    });
+  });
+
+  await f.page.evaluate(() => { location.hash = '#/?diagnostics=1&order_id=101'; });
+  await expect(f.page.locator('[data-diag-open-connection="0"]')).toBeVisible();
+  await f.page.locator('[data-diag-open-connection="0"]').click();
+  await expect.poll(() => detailBody !== null).toBe(true);
+
+  await f.page.locator('[data-diag-action="apply-filters"]').click();
+  await expect.poll(() => queryRequests.length).toBe(2);
+  await expect(f.page.locator('[data-diag-action="next-page"]')).toBeEnabled();
+
+  const detailResponse = f.page.waitForResponse(response => response.url().endsWith('/order/diagnostics/connection'));
+  releaseDetail();
+  await detailResponse;
+  await f.page.waitForTimeout(100);
+
+  await f.page.locator('[data-diag-action="next-page"]').click();
+  await expect.poll(() => queryRequests.length).toBe(3);
+  assert.equal(pageStatus, 200);
+  assert.equal(queryRequests.at(-1).from, rangeB.from);
+  assert.equal(queryRequests.at(-1).to, rangeB.to);
+});

@@ -5,8 +5,8 @@ namespace App\Http\Controllers\V1\User;
 use App\Http\Controllers\Controller;
 use App\Models\DistributorOrder;
 use App\Services\DistributorOrderService;
+use App\Support\SqliteImmediateTransaction;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class DistributorController extends Controller
 {
@@ -79,7 +79,7 @@ class DistributorController extends Controller
             'confirm' => 'accepted',
         ]);
 
-        $delivery = DB::transaction(function () use ($request) {
+        $delivery = SqliteImmediateTransaction::write(function () use ($request) {
             $delivery = DistributorOrder::query()
                 ->where('distributor_user_id', $request->user()->id)
                 ->whereHas('order', fn($q) => $q->where('trade_no', $request->input('trade_no')))

@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import io
 import json
 import os
 from pathlib import Path
@@ -25,6 +27,7 @@ from typing import Any
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 from configure import (
     CONNECTION_ALLOWED_FIELDS,
@@ -185,6 +188,11 @@ class DiagnosticsCapacityGuard:
         self.state_file = self.state_dir / "guard-state.json"
         self.data_mount_path = Path(config["data_mount_path"])
         self.root_mount_path = Path(config.get("root_mount_path", "/"))
+        self.host_data_mount_path = str(config.get("host_data_mount_path", "")).strip()
+        self.guard_mount_read_only = bool(config.get("guard_mount_read_only", True))
+        self.storage_writable_by_writer = bool(
+            config.get("storage_writable_by_writer", True)
+        )
         self.expected_fs_type = str(config.get("expected_fs_type", "ext4"))
         self.expected_fs_uuid = str(config.get("expected_fs_uuid", "")).strip()
         self.max_check_age_seconds = int(config.get("max_check_age_seconds", 60))
@@ -251,21 +259,107 @@ class DiagnosticsCapacityGuard:
             return corrupt
 
     def _default_mount_inspector(self, mount_path: Path, root_path: Path) -> dict[str, Any]:
+        resolved = str(mount_path.resolve())
+        host_source_path = self.host_data_mount_path
+        if host_source_path.startswith("/host-root/"):
+            host_source_path = host_source_path[len("/host-root") :]
+
+        proc_mountinfo = Path("/proc/self/mountinfo")
+        if proc_mountinfo.exists():
+            mountinfo_entries: dict[str, tuple[str, list[str], list[str]]] = {}
+            for line in proc_mountinfo.read_text(encoding="utf-8", errors="ignore").splitlines():
+                parts = line.split()
+                if len(parts) < 10 or "-" not in parts[6:]:
+                    continue
+                sep_idx = parts.index("-", 6)
+                if len(parts) < sep_idx + 4:
+                    continue
+                raw_target = parts[4]
+                unescaped_target = (
+                    raw_target.replace(r"\040", " ")
+                    .replace(r"\011", "\t")
+                    .replace(r"\012", "\n")
+                    .replace(r"\134", "\\")
+                )
+                mount_opts = parts[5].split(",")
+                fs_type = parts[sep_idx + 1]
+                super_opts = parts[sep_idx + 3].split(",")
+                mountinfo_entries[raw_target] = (fs_type, mount_opts, super_opts)
+                mountinfo_entries[unescaped_target] = (fs_type, mount_opts, super_opts)
+
+            if resolved in mountinfo_entries:
+                fs_type, mount_opts, super_opts = mountinfo_entries[resolved]
+                guard_read_only = "ro" in mount_opts
+                mount_rw = ("rw" in mount_opts) and ("ro" not in mount_opts)
+                super_rw = ("rw" in super_opts) and ("ro" not in super_opts)
+                if self.host_data_mount_path and self.host_data_mount_path in mountinfo_entries:
+                    mirror_super_opts = mountinfo_entries[self.host_data_mount_path][2]
+                    mirror_super_rw = ("rw" in mirror_super_opts) and ("ro" not in mirror_super_opts)
+                    super_rw = super_rw and mirror_super_rw
+
+                if (
+                    host_source_path
+                    and host_source_path != resolved
+                    and not host_source_path.startswith("/host-root")
+                    and host_source_path in mountinfo_entries
+                ):
+                    _, host_mount_opts, host_super_opts = mountinfo_entries[host_source_path]
+                    host_rw = (
+                        ("rw" in host_mount_opts)
+                        and ("ro" not in host_mount_opts)
+                        and ("rw" in host_super_opts)
+                        and ("ro" not in host_super_opts)
+                    )
+                    writable = super_rw and host_rw and self.storage_writable_by_writer
+                elif mount_rw:
+                    writable = super_rw and self.storage_writable_by_writer
+                elif guard_read_only and self.guard_mount_read_only:
+                    writable = super_rw and self.storage_writable_by_writer
+                else:
+                    writable = False
+
+                return {
+                    "mounted": True,
+                    "fs_type": fs_type,
+                    "fs_uuid": "",
+                    "guard_read_only": guard_read_only,
+                    "superblock_writable": super_rw,
+                    "writable": writable,
+                }
+
         proc_mounts = Path("/proc/mounts")
         if not proc_mounts.exists():
             return {"mounted": False, "fs_type": "", "fs_uuid": "", "writable": False}
-        resolved = str(mount_path.resolve())
+        entries: dict[str, tuple[str, list[str]]] = {}
         for line in proc_mounts.read_text(encoding="utf-8", errors="ignore").splitlines():
             parts = line.split()
-            if len(parts) >= 4 and parts[1] == resolved:
-                opts = parts[3].split(",")
-                return {
-                    "mounted": True,
-                    "fs_type": parts[2],
-                    "fs_uuid": "",
-                    "writable": "rw" in opts,
-                }
-        return {"mounted": False, "fs_type": "", "fs_uuid": "", "writable": False}
+            if len(parts) >= 4:
+                entries[parts[1]] = (parts[2], parts[3].split(","))
+        if resolved not in entries:
+            return {"mounted": False, "fs_type": "", "fs_uuid": "", "writable": False}
+        fs_type, opts = entries[resolved]
+        guard_read_only = "ro" in opts
+        if (
+            host_source_path
+            and host_source_path != resolved
+            and not host_source_path.startswith("/host-root")
+            and host_source_path in entries
+        ):
+            host_opts = entries[host_source_path][1]
+            writable = ("rw" in host_opts) and ("ro" not in host_opts) and self.storage_writable_by_writer
+        elif ("rw" in opts) and ("ro" not in opts):
+            writable = self.storage_writable_by_writer
+        else:
+            # Cannot confirm underlying superblock writability from /proc/mounts alone when mount is ro.
+            writable = False
+        return {
+            "mounted": True,
+            "fs_type": fs_type,
+            "fs_uuid": "",
+            "guard_read_only": guard_read_only,
+            "superblock_writable": writable,
+            "writable": writable,
+        }
 
     def enable_gate(self, reason: str = "operator_enabled") -> dict[str, Any]:
         with self.lock:
@@ -626,12 +720,53 @@ class DiagnosticsCapacityGuard:
                     b"",
                 )
 
+        content_encoding = lower_headers.get("content-encoding", "").strip().lower()
+        if content_encoding in ("", "identity"):
+            decoded_body = raw_body
+        elif content_encoding in ("gzip", "x-gzip"):
+            try:
+                with gzip.GzipFile(fileobj=io.BytesIO(raw_body)) as gz:
+                    decoded_body = gz.read(max_body + 1)
+            except (OSError, EOFError, zlib.error):
+                return (
+                    400,
+                    {
+                        "error": {
+                            "code": "invalid_gzip_payload",
+                            "message": "Failed to decompress gzip request body.",
+                        }
+                    },
+                    b"",
+                )
+            if len(decoded_body) == 0 or len(decoded_body) > max_body:
+                return (
+                    413 if len(decoded_body) > max_body else 400,
+                    {
+                        "error": {
+                            "code": "invalid_insert_body_size",
+                            "message": "Decompressed insert payload size is invalid or exceeds limit.",
+                        }
+                    },
+                    b"",
+                )
+        else:
+            return (
+                415,
+                {
+                    "error": {
+                        "code": "unsupported_content_encoding",
+                        "message": f"Unsupported Content-Encoding {content_encoding}.",
+                    }
+                },
+                b"",
+            )
+
         enforced_node_id = int(hdr_node_id)
         now_utc = self.now_utc_fn()
         out_lines: list[str] = []
         suppressed = 0
 
-        for raw_line in raw_body.decode("utf-8", errors="replace").splitlines():
+        for raw_line in decoded_body.decode("utf-8", errors="replace").splitlines():
             stripped = raw_line.strip()
             if not stripped:
                 continue

@@ -517,6 +517,82 @@ final class DiagnosticQueryFeatureTest extends TestCase
         $this->assertSame('父操作记录未采集', $span2['gap_note']);
     }
 
+    public function test_default_time_window_cursor_succeeds_after_clock_advances_and_normalizes_string_booleans(): void
+    {
+        $diagId = str_repeat('a', 24);
+        $runtimeId = str_repeat('b', 32);
+        $rows = [];
+        for ($i = 1; $i <= 3; $i++) {
+            $rows[] = [
+                'event_id' => str_pad(dechex($i), 64, '0', STR_PAD_LEFT),
+                'panel_scope' => $this->panelScope,
+                'node_id' => '101',
+                'runtime_id' => $runtimeId,
+                'connection_id' => str_pad(dechex($i), 32, '0', STR_PAD_LEFT),
+                'diagnostic_id' => $diagId,
+                'target_id' => '0',
+                'seq' => '2',
+                'event_family' => 'connection',
+                'event' => 'diag.connection.close',
+                'stage' => 'close',
+                'event_time' => gmdate('Y-m-d\TH:i:s\Z', time() - 30),
+                'span_status' => 'ok',
+                'has_error' => 'false',
+                'error_stages' => '[]',
+                'reason_codes' => '[]',
+            ];
+        }
+
+        $ndjson = implode("\n", array_map(
+            static fn (array $row): string => json_encode($row, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
+            $rows
+        )) . "\n";
+
+        Http::fake([
+            'http://127.0.0.1:19428/select/logsql/query' => Http::response($ndjson, 200),
+            'http://127.0.0.1:19428/diagnostics/health' => Http::response($this->healthyPayload(), 200),
+        ]);
+
+        $queryUri = $this->adminUri('order/diagnostics/query');
+
+        // 1. Default time window (no from/to in request) with limit=2
+        $first = $this->postJson($queryUri, [
+            'diagnostic_id' => $diagId,
+            'limit' => 2,
+            'filters' => [],
+        ])->assertOk();
+
+        $first->assertJsonCount(2, 'data.items');
+        $this->assertSame('ok', $first->json('data.items.0.outcome'));
+        $this->assertSame([], $first->json('data.items.0.error_stages'));
+
+        $cursor = (string) $first->json('data.next_cursor');
+        $this->assertNotSame('', $cursor);
+
+        // Advance wall clock by at least 1 second and request page 2 without from/to
+        $startSec = time();
+        while (time() === $startSec) {
+            usleep(20000);
+        }
+
+        $second = $this->postJson($queryUri, [
+            'diagnostic_id' => $diagId,
+            'limit' => 2,
+            'filters' => [],
+            'cursor' => $cursor,
+        ])->assertOk();
+
+        $second->assertJsonCount(1, 'data.items');
+        $this->assertNull($second->json('data.next_cursor'));
+
+        // 2. Filtering by error_stages=['close'] must NOT match rows with has_error="false" and span_status="ok"
+        $filtered = $this->postJson($queryUri, [
+            'diagnostic_id' => $diagId,
+            'filters' => ['error_stages' => ['close']],
+        ])->assertOk();
+        $filtered->assertJsonCount(0, 'data.items');
+    }
+
     /**
      * @return array<string, mixed>
      */

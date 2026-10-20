@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from collections import namedtuple
 import datetime
+import gzip
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 
@@ -457,11 +461,187 @@ class DiagnosticsConfigAndGuardTest(unittest.TestCase):
                 self.assertEqual(received_lines[0]["panel_scope"], PANEL_SCOPE)
                 self.assertEqual(len(received_paths), 1)
                 self.assertIn("extra_fields=", received_paths[0])
+
+                # 5. Gzip-compressed insert from Vector collector -> accepted (200) and decompressed NDJSON forwarded to VictoriaLogs
+                gzip_headers = dict(trusted_headers)
+                gzip_headers["Content-Encoding"] = "gzip"
+                req_gzip = urllib.request.Request(
+                    f"http://127.0.0.1:{guard_port}/insert/jsonline?{vmauth_query}",
+                    data=gzip.compress(forged_line + b"\n"),
+                    headers=gzip_headers,
+                    method="POST",
+                )
+                with urllib.request.urlopen(req_gzip, timeout=2) as resp_gzip:
+                    self.assertEqual(resp_gzip.getcode(), 200)
+                self.assertEqual(len(received_lines), 2)
+                self.assertEqual(received_lines[1]["node_id"], 101)
+
+                # 6. Malformed gzip payload (invalid header and valid header with corrupt DEFLATE stream) -> 400 invalid_gzip_payload
+                for bad_gzip_payload in (
+                    b"not-a-valid-gzip-stream",
+                    b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x07" + b"\x00" * 8,
+                ):
+                    req_bad_gzip = urllib.request.Request(
+                        f"http://127.0.0.1:{guard_port}/insert/jsonline",
+                        data=bad_gzip_payload,
+                        headers=gzip_headers,
+                        method="POST",
+                    )
+                    with self.assertRaises(urllib.error.HTTPError) as ctx_bad_gzip:
+                        urllib.request.urlopen(req_bad_gzip, timeout=2)
+                    self.assertEqual(ctx_bad_gzip.exception.code, 400)
             finally:
                 guard_server.shutdown()
                 guard_server.server_close()
                 vl_server.shutdown()
                 vl_server.server_close()
+
+    def test_generated_guard_standalone_startup_and_readonly_mount_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            central_dir = Path(tmp) / "central"
+            configure.generate_central(
+                directory=central_dir,
+                panel_scope=PANEL_SCOPE,
+                node_ids=[101],
+            )
+            self.assertTrue((central_dir / "guard.py").exists())
+            self.assertTrue((central_dir / "configure.py").exists())
+
+            compose = json.loads(
+                (central_dir / "compose.yaml").read_text(encoding="utf-8")
+            )
+            guard_volumes = compose["services"]["diagnostics-guard"]["volumes"]
+            volume_targets = {v["target"]: v for v in guard_volumes}
+            self.assertIn("/app/guard.py", volume_targets)
+            self.assertIn("/app/configure.py", volume_targets)
+            self.assertTrue(volume_targets["/storage"]["read_only"])
+
+            clean_env = {
+                k: v for k, v in os.environ.items() if k != "PYTHONPATH"
+            }
+            proc = subprocess.run(
+                [sys.executable, "-B", str(central_dir / "guard.py"), "--help"],
+                cwd=central_dir,
+                env=clean_env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            cfg = json.loads(
+                (central_dir / "guard-config.json").read_text(encoding="utf-8")
+            )
+            cfg["state_dir"] = str(central_dir / "state")
+            cfg["data_mount_path"] = str(central_dir / "data")
+            cfg["root_mount_path"] = str(central_dir / "root")
+
+            g = guard.DiagnosticsCapacityGuard(
+                cfg,
+                monotonic_fn=lambda: 100.0,
+                now_utc_fn=lambda: datetime.datetime(
+                    2026, 10, 18, 10, 0, 5, tzinfo=datetime.timezone.utc
+                ),
+                disk_usage_fn=lambda _p: DiskUsage(240 * GIB, 8 * GIB, 180 * GIB),
+            )
+            resolved = str(g.data_mount_path.resolve())
+            host_mirror_path = "/host-root/opt/xboard/customer-diagnostics/data"
+            g.host_data_mount_path = host_mirror_path
+            headers = {
+                "X-Diagnostics-Panel-Scope": PANEL_SCOPE,
+                "X-Diagnostics-Node-Id": "101",
+                "X-Diagnostics-Collector-Id": "collector-node-101",
+            }
+            event_body = (json.dumps(sample_connection_event()) + "\n").encode("utf-8")
+
+            # 1. Normal read-only observer mount (and recursive /host-root ro) with rw underlying ext4 superblock -> ready
+            mounts_text = (
+                f"/dev/loop17 {resolved} ext4 ro,relatime 0 0\n"
+                f"/dev/loop17 {host_mirror_path} ext4 ro,relatime 0 0\n"
+            )
+            mountinfo_rw = (
+                f"101 80 7:17 / {resolved} ro,relatime - ext4 /dev/loop17 rw,errors=remount-ro\n"
+                f"102 81 7:17 / {host_mirror_path} ro,relatime - ext4 /dev/loop17 rw,errors=remount-ro\n"
+            )
+
+            def read_proc_rw(path: Path, *_args: object, **_kwargs: object) -> str:
+                name = str(path).replace("\\", "/")
+                if name.endswith("/mountinfo"):
+                    return mountinfo_rw
+                if name.endswith("/mounts"):
+                    return mounts_text
+                raise AssertionError(f"Unexpected proc read: {name}")
+
+            with (
+                patch.object(Path, "exists", return_value=True),
+                patch.object(Path, "read_text", new=read_proc_rw),
+            ):
+                inspection_rw = g._default_mount_inspector(
+                    g.data_mount_path, g.root_mount_path
+                )
+            self.assertTrue(inspection_rw["mounted"])
+            self.assertTrue(inspection_rw["guard_read_only"])
+            self.assertTrue(inspection_rw["superblock_writable"])
+            self.assertTrue(inspection_rw["writable"])
+
+            g.mount_inspector_fn = lambda _d, _r: inspection_rw
+            health_rw = g.enable_gate("test_ro_observer_rw_superblock")
+            self.assertEqual(health_rw["state"], "ready")
+            self.assertFalse(health_rw["latched"])
+            self.assertEqual(health_rw["reason_codes"], [])
+            status_rw, _, _ = g.validate_and_prepare_insert(
+                "/insert/jsonline", headers, event_body
+            )
+            self.assertEqual(status_rw, 200)
+
+            # 2. Backing ext4 superblock remounted read-only on error -> blocked, latched, and insert rejected (503)
+            mountinfo_ro = (
+                f"101 80 7:17 / {resolved} ro,relatime - ext4 /dev/loop17 ro,errors=remount-ro\n"
+                f"102 81 7:17 / {host_mirror_path} ro,relatime - ext4 /dev/loop17 ro,errors=remount-ro\n"
+            )
+
+            def read_proc_ro(path: Path, *_args: object, **_kwargs: object) -> str:
+                name = str(path).replace("\\", "/")
+                if name.endswith("/mountinfo"):
+                    return mountinfo_ro
+                if name.endswith("/mounts"):
+                    return mounts_text
+                raise AssertionError(f"Unexpected proc read: {name}")
+
+            with (
+                patch.object(Path, "exists", return_value=True),
+                patch.object(Path, "read_text", new=read_proc_ro),
+            ):
+                inspection_ro = g._default_mount_inspector(
+                    g.data_mount_path, g.root_mount_path
+                )
+            self.assertTrue(inspection_ro["mounted"])
+            self.assertTrue(inspection_ro["guard_read_only"])
+            self.assertFalse(inspection_ro["superblock_writable"])
+            self.assertFalse(inspection_ro["writable"])
+
+            g.mount_inspector_fn = lambda _d, _r: inspection_ro
+            health_ro = g.run_check()
+            self.assertEqual(health_ro["state"], "blocked")
+            self.assertTrue(health_ro["latched"])
+            self.assertIn("mount_not_writable", health_ro["reason_codes"])
+            status_ro, err_ro, _ = g.validate_and_prepare_insert(
+                "/insert/jsonline", headers, event_body
+            )
+            self.assertEqual(status_ro, 503)
+            self.assertIn("mount_not_writable", err_ro["error"]["reason_codes"])
+
+            # 3. Unconfirmed superblock state (only /proc/mounts ro without /proc/self/mountinfo) -> fail-closed
+            with (
+                patch.object(Path, "exists", return_value=True),
+                patch.object(Path, "read_text", return_value=mounts_text),
+            ):
+                inspection_unconfirmed = g._default_mount_inspector(
+                    g.data_mount_path, g.root_mount_path
+                )
+            self.assertTrue(inspection_unconfirmed["mounted"])
+            self.assertTrue(inspection_unconfirmed["guard_read_only"])
+            self.assertFalse(inspection_unconfirmed["writable"])
 
 
 if __name__ == "__main__":

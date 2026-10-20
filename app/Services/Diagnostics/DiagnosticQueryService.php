@@ -54,18 +54,19 @@ final class DiagnosticQueryService
     public function queryConnections(int $adminId, array $input): array
     {
         $subject = $this->resolveQuerySubject($input);
-        $timeRange = $this->resolveTimeRange($input);
+        $cursorRaw = isset($input['cursor']) && is_string($input['cursor']) ? trim($input['cursor']) : '';
+        $decodedCursor = $cursorRaw !== '' ? $this->decodeAndVerifyCursor($cursorRaw, $adminId) : null;
+        $timeRange = $this->resolveTimeRange($input, $decodedCursor);
         $limit = $this->resolvePageLimit($input['limit'] ?? null);
         $filters = $this->validateAndNormalizeFilters($input['filters'] ?? [], $input);
         $storageGeneration = $this->getStorageGeneration();
 
         $filtersHash = $this->computeFiltersHash($timeRange, $filters);
 
-        $cursorRaw = isset($input['cursor']) && is_string($input['cursor']) ? trim($input['cursor']) : '';
-        if ($cursorRaw !== '') {
+        if ($decodedCursor !== null) {
             return $this->serveConnectionsFromCursor(
                 $adminId,
-                $cursorRaw,
+                $decodedCursor,
                 $subject,
                 $timeRange,
                 $filtersHash,
@@ -119,6 +120,10 @@ final class DiagnosticQueryService
                 'kind' => 'connections',
                 'snapshot_id' => $snapshotId,
                 'as_of' => $asOfIso,
+                'from_ts' => $timeRange['from_ts'],
+                'to_ts' => $timeRange['to_ts'],
+                'from_iso' => $timeRange['from_iso'],
+                'to_iso' => $timeRange['to_iso'],
                 'diagnostic_id' => $subject['diagnostic_id'],
                 'mode' => $subject['mode'],
                 'order_id' => $subject['order_id'],
@@ -142,6 +147,10 @@ final class DiagnosticQueryService
                     'order_id' => $subject['order_id'],
                     'panel_scope' => $subject['panel_scope'],
                     'diagnostic_id' => $subject['diagnostic_id'],
+                    'from_ts' => $timeRange['from_ts'],
+                    'to_ts' => $timeRange['to_ts'],
+                    'from_iso' => $timeRange['from_iso'],
+                    'to_iso' => $timeRange['to_iso'],
                     'filters_hash' => $filtersHash,
                     'storage_generation' => $storageGeneration,
                     'snapshot_id' => $snapshotId,
@@ -166,7 +175,9 @@ final class DiagnosticQueryService
     public function queryConnectionDetail(int $adminId, array $input): array
     {
         $subject = $this->resolveQuerySubject($input);
-        $timeRange = $this->resolveTimeRange($input);
+        $cursorRaw = isset($input['cursor']) && is_string($input['cursor']) ? trim($input['cursor']) : '';
+        $decodedCursor = $cursorRaw !== '' ? $this->decodeAndVerifyCursor($cursorRaw, $adminId) : null;
+        $timeRange = $this->resolveTimeRange($input, $decodedCursor);
         $storageGeneration = $this->getStorageGeneration();
 
         $nodeId = $this->validatePositiveInt($input['node_id'] ?? null, 'node_id');
@@ -192,11 +203,10 @@ final class DiagnosticQueryService
             $timeRange['to_iso'],
         ]));
 
-        $cursorRaw = isset($input['cursor']) && is_string($input['cursor']) ? trim($input['cursor']) : '';
-        if ($cursorRaw !== '') {
+        if ($decodedCursor !== null) {
             return $this->serveConnectionDetailFromCursor(
                 $adminId,
-                $cursorRaw,
+                $decodedCursor,
                 $subject,
                 $detailTargetHash,
                 $storageGeneration
@@ -311,6 +321,10 @@ final class DiagnosticQueryService
                 'kind' => 'connection_detail',
                 'snapshot_id' => $snapshotId,
                 'as_of' => $asOfIso,
+                'from_ts' => $timeRange['from_ts'],
+                'to_ts' => $timeRange['to_ts'],
+                'from_iso' => $timeRange['from_iso'],
+                'to_iso' => $timeRange['to_iso'],
                 'diagnostic_id' => $subject['diagnostic_id'],
                 'mode' => $subject['mode'],
                 'order_id' => $subject['order_id'],
@@ -521,17 +535,34 @@ final class DiagnosticQueryService
 
     /**
      * @param array<string, mixed> $input
+     * @param array<string, mixed>|null $cursor
      * @return array{from_ts: int, to_ts: int, from_iso: string, to_iso: string}
      */
-    private function resolveTimeRange(array $input): array
+    private function resolveTimeRange(array $input, ?array $cursor = null): array
     {
         $nowTs = time();
-        $toTs = isset($input['to']) && $input['to'] !== ''
-            ? $this->parseTimestampInput($input['to'], 'to')
-            : $nowTs;
-        $fromTs = isset($input['from']) && $input['from'] !== ''
-            ? $this->parseTimestampInput($input['from'], 'from')
-            : ($toTs - self::DEFAULT_WINDOW_SECONDS);
+        $hasExplicitTo = isset($input['to']) && $input['to'] !== '';
+        $hasExplicitFrom = isset($input['from']) && $input['from'] !== '';
+
+        if ($hasExplicitTo) {
+            $toTs = $this->parseTimestampInput($input['to'], 'to');
+        } elseif ($cursor !== null && isset($cursor['to_ts']) && is_int($cursor['to_ts'])) {
+            $toTs = $cursor['to_ts'];
+        } elseif ($cursor !== null && isset($cursor['to_iso']) && is_string($cursor['to_iso']) && $cursor['to_iso'] !== '') {
+            $toTs = $this->parseTimestampInput($cursor['to_iso'], 'to');
+        } else {
+            $toTs = $nowTs;
+        }
+
+        if ($hasExplicitFrom) {
+            $fromTs = $this->parseTimestampInput($input['from'], 'from');
+        } elseif ($cursor !== null && isset($cursor['from_ts']) && is_int($cursor['from_ts'])) {
+            $fromTs = $cursor['from_ts'];
+        } elseif ($cursor !== null && isset($cursor['from_iso']) && is_string($cursor['from_iso']) && $cursor['from_iso'] !== '') {
+            $fromTs = $this->parseTimestampInput($cursor['from_iso'], 'from');
+        } else {
+            $fromTs = $toTs - self::DEFAULT_WINDOW_SECONDS;
+        }
 
         if ($fromTs >= $toTs) {
             throw new DiagnosticDomainException(
@@ -906,12 +937,46 @@ final class DiagnosticQueryService
             }
         }
 
+        foreach ([
+            'has_error',
+            'payload_truncated',
+            'dns_answers_truncated',
+            'dns_cache_hit',
+            'cache_hit',
+            'timeout',
+            'detail_started_mid_operation',
+            'exception.stack_truncated',
+        ] as $boolField) {
+            if (array_key_exists($boolField, $row)) {
+                $row[$boolField] = $this->toStrictBool($row[$boolField]);
+            }
+        }
+
+        if (isset($row['exception']) && is_array($row['exception']) && array_key_exists('stack_truncated', $row['exception'])) {
+            $row['exception']['stack_truncated'] = $this->toStrictBool($row['exception']['stack_truncated']);
+        }
+
         $eventId = $row['event_id'] ?? null;
         if (!is_string($eventId) || !DiagnosticContract::isValidHexId($eventId, 64)) {
             return null;
         }
 
         return $row;
+    }
+
+    private function toStrictBool(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return (int) $value === 1;
+        }
+        if (is_string($value)) {
+            $normalized = strtolower(trim($value));
+            return $normalized === 'true' || $normalized === '1';
+        }
+        return false;
     }
 
     /**
@@ -1003,7 +1068,7 @@ final class DiagnosticQueryService
                 $targets[$targetKey]['has_exception_stack'] = true;
             }
 
-            $hasError = (bool) ($ev['has_error'] ?? false)
+            $hasError = $this->toStrictBool($ev['has_error'] ?? false)
                 || (($ev['span_status'] ?? '') === 'error')
                 || (isset($ev['outcome']) && $ev['outcome'] !== 'ok');
             $evStage = (string) ($ev['last_error_stage'] ?? $ev['stage'] ?? '');
@@ -1061,7 +1126,7 @@ final class DiagnosticQueryService
                 }
             }
 
-            $hasErrorSummary = count($errorStages) > 0 || (bool) ($latest['has_error'] ?? false);
+            $hasErrorSummary = count($errorStages) > 0 || $this->toStrictBool($latest['has_error'] ?? false);
             $outcome = (string) ($latest['span_status'] ?? $latest['outcome'] ?? ($hasErrorSummary ? 'error' : 'ok'));
             if ($outcome === 'unset') {
                 $outcome = $hasErrorSummary ? 'error' : 'ok';
@@ -1334,7 +1399,7 @@ final class DiagnosticQueryService
                     'end_observed' => false,
                     'missing_parent' => false,
                     'gap_note' => null,
-                    'detail_started_mid_operation' => (bool) ($ev['detail_started_mid_operation'] ?? false),
+                    'detail_started_mid_operation' => $this->toStrictBool($ev['detail_started_mid_operation'] ?? false),
                     'linked_dns_operation_id' => null,
                     'linked_dns_operation' => null,
                     'exception' => null,
@@ -1369,7 +1434,7 @@ final class DiagnosticQueryService
                     'message' => $exc['message'] ?? $ev['safe_message'] ?? null,
                     'stacktrace' => $exc['stacktrace'] ?? null,
                     'stack_capture_kind' => $exc['stack_capture_kind'] ?? 'unavailable',
-                    'stack_truncated' => (bool) ($exc['stack_truncated'] ?? false),
+                    'stack_truncated' => $this->toStrictBool($exc['stack_truncated'] ?? false),
                     'stack_frames_total' => isset($exc['stack_frames_total']) ? (int) $exc['stack_frames_total'] : 0,
                 ];
             } elseif (isset($ev['exception.stack_capture_kind']) || isset($ev['exception.stacktrace'])) {
@@ -1378,7 +1443,7 @@ final class DiagnosticQueryService
                     'message' => $ev['exception.message'] ?? $ev['safe_message'] ?? null,
                     'stacktrace' => $ev['exception.stacktrace'] ?? null,
                     'stack_capture_kind' => $ev['exception.stack_capture_kind'] ?? 'unavailable',
-                    'stack_truncated' => (bool) ($ev['exception.stack_truncated'] ?? false),
+                    'stack_truncated' => $this->toStrictBool($ev['exception.stack_truncated'] ?? false),
                     'stack_frames_total' => isset($ev['exception.stack_frames_total']) ? (int) $ev['exception.stack_frames_total'] : 0,
                 ];
             }
@@ -1636,21 +1701,20 @@ final class DiagnosticQueryService
     }
 
     /**
+     * @param array<string, mixed> $cursor
      * @param array<string, mixed> $subject
      * @param array<string, mixed> $timeRange
      * @return array<string, mixed>
      */
     private function serveConnectionsFromCursor(
         int $adminId,
-        string $cursorRaw,
+        array $cursor,
         array $subject,
         array $timeRange,
         string $filtersHash,
         int $limit,
         int $storageGeneration
     ): array {
-        $cursor = $this->decodeAndVerifyCursor($cursorRaw, $adminId);
-
         if (($cursor['kind'] ?? '') !== 'connections') {
             throw new DiagnosticDomainException('cursor_parameter_mismatch', '分页游标类型不匹配', 422);
         }
@@ -1698,6 +1762,10 @@ final class DiagnosticQueryService
                 'order_id' => $subject['order_id'],
                 'panel_scope' => $subject['panel_scope'],
                 'diagnostic_id' => $subject['diagnostic_id'],
+                'from_ts' => $timeRange['from_ts'],
+                'to_ts' => $timeRange['to_ts'],
+                'from_iso' => $timeRange['from_iso'],
+                'to_iso' => $timeRange['to_iso'],
                 'filters_hash' => $filtersHash,
                 'storage_generation' => $storageGeneration,
                 'snapshot_id' => $snapshotId,
@@ -1710,18 +1778,17 @@ final class DiagnosticQueryService
     }
 
     /**
+     * @param array<string, mixed> $cursor
      * @param array<string, mixed> $subject
      * @return array<string, mixed>
      */
     private function serveConnectionDetailFromCursor(
         int $adminId,
-        string $cursorRaw,
+        array $cursor,
         array $subject,
         string $detailTargetHash,
         int $storageGeneration
     ): array {
-        $cursor = $this->decodeAndVerifyCursor($cursorRaw, $adminId);
-
         if (($cursor['kind'] ?? '') !== 'connection_detail') {
             throw new DiagnosticDomainException('cursor_parameter_mismatch', '详情分页游标类型不匹配', 422);
         }
@@ -1789,6 +1856,8 @@ final class DiagnosticQueryService
             'identity_card' => $snapshotData['public_card'],
             'snapshot_id' => $snapshotData['snapshot_id'],
             'as_of' => $snapshotData['as_of'],
+            'from' => $snapshotData['from_iso'] ?? null,
+            'to' => $snapshotData['to_iso'] ?? null,
             'storage_generation' => $snapshotData['storage_generation'],
             'items' => $pageItems,
             'next_cursor' => $nextCursor,
@@ -1836,6 +1905,10 @@ final class DiagnosticQueryService
                 'order_id' => $subject['order_id'],
                 'panel_scope' => $subject['panel_scope'],
                 'diagnostic_id' => $subject['diagnostic_id'],
+                'from_ts' => $snapshotData['from_ts'] ?? null,
+                'to_ts' => $snapshotData['to_ts'] ?? null,
+                'from_iso' => $snapshotData['from_iso'] ?? null,
+                'to_iso' => $snapshotData['to_iso'] ?? null,
                 'target_hash' => $detailTargetHash,
                 'storage_generation' => $storageGeneration,
                 'snapshot_id' => $snapshotData['snapshot_id'],
@@ -1852,6 +1925,8 @@ final class DiagnosticQueryService
             'connection_id' => $snapshotData['connection_id'],
             'snapshot_id' => $snapshotData['snapshot_id'],
             'as_of' => $snapshotData['as_of'],
+            'from' => $snapshotData['from_iso'] ?? null,
+            'to' => $snapshotData['to_iso'] ?? null,
             'storage_generation' => $storageGeneration,
             'start_in_window' => $snapshotData['start_in_window'],
             'window_note' => $snapshotData['window_note'],

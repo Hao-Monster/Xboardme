@@ -525,6 +525,9 @@ def generate_central(
         "upstream_insert_url": "http://victoria-logs:9428/insert/jsonline",
         "data_mount_path": "/storage",
         "root_mount_path": "/host-root",
+        "host_data_mount_path": f"/host-root{(base_dir / 'data').resolve().as_posix()}",
+        "guard_mount_read_only": True,
+        "storage_writable_by_writer": True,
         "state_dir": "/state",
         "expected_fs_type": "ext4",
         "expected_fs_uuid": expected_fs_uuid.strip(),
@@ -553,14 +556,16 @@ def generate_central(
     }
     atomic_write_json(base_dir / "guard-config.json", guard_config, mode=0o600)
 
-    # Copy guard.py into target directory so the container mounts a self-contained immutable script.
-    guard_src = Path(__file__).with_name("guard.py")
-    if guard_src.exists():
-        atomic_write_text(
-            base_dir / "guard.py",
-            guard_src.read_text(encoding="utf-8"),
-            mode=0o600,
-        )
+    # Copy guard.py and its required local module configure.py into target directory
+    # so the container and standalone invocations have self-contained immutable scripts.
+    for module_name in ("guard.py", "configure.py"):
+        module_src = Path(__file__).with_name(module_name)
+        if module_src.exists():
+            atomic_write_text(
+                base_dir / module_name,
+                module_src.read_text(encoding="utf-8"),
+                mode=0o600,
+            )
 
     (base_dir / "state").mkdir(exist_ok=True, mode=0o700)
 
@@ -600,6 +605,13 @@ def generate_central(
                     "type": "bind",
                     "source": "./guard.py",
                     "target": "/app/guard.py",
+                    "read_only": True,
+                    "bind": {"create_host_path": False},
+                },
+                {
+                    "type": "bind",
+                    "source": "./configure.py",
+                    "target": "/app/configure.py",
                     "read_only": True,
                     "bind": {"create_host_path": False},
                 },

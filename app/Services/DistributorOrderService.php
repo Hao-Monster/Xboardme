@@ -9,9 +9,9 @@ use App\Models\Plan;
 use App\Models\TrafficResetLog;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
+use App\Support\SqliteImmediateTransaction;
 use App\Utils\Helper;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use BaconQrCode\Renderer\ImageRenderer;
 use BaconQrCode\Renderer\Image\SvgImageBackEnd;
@@ -34,7 +34,7 @@ class DistributorOrderService
         (new PlanService($plan))->validateDistributorPurchase($distributor, $period);
         HookManager::call('order.create.before', [$distributor, $plan, $period, null]);
 
-        $order = DB::transaction(function () use ($distributor, $plan, $period, $customerName) {
+        $order = SqliteImmediateTransaction::write(function () use ($distributor, $plan, $period, $customerName) {
             $lockedDistributor = User::lockForUpdate()->find($distributor->id);
             if (!$lockedDistributor?->is_distributor || $lockedDistributor->banned) {
                 throw new ApiException('当前分销商账号不可用', 403);
@@ -118,7 +118,7 @@ class DistributorOrderService
         }
 
         $created = false;
-        $order = DB::transaction(function () use (
+        $order = SqliteImmediateTransaction::write(function () use (
             $distributor,
             $tradeNo,
             $period,

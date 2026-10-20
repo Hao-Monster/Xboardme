@@ -1372,6 +1372,10 @@
     errorCode: '',
     items: [],
     nextCursor: null,
+    queryFrom: null,
+    queryTo: null,
+    detailFrom: null,
+    detailTo: null,
     scanTruncated: false,
     truncated: false,
     emptyMessage: null,
@@ -1384,6 +1388,7 @@
     detailError: '',
     connectionDetail: null,
     requestSeq: 0,
+    listQuerySeq: 0,
     queryController: null,
     detailController: null,
     statusController: null,
@@ -1553,6 +1558,7 @@
 
   function resetDiagSubjectState(nextMode = diagState.mode) {
     diagState.requestSeq += 1;
+    diagState.listQuerySeq += 1;
     abortDiagnosticsRequests();
     diagState.mode = nextMode;
     diagState.filters = {
@@ -1569,6 +1575,10 @@
     diagState.errorCode = '';
     diagState.items = [];
     diagState.nextCursor = null;
+    diagState.queryFrom = null;
+    diagState.queryTo = null;
+    diagState.detailFrom = null;
+    diagState.detailTo = null;
     diagState.scanTruncated = false;
     diagState.truncated = false;
     diagState.emptyMessage = null;
@@ -1706,10 +1716,18 @@
       try { diagState.queryController.abort(); } catch (_) {}
     }
     if (!cursor) {
+      diagState.listQuerySeq += 1;
+      diagState.detailController = null;
+      diagState.queryFrom = null;
+      diagState.queryTo = null;
+      diagState.detailFrom = null;
+      diagState.detailTo = null;
+      diagState.detailLoading = false;
       diagState.selectedConnection = null;
       diagState.connectionDetail = null;
       diagState.detailError = '';
     }
+    const listSeq = diagState.listQuerySeq;
     const controller = new AbortController();
     diagState.queryController = controller;
     diagState.loading = true;
@@ -1723,7 +1741,13 @@
     } else {
       payload.diagnostic_id = diagState.resolvedDiagnosticId;
     }
-    if (cursor) payload.cursor = cursor;
+    if (cursor) {
+      payload.cursor = cursor;
+      if (diagState.queryFrom && diagState.queryTo) {
+        payload.from = diagState.queryFrom;
+        payload.to = diagState.queryTo;
+      }
+    }
 
     try {
       const data = await diagApi('/order/diagnostics/query', {
@@ -1731,12 +1755,14 @@
         data: payload,
         signal: controller.signal,
       });
-      if (seq !== diagState.requestSeq) return;
+      if (seq !== diagState.requestSeq || listSeq !== diagState.listQuerySeq) return;
       diagState.loading = false;
       diagState.resolvedDiagnosticId = data.diagnostic_id || diagState.resolvedDiagnosticId;
       if (data.identity_card) {
         diagState.identityCard = data.identity_card;
       }
+      if (data.from) diagState.queryFrom = data.from;
+      if (data.to) diagState.queryTo = data.to;
       diagState.items = Array.isArray(data.items) ? data.items : [];
       diagState.nextCursor = data.next_cursor || null;
       diagState.scanTruncated = Boolean(data.scan_truncated);
@@ -1746,7 +1772,7 @@
       renderDiagnosticsCenter();
       syncDiagnosticsPolling();
     } catch (error) {
-      if (error?.name === 'AbortError' || seq !== diagState.requestSeq) return;
+      if (error?.name === 'AbortError' || seq !== diagState.requestSeq || listSeq !== diagState.listQuerySeq) return;
       diagState.loading = false;
       diagState.error = error.message;
       diagState.errorCode = error.code || '';
@@ -1926,6 +1952,7 @@
     if (!item) return;
 
     const seq = diagState.requestSeq;
+    const listSeq = diagState.listQuerySeq;
     if (diagState.detailController) {
       try { diagState.detailController.abort(); } catch (_) {}
     }
@@ -1934,7 +1961,11 @@
     diagState.selectedConnection = item;
     diagState.detailLoading = true;
     diagState.detailError = '';
-    if (!cursor) diagState.connectionDetail = null;
+    if (!cursor) {
+      diagState.connectionDetail = null;
+      diagState.detailFrom = diagState.queryFrom;
+      diagState.detailTo = diagState.queryTo;
+    }
     renderDiagnosticsCenter();
 
     const payload = {
@@ -1947,6 +1978,10 @@
     } else {
       payload.diagnostic_id = diagState.resolvedDiagnosticId;
     }
+    if (diagState.detailFrom && diagState.detailTo) {
+      payload.from = diagState.detailFrom;
+      payload.to = diagState.detailTo;
+    }
     if (cursor) payload.cursor = cursor;
 
     try {
@@ -1955,12 +1990,14 @@
         data: payload,
         signal: controller.signal,
       });
-      if (seq !== diagState.requestSeq) return;
+      if (seq !== diagState.requestSeq || listSeq !== diagState.listQuerySeq || diagState.selectedConnection !== item) return;
       diagState.detailLoading = false;
+      if (detail.from) diagState.detailFrom = detail.from;
+      if (detail.to) diagState.detailTo = detail.to;
       diagState.connectionDetail = detail;
       renderDiagnosticsCenter();
     } catch (error) {
-      if (error?.name === 'AbortError' || seq !== diagState.requestSeq) return;
+      if (error?.name === 'AbortError' || seq !== diagState.requestSeq || listSeq !== diagState.listQuerySeq || diagState.selectedConnection !== item) return;
       diagState.detailLoading = false;
       diagState.detailError = error.message;
       renderDiagnosticsCenter();
