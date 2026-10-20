@@ -2,6 +2,7 @@
 namespace App\Http\Routes\V1;
 
 use App\Http\Controllers\V1\Server\DeepbworkController;
+use App\Http\Controllers\V1\Server\DiagnosticsController;
 use App\Http\Controllers\V1\Server\ShadowsocksTidalabController;
 use App\Http\Controllers\V1\Server\TrojanTidalabController;
 use App\Http\Controllers\V1\Server\UniProxyController;
@@ -28,6 +29,14 @@ class ServerRoute
                 $route->get('alivelist', [UniProxyController::class, 'alivelist'])
                     ->middleware(['server.body:control', 'throttle:server-pull', 'server']);
                 $route->post('status', [UniProxyController::class, 'status'])
+                    ->middleware(['server.body:control', 'throttle:server-report', 'server']);
+            });
+            $router->group([
+                'prefix' => 'diagnostics',
+            ], function ($route) {
+                $route->post('snapshot', [DiagnosticsController::class, 'snapshot'])
+                    ->middleware(['server.body:control', 'throttle:server-pull', 'server']);
+                $route->post('ack', [DiagnosticsController::class, 'ack'])
                     ->middleware(['server.body:control', 'throttle:server-report', 'server']);
             });
             $router->group([

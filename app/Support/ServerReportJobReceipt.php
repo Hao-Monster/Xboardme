@@ -34,10 +34,6 @@ final class ServerReportJobReceipt
             return true;
         };
 
-        if (DB::connection()->getDriverName() === 'sqlite') {
-            return SqliteImmediateTransaction::run($operation);
-        }
-
-        return DB::transaction($operation, 3);
+        return SqliteImmediateTransaction::write($operation, 3);
     }
 }

@@ -210,6 +210,16 @@ class ConfigController extends Controller
 
     public function save(ConfigSave $request)
     {
+        foreach (array_keys($request->all()) as $rawKey) {
+            if (strtolower((string) $rawKey) === 'diagnostics_panel_scope') {
+                return $this->fail(
+                    [422000, '禁止通过常规配置接口覆盖或删除 diagnostics_panel_scope'],
+                    null,
+                    ['code' => 'diagnostics_panel_scope_protected']
+                );
+            }
+        }
+
         $data = $request->validated();
 
         $templateKeys = [
@@ -222,6 +232,9 @@ class ConfigController extends Controller
         ];
 
         foreach ($data as $k => $v) {
+            if (strtolower((string) $k) === 'diagnostics_panel_scope') {
+                continue;
+            }
             if (isset($templateKeys[$k])) {
                 SubscribeTemplate::setContent($templateKeys[$k], $v);
                 continue;

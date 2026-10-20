@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
 use App\Services\Plugin\HookManager;
+use App\Support\SqliteImmediateTransaction;
 
 /**
  * Service for handling traffic reset.
@@ -34,7 +35,7 @@ class TrafficResetService
   public function performReset(User $user, string $triggerSource = TrafficResetLog::SOURCE_MANUAL): bool
   {
     try {
-      return DB::transaction(function () use ($user, $triggerSource) {
+      return SqliteImmediateTransaction::write(function () use ($user, $triggerSource) {
         $oldUpload = $user->u ?? 0;
         $oldDownload = $user->d ?? 0;
         $oldTotal = $oldUpload + $oldDownload;

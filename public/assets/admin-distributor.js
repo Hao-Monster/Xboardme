@@ -499,7 +499,8 @@
       const customerName = detail.is_distributor_order
         ? `<strong>用户名称</strong><div>${escapeHtml(detail.customer_name || '-')}</div>`
         : '';
-      field.innerHTML = `${detail.subscription_name ? `<strong>订阅名称</strong><div>${escapeHtml(detail.subscription_name)}</div>` : ''}<strong>订阅链接</strong><div>${value}${manage}</div>${customerName}`;
+      const diagShortcut = detail.id ? `<button type="button" data-open-order-diagnostics="${detail.id}">连接诊断</button>` : '';
+      field.innerHTML = `${detail.subscription_name ? `<strong>订阅名称</strong><div>${escapeHtml(detail.subscription_name)}</div>` : ''}<strong>订阅链接</strong><div>${value}${manage}${diagShortcut}</div>${customerName}`;
 
       const scrollArea = dialog.querySelector('[data-radix-scroll-area-viewport], .overflow-y-auto, .n-scrollbar-content') || dialog;
       const footer = [...scrollArea.children].find((node) => /关闭|取消|确认|Close|Cancel|Confirm/i.test(node.textContent || ''));
@@ -693,7 +694,7 @@
       <td>${money(order.total_amount)}</td>
       <td><span class="admin-dist-status s-${order.settlement_status}">${order.settlement_status === 1 ? '已结算' : '未结算'}</span></td>
       <td><div class="admin-dist-remark-cell"><span title="${escapeHtml(remark)}">${remark ? escapeHtml(remark) : '—'}</span><button type="button" data-edit-remark="${order.id}" title="编辑备注" aria-label="编辑备注">🖊</button></div></td>
-      <td><button class="admin-dist-link" ${detailAttribute}="${order.id}">详情 / 订阅链接</button></td>
+      <td><button class="admin-dist-link" ${detailAttribute}="${order.id}">详情 / 订阅链接</button> <button type="button" class="admin-dist-link" data-open-order-diagnostics="${order.id}">连接诊断</button></td>
     </tr>`;
     }).join('');
   }
@@ -1026,7 +1027,7 @@
       <div><dt>结算状态</dt><dd>${order.settlement_status === 1 ? '已结算' : '未结算'}</dd></div><div><dt>订阅链接</dt><dd class="url">${order.subscribe_url ? `<code>${escapeHtml(order.subscribe_url)}</code><button data-copy-subscription="${escapeHtml(order.subscribe_url)}">复制</button>` : '订单未完成，暂无订阅链接'}</dd></div>
       ${Number(order.type) === 2 ? `<div><dt>续费前到期</dt><dd>${formatTime(order.entitlement_expired_at_before)}</dd></div><div><dt>续费后到期</dt><dd>${formatTime(order.entitlement_expired_at_after)}</dd></div>` : ''}
       <div><dt>用户名称</dt><dd>${escapeHtml(order.customer_name || '-')}</dd></div><div><dt>配置下发</dt><dd>${order.config_issued_at ? formatTime(order.config_issued_at) : '尚未下发'}</dd></div>
-      <div><dt>接入状态</dt><dd>${order.connected_at ? `客户已经通过 ${escapeHtml(order.connected_node_name || '-')} 节点进入网络（${formatTime(order.connected_at)}）` : '等待用户开启代理 进入网络'}</dd></div>
+      <div><dt>接入状态</dt><dd>${order.connected_at ? `客户已经通过 ${escapeHtml(order.connected_node_name || '-')} 节点进入网络（${formatTime(order.connected_at)}）` : '等待用户开启代理 进入网络'} <button type="button" data-open-order-diagnostics="${order.id}">连接诊断</button></dd></div>
       </dl>${entitlement ? `<div class="admin-dist-entitlement"><h3>订阅权益</h3>
         <div class="admin-dist-entitlement-readonly"><span><b>套餐</b>${escapeHtml(entitlement.plan_name || order.plan?.name || '-')}</span><span><b>已用流量</b>${formatTraffic(entitlement.used_traffic)}</span><span><b>剩余流量</b>${formatTraffic(entitlement.remaining_traffic)}</span></div>
         <div class="admin-dist-entitlement-form">
@@ -1341,9 +1342,1257 @@
     const refresh = event.target.id === 'native-dist-order-search' ? loadNativeOrders : loadOrders;
     refresh().catch((error) => toast(error.message, 'error'));
   });
-  const observer = new MutationObserver(() => { mount(); mountNativeOrderManagement(); injectDistributorFields(); injectOrderSubscriptionLinks(); });
+  const observer = new MutationObserver((mutations) => { const diagRoot = document.getElementById('admin-diagnostics-root'); if (diagRoot && mutations.every((m) => diagRoot.contains(m.target))) return; mount(); mountNativeOrderManagement(); injectDistributorFields(); injectOrderSubscriptionLinks(); installDiagnosticsMenu(); });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => { mount(); mountNativeOrderManagement(); });
   else { mount(); mountNativeOrderManagement(); }
-  setInterval(() => { mount(); mountNativeOrderManagement(); }, 1000);
+  // =========================================================================
+  // D7.2 Customer Connection Diagnostics Log Center (#/?diagnostics=1)
+  // =========================================================================
+  let diagMenuAnchor = null;
+  let lastSyncedDiagRouteKey = '';
+  const diagState = {
+    mode: 'order',
+    orderId: null,
+    tradeNoInput: '',
+    diagnosticIdInput: '',
+    resolvedDiagnosticId: '',
+    identityCard: null,
+    filters: {
+      trace_id: '',
+      node_id: '',
+      domain: '',
+      domain_match: 'contains',
+      error_stage: '',
+      reason_code: '',
+      outcome: '',
+    },
+    loading: false,
+    error: '',
+    errorCode: '',
+    items: [],
+    nextCursor: null,
+    queryFrom: null,
+    queryTo: null,
+    detailFrom: null,
+    detailTo: null,
+    scanTruncated: false,
+    truncated: false,
+    emptyMessage: null,
+    coverage: null,
+    leaseStatus: null,
+    leaseBusy: false,
+    leaseError: '',
+    selectedConnection: null,
+    detailLoading: false,
+    detailError: '',
+    connectionDetail: null,
+    requestSeq: 0,
+    listQuerySeq: 0,
+    queryController: null,
+    detailController: null,
+    statusController: null,
+    pollTimer: null,
+  };
+
+  function parseDiagnosticsRoute() {
+    const loc = typeof location !== 'undefined' ? location : window?.location;
+    const rawHash = String(loc?.hash || '').replace(/^#/, '');
+    const [rawPath = '', rawQuery = ''] = rawHash.split('?');
+    const path = rawPath || '/';
+    const params = new URLSearchParams(rawQuery);
+    const active = (path === '/' || path === '') && params.get('diagnostics') === '1';
+    const rawOrderId = params.get('order_id');
+    const orderId = rawOrderId && /^[1-9]\d*$/.test(rawOrderId.trim()) ? Number(rawOrderId.trim()) : null;
+    return { active, orderId };
+  }
+
+  function setDiagnosticsRoute(active, orderId = null) {
+    const loc = typeof location !== 'undefined' ? location : (window.location || (window.location = { hash: '' }));
+    if (!active) {
+      loc.hash = '#/';
+      return;
+    }
+    if (orderId && Number.isSafeInteger(Number(orderId)) && Number(orderId) > 0) {
+      loc.hash = `#/?diagnostics=1&order_id=${encodeURIComponent(String(orderId))}`;
+    } else {
+      loc.hash = '#/?diagnostics=1';
+    }
+  }
+
+  function findDashboardMenu() {
+    const candidates = typeof document.querySelectorAll === 'function' ? [...document.querySelectorAll('a,button')] : [];
+    return candidates.find((element) => {
+      if (element.classList?.contains?.('xboard-diagnostics-center-nav') || element.classList?.contains?.('xboard-client-catalog-nav')) return false;
+      const href = element.getAttribute?.('href') || '';
+      const text = String(element.textContent || '').replace(/\s+/g, ' ').trim();
+      return /(?:^|#)\/(?:$|\?(?!diagnostics=1))/.test(href)
+        || /^(仪表盘|控制台|Dashboard)$/i.test(text);
+    }) || null;
+  }
+
+  function replaceDashboardMenuLabel(item) {
+    const labels = [...(item.querySelectorAll?.('*') || [])].filter((node) => {
+      const text = String(node.textContent || '').replace(/\s+/g, ' ').trim();
+      return /^(仪表盘|控制台|Dashboard)$/i.test(text)
+        && ![...(node.children || [])].some((child) => String(child.textContent || '').trim());
+    });
+    if (labels.length) labels[labels.length - 1].textContent = '日志中心';
+    else item.textContent = '▣  日志中心';
+  }
+
+  function installDiagnosticsMenu() {
+    const dashboard = findDashboardMenu();
+    if (!dashboard || !dashboard.cloneNode || dashboard.parentElement?.querySelector?.(':scope > .xboard-diagnostics-center-nav')) return;
+    const item = dashboard.cloneNode(true);
+    item.classList?.add?.('xboard-diagnostics-center-nav');
+    item.setAttribute?.('href', '#/?diagnostics=1');
+    item.setAttribute?.('title', '客户连接诊断与日志中心');
+    item.setAttribute?.('data-diagnostics-menu', '1');
+    item.removeAttribute?.('aria-current');
+    replaceDashboardMenuLabel(item);
+    item.addEventListener?.('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDiagnosticsRoute(true, null);
+    });
+    dashboard.insertAdjacentElement?.('afterend', item);
+    diagMenuAnchor = item;
+    syncDiagnosticsMenuState();
+  }
+
+  function syncDiagnosticsMenuState() {
+    if (typeof document.querySelectorAll !== 'function') return;
+    const { active } = parseDiagnosticsRoute();
+    [...document.querySelectorAll('.xboard-diagnostics-center-nav')].forEach((item) => {
+      item.classList?.toggle?.('xboard-diagnostics-nav-active', active);
+      if (active) item.setAttribute?.('aria-current', 'page');
+      else item.removeAttribute?.('aria-current');
+    });
+  }
+
+  function findDiagnosticsSidebarRight() {
+    const vpHeight = typeof innerHeight === 'number' ? innerHeight : (window?.innerHeight || 900);
+    const vpWidth = typeof innerWidth === 'number' ? innerWidth : (window?.innerWidth || 1440);
+    const anchor = diagMenuAnchor || findDashboardMenu();
+    let current = anchor;
+    while (current && current !== document.body) {
+      const rect = current.getBoundingClientRect?.();
+      if (rect && rect.left < 80 && rect.width >= 150 && rect.width <= 420 && rect.height > vpHeight * 0.65) {
+        return Math.max(0, Math.round(rect.right));
+      }
+      current = current.parentElement;
+    }
+    return vpWidth < 900 ? 0 : 240;
+  }
+
+  function ensureDiagnosticsRoot() {
+    let root = document.getElementById?.('admin-diagnostics-root');
+    if (!root || root.id !== 'admin-diagnostics-root') {
+      if (typeof document.createElement !== 'function' || !document.body?.appendChild) return null;
+      root = document.createElement('div');
+      root.id = 'admin-diagnostics-root';
+      document.body.appendChild(root);
+      root.addEventListener?.('click', handleDiagnosticsClick);
+      root.addEventListener?.('change', handleDiagnosticsChange);
+      root.addEventListener?.('input', handleDiagnosticsInput);
+      root.addEventListener?.('keydown', handleDiagnosticsKeydown);
+    }
+    root.style?.setProperty?.('--diag-sidebar-right', `${findDiagnosticsSidebarRight()}px`);
+    return root;
+  }
+
+  function abortDiagnosticsRequests() {
+    if (diagState.queryController) {
+      try { diagState.queryController.abort(); } catch (_) {}
+      diagState.queryController = null;
+    }
+    if (diagState.detailController) {
+      try { diagState.detailController.abort(); } catch (_) {}
+      diagState.detailController = null;
+    }
+    if (diagState.statusController) {
+      try { diagState.statusController.abort(); } catch (_) {}
+      diagState.statusController = null;
+    }
+  }
+
+  function stopDiagnosticsPolling() {
+    if (diagState.pollTimer !== null) {
+      clearInterval(diagState.pollTimer);
+      diagState.pollTimer = null;
+    }
+    if (diagState.statusController) {
+      try { diagState.statusController.abort(); } catch (_) {}
+      diagState.statusController = null;
+    }
+  }
+
+  function shouldPollDiagnosticsStatus() {
+    const route = parseDiagnosticsRoute();
+    return Boolean(
+      route.active
+      && !document.hidden
+      && authToken()
+      && diagState.mode === 'order'
+      && diagState.orderId
+      && diagState.identityCard
+    );
+  }
+
+  function syncDiagnosticsPolling() {
+    if (!shouldPollDiagnosticsStatus()) {
+      stopDiagnosticsPolling();
+      return;
+    }
+    if (diagState.pollTimer === null) {
+      diagState.pollTimer = setInterval(() => {
+        if (!shouldPollDiagnosticsStatus()) {
+          stopDiagnosticsPolling();
+          return;
+        }
+        pollDiagnosticsLeaseStatus();
+      }, 5000);
+    }
+  }
+
+  function resetDiagSubjectState(nextMode = diagState.mode) {
+    diagState.requestSeq += 1;
+    diagState.listQuerySeq += 1;
+    abortDiagnosticsRequests();
+    diagState.mode = nextMode;
+    diagState.filters = {
+      trace_id: '',
+      node_id: '',
+      domain: '',
+      domain_match: 'contains',
+      error_stage: '',
+      reason_code: '',
+      outcome: '',
+    };
+    diagState.loading = false;
+    diagState.error = '';
+    diagState.errorCode = '';
+    diagState.items = [];
+    diagState.nextCursor = null;
+    diagState.queryFrom = null;
+    diagState.queryTo = null;
+    diagState.detailFrom = null;
+    diagState.detailTo = null;
+    diagState.scanTruncated = false;
+    diagState.truncated = false;
+    diagState.emptyMessage = null;
+    diagState.coverage = null;
+    diagState.identityCard = null;
+    diagState.resolvedDiagnosticId = '';
+    diagState.leaseStatus = null;
+    diagState.leaseBusy = false;
+    diagState.leaseError = '';
+    diagState.selectedConnection = null;
+    diagState.detailLoading = false;
+    diagState.detailError = '';
+    diagState.connectionDetail = null;
+    syncDiagnosticsPolling();
+  }
+
+  function clearDiagnosticsOnAuthFailure(message) {
+    resetDiagSubjectState(diagState.mode);
+    stopDiagnosticsPolling();
+    diagState.orderId = null;
+    diagState.tradeNoInput = '';
+    diagState.diagnosticIdInput = '';
+    diagState.error = message || '管理员登录已失效，已清空诊断数据';
+    diagState.errorCode = 'admin_unauthorized';
+    renderDiagnosticsCenter();
+  }
+
+  async function diagApi(path, options = {}) {
+    const token = authToken();
+    if (!token) {
+      clearDiagnosticsOnAuthFailure('管理员登录已失效，已清空诊断数据');
+      const err = new Error('管理员登录已失效');
+      err.status = 401;
+      throw err;
+    }
+    const method = options.method || 'GET';
+    const response = await internalFetch(`/api/v2/${securePath()}${path}`, {
+      method,
+      headers: {
+        Authorization: token,
+        'Content-Type': 'application/json',
+        'Content-Language': localStorage.getItem('i18nextLng') || 'zh-CN',
+      },
+      body: options.data ? JSON.stringify(options.data) : undefined,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: options.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    if (response.status === 401 || response.status === 403 || payload?.error?.code === 'admin_unauthorized') {
+      clearDiagnosticsOnAuthFailure(payload?.message || '管理员鉴权已失效，已清空诊断数据');
+      const err = new Error(payload?.message || '管理员鉴权已失效');
+      err.status = response.status || 403;
+      err.code = payload?.error?.code || 'admin_unauthorized';
+      throw err;
+    }
+    if (!response.ok || payload?.status === 'fail') {
+      const error = new Error(payload?.message || `诊断请求失败 (${response.status})`);
+      error.status = response.status;
+      error.code = payload?.error?.code || '';
+      throw error;
+    }
+    return dataOf(payload);
+  }
+
+  function makeIdempotencyKey(prefix, orderId) {
+    return `${prefix}-${orderId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  async function pollDiagnosticsLeaseStatus() {
+    if (!shouldPollDiagnosticsStatus()) return;
+    const seq = diagState.requestSeq;
+    const orderId = diagState.orderId;
+    if (diagState.statusController) {
+      try { diagState.statusController.abort(); } catch (_) {}
+    }
+    const controller = new AbortController();
+    diagState.statusController = controller;
+    try {
+      const statusData = await diagApi(`/order/diagnostics/status?order_id=${encodeURIComponent(String(orderId))}`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      if (seq !== diagState.requestSeq || diagState.mode !== 'order' || diagState.orderId !== orderId) return;
+      diagState.leaseStatus = statusData;
+      renderDiagnosticsCenter();
+    } catch (error) {
+      if (error?.name === 'AbortError' || seq !== diagState.requestSeq) return;
+      diagState.leaseError = error.message;
+      renderDiagnosticsCenter();
+    }
+  }
+
+  function buildDiagnosticsQueryFiltersPayload() {
+    const f = diagState.filters;
+    const out = {};
+    const traceId = String(f.trace_id || '').trim().toLowerCase();
+    if (traceId !== '') {
+      if (!/^[0-9a-f]{32}$/.test(traceId)) {
+        throw new Error('trace_id 必须为 32 位小写十六进制字符串');
+      }
+      out.trace_id = traceId;
+    }
+    const nodeIdRaw = String(f.node_id || '').trim();
+    if (nodeIdRaw !== '') {
+      if (!/^[1-9]\d*$/.test(nodeIdRaw)) {
+        throw new Error('节点 ID 必须为正整数');
+      }
+      out.node_id = Number(nodeIdRaw);
+    }
+    const domain = String(f.domain || '').trim();
+    if (domain !== '') {
+      out.domain = domain;
+      out.domain_match = ['exact', 'suffix', 'contains'].includes(f.domain_match) ? f.domain_match : 'contains';
+    }
+    if (f.error_stage) out.error_stages = [f.error_stage];
+    const reasonCode = String(f.reason_code || '').trim();
+    if (reasonCode !== '') out.reason_codes = [reasonCode];
+    if (f.outcome === 'error' || f.outcome === 'ok') out.outcome = f.outcome;
+    return out;
+  }
+
+  async function executeDiagnosticsQuery(cursor = null) {
+    let filtersPayload;
+    try {
+      filtersPayload = buildDiagnosticsQueryFiltersPayload();
+    } catch (validationErr) {
+      diagState.error = validationErr.message;
+      renderDiagnosticsCenter();
+      return;
+    }
+
+    const seq = diagState.requestSeq;
+    if (diagState.queryController) {
+      try { diagState.queryController.abort(); } catch (_) {}
+    }
+    if (!cursor) {
+      diagState.listQuerySeq += 1;
+      diagState.detailController = null;
+      diagState.queryFrom = null;
+      diagState.queryTo = null;
+      diagState.detailFrom = null;
+      diagState.detailTo = null;
+      diagState.detailLoading = false;
+      diagState.selectedConnection = null;
+      diagState.connectionDetail = null;
+      diagState.detailError = '';
+    }
+    const listSeq = diagState.listQuerySeq;
+    const controller = new AbortController();
+    diagState.queryController = controller;
+    diagState.loading = true;
+    diagState.error = '';
+    diagState.errorCode = '';
+    renderDiagnosticsCenter();
+
+    const payload = { filters: filtersPayload };
+    if (diagState.mode === 'order') {
+      payload.order_id = Number(diagState.orderId);
+    } else {
+      payload.diagnostic_id = diagState.resolvedDiagnosticId;
+    }
+    if (cursor) {
+      payload.cursor = cursor;
+      if (diagState.queryFrom && diagState.queryTo) {
+        payload.from = diagState.queryFrom;
+        payload.to = diagState.queryTo;
+      }
+    }
+
+    try {
+      const data = await diagApi('/order/diagnostics/query', {
+        method: 'POST',
+        data: payload,
+        signal: controller.signal,
+      });
+      if (seq !== diagState.requestSeq || listSeq !== diagState.listQuerySeq) return;
+      diagState.loading = false;
+      diagState.resolvedDiagnosticId = data.diagnostic_id || diagState.resolvedDiagnosticId;
+      if (data.identity_card) {
+        diagState.identityCard = data.identity_card;
+      }
+      if (data.from) diagState.queryFrom = data.from;
+      if (data.to) diagState.queryTo = data.to;
+      diagState.items = Array.isArray(data.items) ? data.items : [];
+      diagState.nextCursor = data.next_cursor || null;
+      diagState.scanTruncated = Boolean(data.scan_truncated);
+      diagState.truncated = Boolean(data.truncated);
+      diagState.emptyMessage = data.empty_message || null;
+      diagState.coverage = data.coverage || null;
+      renderDiagnosticsCenter();
+      syncDiagnosticsPolling();
+    } catch (error) {
+      if (error?.name === 'AbortError' || seq !== diagState.requestSeq || listSeq !== diagState.listQuerySeq) return;
+      diagState.loading = false;
+      diagState.error = error.message;
+      diagState.errorCode = error.code || '';
+      renderDiagnosticsCenter();
+    }
+  }
+
+  async function loadDiagnosticsByOrderId(orderId) {
+    const normalizedId = Number(orderId);
+    if (!Number.isSafeInteger(normalizedId) || normalizedId <= 0) {
+      diagState.error = 'order_id 必须为正整数';
+      renderDiagnosticsCenter();
+      return;
+    }
+    resetDiagSubjectState('order');
+    diagState.orderId = normalizedId;
+    diagState.loading = true;
+    renderDiagnosticsCenter();
+
+    const seq = diagState.requestSeq;
+    const controller = new AbortController();
+    diagState.queryController = controller;
+
+    try {
+      const card = await diagApi('/order/diagnostics/lookup', {
+        method: 'POST',
+        data: { order_id: normalizedId },
+        signal: controller.signal,
+      });
+      if (seq !== diagState.requestSeq) return;
+      diagState.identityCard = card;
+      diagState.orderId = Number(card.order_id || normalizedId);
+      diagState.tradeNoInput = String(card.trade_no || '');
+      diagState.resolvedDiagnosticId = String(card.diagnostic_id || '');
+      await Promise.all([
+        executeDiagnosticsQuery(null),
+        pollDiagnosticsLeaseStatus(),
+      ]);
+      if (seq === diagState.requestSeq) syncDiagnosticsPolling();
+    } catch (error) {
+      if (error?.name === 'AbortError' || seq !== diagState.requestSeq) return;
+      diagState.loading = false;
+      diagState.error = error.message;
+      diagState.errorCode = error.code || '';
+      renderDiagnosticsCenter();
+    }
+  }
+
+  async function loadDiagnosticsByTradeNo(rawTradeNo) {
+    const tradeNo = String(rawTradeNo || '').trim();
+    if (!tradeNo || tradeNo.length > 36 || /[\x00-\x1f\x7f]/.test(tradeNo)) {
+      diagState.error = '请输入完整的有效订单号（1–36 字符，不支持模糊前缀或客户名）';
+      renderDiagnosticsCenter();
+      return;
+    }
+    resetDiagSubjectState('order');
+    diagState.orderId = null;
+    diagState.tradeNoInput = tradeNo;
+    diagState.loading = true;
+    renderDiagnosticsCenter();
+
+    const seq = diagState.requestSeq;
+    const controller = new AbortController();
+    diagState.queryController = controller;
+
+    try {
+      const card = await diagApi('/order/diagnostics/lookup', {
+        method: 'POST',
+        data: { trade_no: tradeNo },
+        signal: controller.signal,
+      });
+      if (seq !== diagState.requestSeq) return;
+      diagState.identityCard = card;
+      diagState.orderId = Number(card.order_id);
+      diagState.tradeNoInput = String(card.trade_no || tradeNo);
+      diagState.resolvedDiagnosticId = String(card.diagnostic_id || '');
+      lastSyncedDiagRouteKey = `1:${diagState.orderId}`;
+      await Promise.all([
+        executeDiagnosticsQuery(null),
+        pollDiagnosticsLeaseStatus(),
+      ]);
+      if (seq === diagState.requestSeq) syncDiagnosticsPolling();
+    } catch (error) {
+      if (error?.name === 'AbortError' || seq !== diagState.requestSeq) return;
+      diagState.loading = false;
+      diagState.error = error.message;
+      diagState.errorCode = error.code || '';
+      renderDiagnosticsCenter();
+    }
+  }
+
+  async function loadDiagnosticsByReadOnlyId(rawDiagId) {
+    const diagId = String(rawDiagId || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{24}$/.test(diagId)) {
+      diagState.error = 'diagnostic_id 必须为 24 位小写十六进制字符串';
+      renderDiagnosticsCenter();
+      return;
+    }
+    resetDiagSubjectState('diagnostic_id');
+    diagState.orderId = null;
+    diagState.diagnosticIdInput = diagId;
+    diagState.resolvedDiagnosticId = diagId;
+    diagState.identityCard = {
+      order_id: null,
+      trade_no: null,
+      order_bound: false,
+      binding_note: '未绑定订单（只读客户日志 ID 模式，开启详细诊断需绑定订单）',
+      diagnostic_id: diagId,
+    };
+    await executeDiagnosticsQuery(null);
+  }
+
+  async function startDiagnosticsLease() {
+    if (diagState.mode !== 'order' || !diagState.orderId || diagState.leaseBusy) return;
+    const seq = diagState.requestSeq;
+    const orderId = Number(diagState.orderId);
+    diagState.leaseBusy = true;
+    diagState.leaseError = '';
+    renderDiagnosticsCenter();
+    try {
+      const result = await diagApi('/order/diagnostics/start', {
+        method: 'POST',
+        data: {
+          order_id: orderId,
+          idempotency_key: makeIdempotencyKey('start', orderId),
+        },
+      });
+      if (seq !== diagState.requestSeq) return;
+      diagState.leaseStatus = result;
+      syncDiagnosticsPolling();
+    } catch (error) {
+      if (seq !== diagState.requestSeq) return;
+      diagState.leaseError = error.message;
+    } finally {
+      if (seq === diagState.requestSeq) {
+        diagState.leaseBusy = false;
+        renderDiagnosticsCenter();
+      }
+    }
+  }
+
+  async function stopDiagnosticsLease() {
+    if (diagState.mode !== 'order' || !diagState.orderId || diagState.leaseBusy) return;
+    const sessionId = diagState.leaseStatus?.session?.session_id;
+    if (!sessionId) return;
+    const seq = diagState.requestSeq;
+    const orderId = Number(diagState.orderId);
+    diagState.leaseBusy = true;
+    diagState.leaseError = '';
+    renderDiagnosticsCenter();
+    try {
+      const result = await diagApi('/order/diagnostics/stop', {
+        method: 'POST',
+        data: {
+          order_id: orderId,
+          session_id: sessionId,
+          idempotency_key: makeIdempotencyKey('stop', orderId),
+        },
+      });
+      if (seq !== diagState.requestSeq) return;
+      diagState.leaseStatus = result;
+    } catch (error) {
+      if (seq !== diagState.requestSeq) return;
+      diagState.leaseError = error.message;
+    } finally {
+      if (seq === diagState.requestSeq) {
+        diagState.leaseBusy = false;
+        renderDiagnosticsCenter();
+      }
+    }
+  }
+
+  async function openDiagnosticsConnectionDetail(itemIndex, cursor = null) {
+    const item = cursor && diagState.selectedConnection
+      ? diagState.selectedConnection
+      : diagState.items[Number(itemIndex)];
+    if (!item) return;
+
+    const seq = diagState.requestSeq;
+    const listSeq = diagState.listQuerySeq;
+    if (diagState.detailController) {
+      try { diagState.detailController.abort(); } catch (_) {}
+    }
+    const controller = new AbortController();
+    diagState.detailController = controller;
+    diagState.selectedConnection = item;
+    diagState.detailLoading = true;
+    diagState.detailError = '';
+    if (!cursor) {
+      diagState.connectionDetail = null;
+      diagState.detailFrom = diagState.queryFrom;
+      diagState.detailTo = diagState.queryTo;
+    }
+    renderDiagnosticsCenter();
+
+    const payload = {
+      node_id: Number(item.node_id),
+      runtime_id: String(item.runtime_id),
+      connection_id: String(item.connection_id),
+    };
+    if (diagState.mode === 'order') {
+      payload.order_id = Number(diagState.orderId);
+    } else {
+      payload.diagnostic_id = diagState.resolvedDiagnosticId;
+    }
+    if (diagState.detailFrom && diagState.detailTo) {
+      payload.from = diagState.detailFrom;
+      payload.to = diagState.detailTo;
+    }
+    if (cursor) payload.cursor = cursor;
+
+    try {
+      const detail = await diagApi('/order/diagnostics/connection', {
+        method: 'POST',
+        data: payload,
+        signal: controller.signal,
+      });
+      if (seq !== diagState.requestSeq || listSeq !== diagState.listQuerySeq || diagState.selectedConnection !== item) return;
+      diagState.detailLoading = false;
+      if (detail.from) diagState.detailFrom = detail.from;
+      if (detail.to) diagState.detailTo = detail.to;
+      diagState.connectionDetail = detail;
+      renderDiagnosticsCenter();
+    } catch (error) {
+      if (error?.name === 'AbortError' || seq !== diagState.requestSeq || listSeq !== diagState.listQuerySeq || diagState.selectedConnection !== item) return;
+      diagState.detailLoading = false;
+      diagState.detailError = error.message;
+      renderDiagnosticsCenter();
+    }
+  }
+
+  function renderDistinctAddressBadges(record) {
+    if (!record) return '';
+    const badges = [];
+    const targetAddr = record.selected_target_address || record.selected_target_addr;
+    if (targetAddr) {
+      badges.push(`<span class="diag-tag diag-tag-ip" data-diag-tag="ip">目标 IP: <code>${escapeHtml(targetAddr)}</code></span>`);
+    }
+    if (record.domain_source) {
+      badges.push(`<span class="diag-tag diag-tag-domain-source" data-diag-tag="domain_source">域名来源: <code>${escapeHtml(record.domain_source)}</code></span>`);
+    }
+    if (record.outbound_tag) {
+      badges.push(`<span class="diag-tag diag-tag-outbound" data-diag-tag="outbound">出口: <code>${escapeHtml(record.outbound_tag)}</code></span>`);
+    }
+    if (record.socket_peer) {
+      badges.push(`<span class="diag-tag diag-tag-socket-peer" data-diag-tag="socket_peer">socket_peer: <code>${escapeHtml(record.socket_peer)}</code></span>`);
+    }
+    return badges.length ? `<div class="diag-distinct-tags">${badges.join('')}</div>` : '';
+  }
+
+  function renderDiagnosticsIdentityAndLeaseSection() {
+    const card = diagState.identityCard;
+    const isOrderMode = diagState.mode === 'order';
+    if (!card) {
+      return `<section class="diag-card diag-identity-empty" data-diag-identity-card>
+        <p>${isOrderMode ? '请输入完整订单号（trade_no）或从订单详情“连接诊断”快捷入口进入。' : '请输入 24 位小写十六进制客户日志 ID（diagnostic_id）进行只读查询。'}</p>
+      </section>`;
+    }
+
+    if (!isOrderMode || card.order_bound === false) {
+      return `<section class="diag-card diag-identity-readonly" data-diag-identity-card>
+        <div class="diag-identity-header">
+          <div>
+            <span class="diag-mode-badge readonly">未绑定订单</span>
+            <h2>客户日志 ID：<code>${escapeHtml(card.diagnostic_id || diagState.resolvedDiagnosticId)}</code></h2>
+            <p>${escapeHtml(card.binding_note || '未绑定订单（只读客户日志 ID 模式，开启详细诊断需绑定订单）')}</p>
+          </div>
+          <div class="diag-lease-controls" data-diag-lease-controls>
+            <button type="button" class="primary" data-diag-action="start-lease" disabled>开启十五分钟诊断</button>
+            <button type="button" data-diag-action="stop-lease" disabled>停止诊断</button>
+            <small class="diag-lease-disabled-note">需绑定订单后才可操作十五分钟详细诊断租约</small>
+          </div>
+        </div>
+      </section>`;
+    }
+
+    const lease = diagState.leaseStatus;
+    const session = lease?.session || null;
+    const leaseState = lease?.state || 'idle';
+    let leaseStatusLabel = '未开启详细诊断（当前仅记录基线摘要与失败事件）';
+    if (leaseState === 'pending') {
+      leaseStatusLabel = '等待节点确认';
+    } else if (leaseState === 'partial') {
+      leaseStatusLabel = `部分节点已生效（${Number(session?.effective_nodes_count || 0)} / ${Number(session?.eligible_nodes_count || 0)} 节点） · 截止时间：${escapeHtml(session?.expires_at || '-')}`;
+    } else if (leaseState === 'active') {
+      leaseStatusLabel = `详细诊断已生效（${Number(session?.effective_nodes_count || 0)} / ${Number(session?.eligible_nodes_count || 0)} 节点） · 截止时间：${escapeHtml(session?.expires_at || '-')}`;
+    } else if (leaseState === 'stopping') {
+      leaseStatusLabel = '等待节点确认停止';
+    } else if (leaseState === 'stopped') {
+      leaseStatusLabel = '已停止详细诊断';
+    } else if (leaseState === 'expired') {
+      leaseStatusLabel = '诊断租约已到期自动关闭';
+    }
+
+    const canStop = Boolean(session?.session_id && ['pending', 'partial', 'active', 'stopping'].includes(leaseState));
+    const nodes = Array.isArray(lease?.nodes) ? lease.nodes : [];
+    const nodeChips = nodes.map((node) => `<div class="diag-node-chip state-${escapeHtml(node.state || 'idle')}" data-diag-node-chip="${node.node_id}">
+      <strong>#${node.node_id} ${escapeHtml(node.node_name || '')}</strong>
+      <span>能力: ${node.capability === 'supported' ? '支持' : '不支持'}</span>
+      <span>状态: ${escapeHtml(node.message || node.state || '-')}</span>
+      <span>观测器: ${escapeHtml(node.observer_state || 'unknown')}${node.dropped_total != null ? ` · 丢弃 ${Number(node.dropped_total)}` : ''}</span>
+    </div>`).join('');
+
+    return `<section class="diag-card" data-diag-identity-card>
+      <div class="diag-identity-header">
+        <div class="diag-identity-meta">
+          <span class="diag-mode-badge order">已绑定订单 #${Number(card.order_id)}</span>
+          <h2>客户日志 ID：<code data-diag-id-value>${escapeHtml(card.diagnostic_id)}</code></h2>
+          <dl class="diag-identity-dl">
+            <div><dt>订单号</dt><dd data-diag-trade-no>${escapeHtml(card.trade_no || '-')}</dd></div>
+            <div><dt>订单类型</dt><dd>${escapeHtml(card.order_type || '-')}</dd></div>
+            <div><dt>客户名称</dt><dd>${escapeHtml(card.customer_display_name || '-')}</dd></div>
+            <div><dt>订阅名称</dt><dd>${escapeHtml(card.subscription_name || '-')}</dd></div>
+          </dl>
+        </div>
+        <div class="diag-lease-box" data-diag-lease-controls>
+          <div class="diag-lease-state" data-diag-lease-status>${leaseStatusLabel}</div>
+          ${diagState.leaseError ? `<div class="diag-lease-error">${escapeHtml(diagState.leaseError)}</div>` : ''}
+          <div class="diag-lease-buttons">
+            <button type="button" class="primary" data-diag-action="start-lease" ${diagState.leaseBusy ? 'disabled' : ''}>开启十五分钟诊断</button>
+            <button type="button" class="danger" data-diag-action="stop-lease" ${!canStop || diagState.leaseBusy ? 'disabled' : ''}>停止诊断</button>
+          </div>
+        </div>
+      </div>
+      ${nodeChips ? `<div class="diag-node-grid" data-diag-node-capabilities>${nodeChips}</div>` : ''}
+    </section>`;
+  }
+
+  function renderDiagnosticsCoverageBanner() {
+    const cov = diagState.coverage;
+    if (!cov) return '';
+    const stateLabels = {
+      complete: '观测覆盖完整（complete）',
+      partial: '观测覆盖不完整（partial）',
+      delayed: '采集缓冲延迟（delayed）',
+      unknown: '观测覆盖未知（unknown）',
+    };
+    const reasons = Array.isArray(cov.reasons) && cov.reasons.length
+      ? `原因：${cov.reasons.map(escapeHtml).join(', ')}`
+      : '';
+    const truncNote = (diagState.scanTruncated || diagState.truncated)
+      ? '<div class="diag-truncation-alert" data-diag-truncated>读取或快照预算已截断，建议缩小查询时间窗口或添加精确 trace_id 筛选。</div>'
+      : '';
+    return `<section class="diag-coverage-banner state-${escapeHtml(cov.state || 'unknown')}" data-diag-coverage>
+      <div><strong>${stateLabels[cov.state] || escapeHtml(cov.state)}</strong> <span>（仅代表日志采集与查询覆盖范围，不代表目标网站健康）</span></div>
+      ${reasons ? `<div class="diag-coverage-reasons">${reasons}</div>` : ''}
+      ${truncNote}
+    </section>`;
+  }
+
+  function renderDiagnosticsConnectionDetail() {
+    if (!diagState.selectedConnection) return '';
+    if (diagState.detailLoading) {
+      return '<section class="diag-card diag-detail-panel" data-diag-detail-panel><div class="diag-loading">正在加载连接调用链、DNS 与异常栈详情…</div></section>';
+    }
+    if (diagState.detailError) {
+      return `<section class="diag-card diag-detail-panel" data-diag-detail-panel><div class="diag-error">${escapeHtml(diagState.detailError)}</div></section>`;
+    }
+    const detail = diagState.connectionDetail;
+    if (!detail) return '';
+
+    const events = Array.isArray(detail.events) ? detail.events : [];
+    const spans = Array.isArray(detail.call_chain?.spans) ? detail.call_chain.spans : [];
+    const dnsOps = detail.dns_operations && typeof detail.dns_operations === 'object' ? detail.dns_operations : {};
+    const spanMap = new Map(spans.map((s) => [s.span_id, s]));
+
+    function computeSpanDepth(span) {
+      let depth = 0;
+      let curr = span;
+      const visited = new Set();
+      while (curr?.parent_span_id && spanMap.has(curr.parent_span_id) && !visited.has(curr.parent_span_id)) {
+        visited.add(curr.parent_span_id);
+        depth += 1;
+        curr = spanMap.get(curr.parent_span_id);
+      }
+      return Math.min(depth, 6);
+    }
+
+    const windowGapBanner = (detail.start_in_window === false || detail.window_note)
+      ? `<div class="diag-window-gap-banner" data-diag-window-gap>${escapeHtml(detail.window_note || '开始记录不在当前窗口')}</div>`
+      : '';
+
+    const spanRows = spans.map((span) => {
+      const depth = computeSpanDepth(span);
+      const gaps = [];
+      if (span.missing_parent) gaps.push('<span class="diag-gap-badge" data-diag-gap="missing_parent">父操作记录未采集</span>');
+      if (!span.end_observed) gaps.push('<span class="diag-gap-badge" data-diag-gap="unclosed">未观察到结束事件</span>');
+      if (span.detail_started_mid_operation) gaps.push('<span class="diag-gap-badge" data-diag-gap="mid_operation">中途开启详细诊断</span>');
+      if (span.linked_dns_operation_id) {
+        gaps.push(`<span class="diag-dns-link-badge" data-diag-dns-link="${escapeHtml(span.linked_dns_operation_id)}">关联共享 DNS: <code>${escapeHtml(span.linked_dns_operation_id)}</code></span>`);
+      }
+      return `<div class="diag-span-item depth-${depth}" data-diag-span="${escapeHtml(span.span_id)}" style="padding-left:${12 + depth * 20}px">
+        <div class="diag-span-main">
+          <strong>${escapeHtml(span.span_name || span.stage || 'span')}</strong>
+          <code>span:${escapeHtml(span.span_id)}</code>
+          ${span.parent_span_id ? `<small>parent: <code>${escapeHtml(span.parent_span_id)}</code></small>` : '<small>root</small>'}
+          <span class="diag-outcome-badge outcome-${escapeHtml(span.outcome || 'ok')}">${escapeHtml(span.outcome || 'ok')}</span>
+          <span>耗时: ${span.duration_ms != null ? `${Number(span.duration_ms)} ms` : '未闭合'}</span>
+          ${span.reason_code ? `<code>${escapeHtml(span.reason_code)}</code>` : ''}
+        </div>
+        ${span.safe_message ? `<div class="diag-span-msg">${escapeHtml(span.safe_message)}</div>` : ''}
+        ${gaps.length ? `<div class="diag-span-gaps">${gaps.join(' ')}</div>` : ''}
+      </div>`;
+    }).join('') || '<p class="diag-empty-sub">未收到调用链 span 记录</p>';
+
+    const dnsEntries = Object.entries(dnsOps);
+    const dnsHtml = dnsEntries.length
+      ? dnsEntries.map(([opId, opEvents]) => `<div class="diag-dns-op" data-diag-dns-op="${escapeHtml(opId)}">
+          <h4>共享解析操作 <code>${escapeHtml(opId)}</code></h4>
+          <div class="diag-dns-events">${(Array.isArray(opEvents) ? opEvents : []).map((ev) => `<div class="diag-dns-ev">
+            <code>#${Number(ev.seq || 0)} ${escapeHtml(ev.event || ev.event_name || '')}</code>
+            <span>域名: <code>${escapeHtml(ev.qname || '-')}</code></span>
+            <span>记录类型: <code>${escapeHtml(ev.qtype || '-')}</code></span>
+            <span>结果: <code>${escapeHtml(ev.rcode || ev.outcome || '-')}</code></span>
+            <span>解析器: <code>${escapeHtml(ev.resolver_tag || '-')} (${escapeHtml(ev.resolver_server || '-')})</code></span>
+            ${ev.dns_wait_ms != null ? `<span>耗时: ${Number(ev.dns_wait_ms)} ms</span>` : ''}
+            ${ev.coalesced_waiters != null ? `<span>合并等待: ${Number(ev.coalesced_waiters)}</span>` : ''}
+            ${ev.cache_hit != null ? `<span>缓存命中: ${ev.cache_hit ? '是' : '否'}</span>` : ''}
+          </div>`).join('')}</div>
+        </div>`).join('')
+      : '<p class="diag-empty-sub">无关联的共享 DNS 操作记录</p>';
+
+    const exceptions = [];
+    events.forEach((ev) => {
+      const exc = ev.exception && typeof ev.exception === 'object' ? ev.exception : null;
+      const stack = exc?.stacktrace || ev['exception.stacktrace'] || '';
+      const captureKind = exc?.stack_capture_kind || ev['exception.stack_capture_kind'] || '';
+      const excType = exc?.type || ev['exception.type'] || ev.error_type || '';
+      const excMsg = exc?.message || ev['exception.message'] || ev.safe_message || '';
+      if (stack || captureKind) {
+        exceptions.push({
+          seq: ev.seq,
+          stage: ev.stage,
+          type: excType,
+          message: excMsg,
+          stacktrace: stack,
+          captureKind: captureKind || 'unavailable',
+          truncated: Boolean(exc?.stack_truncated ?? ev['exception.stack_truncated']),
+          framesTotal: Number(exc?.stack_frames_total ?? ev['exception.stack_frames_total'] ?? 0),
+        });
+      }
+    });
+
+    const stackWithFrames = exceptions.filter((e) => Boolean(e.stacktrace));
+    const stackHtml = stackWithFrames.length
+      ? stackWithFrames.map((exc) => `<div class="diag-exception-block" data-diag-exception>
+          <div class="diag-exception-meta">
+            <strong>阶段: ${escapeHtml(exc.stage || '-')} (seq #${Number(exc.seq || 0)})</strong>
+            <span class="diag-capture-badge" data-diag-capture-kind="${escapeHtml(exc.captureKind)}">抓取方式: ${escapeHtml(exc.captureKind)}</span>
+            ${exc.type ? `<code>${escapeHtml(exc.type)}</code>` : ''}
+            ${exc.truncated ? `<span class="diag-gap-badge">栈已裁剪（总帧数 ${exc.framesTotal}）</span>` : ''}
+          </div>
+          ${exc.message ? `<div class="diag-exception-msg">${escapeHtml(exc.message)}</div>` : ''}
+          <pre class="diag-stacktrace" data-diag-stacktrace>${escapeHtml(exc.stacktrace)}</pre>
+        </div>`).join('')
+      : `<div class="diag-no-stack" data-diag-no-stack>未捕获异常栈${exceptions[0]?.captureKind ? `（stack_capture_kind: ${escapeHtml(exceptions[0].captureKind)}）` : ''}</div>`;
+
+    const latestEv = events[events.length - 1] || diagState.selectedConnection;
+    const eventRows = events.map((ev) => `<tr>
+      <td>#${Number(ev.seq || 0)}</td>
+      <td>${escapeHtml(ev.event_time || '-')}</td>
+      <td><code>${escapeHtml(ev.event || ev.event_name || '-')}</code></td>
+      <td>${escapeHtml(ev.stage || '-')}</td>
+      <td><span class="diag-outcome-badge outcome-${escapeHtml(ev.span_status || ev.outcome || 'ok')}">${escapeHtml(ev.span_status || ev.outcome || 'ok')}</span></td>
+      <td><code>${escapeHtml(ev.reason_code || '-')}</code> ${escapeHtml(ev.safe_message || '')}</td>
+      <td>${renderDistinctAddressBadges(ev)}</td>
+    </tr>`).join('');
+
+    return `<section class="diag-card diag-detail-panel" data-diag-detail-panel>
+      <header class="diag-detail-header">
+        <div>
+          <h3>连接详情：<code>${escapeHtml(detail.connection_id)}</code>（节点 #${Number(detail.node_id)}）</h3>
+          ${renderDistinctAddressBadges(latestEv)}
+        </div>
+        <button type="button" data-diag-action="close-detail">关闭详情</button>
+      </header>
+      ${windowGapBanner}
+      <div class="diag-detail-grid">
+        <div class="diag-detail-section">
+          <h4>Trace / Span 调用链</h4>
+          <div class="diag-span-list" data-diag-call-chain>${spanRows}</div>
+        </div>
+        <div class="diag-detail-section">
+          <h4>异常与调用栈</h4>
+          ${stackHtml}
+        </div>
+        <div class="diag-detail-section">
+          <h4>关联共享 DNS 操作</h4>
+          <div data-diag-dns-section>${dnsHtml}</div>
+          ${detail.next_cursor ? `<button type="button" data-diag-action="next-detail-cursor">加载下一页 DNS 操作</button>` : ''}
+        </div>
+        <div class="diag-detail-section">
+          <h4>连接事件时间线（共 ${events.length} 条）</h4>
+          <div class="diag-table-wrap">
+            <table>
+              <thead><tr><th>序号</th><th>时间</th><th>事件</th><th>阶段</th><th>结果</th><th>原因与摘要</th><th>地址与路由标签</th></tr></thead>
+              <tbody>${eventRows || '<tr><td colspan="7">所选范围没有收到匹配记录</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>`;
+  }
+
+  function renderDiagnosticsCenter() {
+    const root = ensureDiagnosticsRoot();
+    const route = parseDiagnosticsRoute();
+    root.classList.toggle('open', route.active);
+    syncDiagnosticsMenuState();
+    if (!route.active) return;
+
+    const isOrderMode = diagState.mode === 'order';
+    const f = diagState.filters;
+
+    const itemRows = diagState.items.map((item, idx) => {
+      const targetHost = item.dest_domain || item.requested_host || item.observed_domain || item.selected_target_address || '-';
+      const targetPort = item.dest_port ? `:${item.dest_port}` : '';
+      const errStages = Array.isArray(item.error_stages) && item.error_stages.length ? item.error_stages.join(', ') : (item.stage || '-');
+      const reasons = Array.isArray(item.reason_codes) && item.reason_codes.length ? item.reason_codes.join(', ') : (item.reason_code || '-');
+      return `<tr data-diag-row="${idx}">
+        <td>${escapeHtml(item.last_event_time || item.first_event_time || '-')}</td>
+        <td>#${Number(item.node_id)}</td>
+        <td>
+          <strong>${escapeHtml(targetHost)}${escapeHtml(targetPort)}</strong>
+          ${Number(item.target_id) > 0 ? `<small>UDP target #${Number(item.target_id)}</small>` : ''}
+          ${item.trace_id ? `<small>trace: <code>${escapeHtml(item.trace_id)}</code></small>` : ''}
+          ${renderDistinctAddressBadges(item)}
+        </td>
+        <td><code>${escapeHtml([item.protocol, item.network].filter(Boolean).join(' / ') || '-')}</code></td>
+        <td>${escapeHtml(errStages)}</td>
+        <td><span class="diag-outcome-badge outcome-${escapeHtml(item.outcome || 'ok')}">${escapeHtml(item.outcome || 'ok')}</span></td>
+        <td>
+          <code>${escapeHtml(reasons)}</code>
+          ${item.safe_message ? `<small>${escapeHtml(item.safe_message)}</small>` : ''}
+          ${item.has_exception_stack ? '<span class="diag-stack-indicator">含异常栈</span>' : ''}
+        </td>
+        <td><button type="button" class="admin-dist-link" data-diag-open-connection="${idx}">查看详情</button></td>
+      </tr>`;
+    }).join('');
+
+    const emptyText = diagState.emptyMessage || '所选范围没有收到匹配记录';
+
+    root.innerHTML = `<div class="diag-center-page">
+      <header class="diag-center-header">
+        <div>
+          <p class="diag-eyebrow">CUSTOMER CONNECTION DIAGNOSTICS</p>
+          <h1>日志中心</h1>
+          <span>按订单精确解析订阅客户或按 24 位客户日志 ID 只读排查连接、DNS、调用链与异常栈。</span>
+        </div>
+        <div class="diag-header-actions">
+          <button type="button" data-diag-action="close-center">返回仪表盘</button>
+        </div>
+      </header>
+
+      <section class="diag-card diag-mode-switcher">
+        <div class="diag-mode-tabs" role="tablist" aria-label="查询方式">
+          <button type="button" role="tab" aria-selected="${isOrderMode}" class="${isOrderMode ? 'active' : ''}" data-diag-mode="order">按完整订单号 / 订单快捷入口</button>
+          <button type="button" role="tab" aria-selected="${!isOrderMode}" class="${!isOrderMode ? 'active' : ''}" data-diag-mode="diagnostic_id">按客户日志 ID 只读查询</button>
+        </div>
+        ${isOrderMode ? `<div class="diag-lookup-bar">
+          <label for="diag-trade-no-input">完整订单号（trade_no）</label>
+          <input id="diag-trade-no-input" type="search" maxlength="36" autocomplete="off" spellcheck="false" value="${escapeHtml(diagState.tradeNoInput)}" placeholder="输入完整订单号精确解析（不支持模糊前缀或客户名）">
+          <button type="button" class="primary" data-diag-action="lookup-trade-no" ${diagState.loading ? 'disabled' : ''}>精确查找订单</button>
+        </div>` : `<div class="diag-lookup-bar">
+          <label for="diag-id-input">客户日志 ID（24 位 hex）</label>
+          <input id="diag-id-input" type="search" maxlength="24" autocomplete="off" spellcheck="false" value="${escapeHtml(diagState.diagnosticIdInput)}" placeholder="例如 222222222222222222222222">
+          <button type="button" class="primary" data-diag-action="query-diag-id" ${diagState.loading ? 'disabled' : ''}>查询日志 ID</button>
+        </div>`}
+      </section>
+
+      ${diagState.error ? `<div class="diag-alert-error" role="alert" data-diag-error>${escapeHtml(diagState.error)}${diagState.errorCode ? ` <code>[${escapeHtml(diagState.errorCode)}]</code>` : ''}</div>` : ''}
+
+      ${renderDiagnosticsIdentityAndLeaseSection()}
+
+      <section class="diag-card diag-filters-card">
+        <h3>连接筛选</h3>
+        <div class="diag-filters-grid">
+          <label>精确 Trace ID（32 位 hex）<input id="diag-filter-trace-id" data-diag-filter="trace_id" type="search" maxlength="32" autocomplete="off" spellcheck="false" value="${escapeHtml(f.trace_id)}" placeholder="32 位小写 hex trace_id"></label>
+          <label>节点 ID<input id="diag-filter-node-id" data-diag-filter="node_id" type="number" min="1" step="1" value="${escapeHtml(f.node_id)}" placeholder="全部节点"></label>
+          <label>目标域名<input id="diag-filter-domain" data-diag-filter="domain" type="search" maxlength="253" value="${escapeHtml(f.domain)}" placeholder="example.com"></label>
+          <label>域名匹配方式<select id="diag-filter-domain-match" data-diag-filter="domain_match">
+            <option value="contains" ${f.domain_match === 'contains' ? 'selected' : ''}>包含 (contains)</option>
+            <option value="exact" ${f.domain_match === 'exact' ? 'selected' : ''}>精确 (exact)</option>
+            <option value="suffix" ${f.domain_match === 'suffix' ? 'selected' : ''}>后缀 (suffix)</option>
+          </select></label>
+          <label>错误阶段<select id="diag-filter-stage" data-diag-filter="error_stage">
+            <option value="">全部阶段</option>
+            ${['admission', 'route', 'dns', 'dial', 'tls', 'outbound', 'relay', 'close'].map((st) => `<option value="${st}" ${f.error_stage === st ? 'selected' : ''}>${st}</option>`).join('')}
+          </select></label>
+          <label>结果状态<select id="diag-filter-outcome" data-diag-filter="outcome">
+            <option value="" ${f.outcome === '' ? 'selected' : ''}>全部结果</option>
+            <option value="error" ${f.outcome === 'error' ? 'selected' : ''}>仅错误 (error)</option>
+            <option value="ok" ${f.outcome === 'ok' ? 'selected' : ''}>仅成功 (ok)</option>
+          </select></label>
+          <label>错误原因码<input id="diag-filter-reason" data-diag-filter="reason_code" type="search" maxlength="64" value="${escapeHtml(f.reason_code)}" placeholder="如 dial_timeout"></label>
+          <div class="diag-filter-actions">
+            <button type="button" class="primary" data-diag-action="apply-filters" ${(!diagState.orderId && !diagState.resolvedDiagnosticId) || diagState.loading ? 'disabled' : ''}>筛选查询</button>
+            <button type="button" data-diag-action="reset-filters">重置筛选</button>
+          </div>
+        </div>
+      </section>
+
+      ${renderDiagnosticsCoverageBanner()}
+
+      <section class="diag-card diag-list-card">
+        <header class="diag-list-header">
+          <h3>连接目标列表（最近 15 分钟默认窗口）</h3>
+          ${diagState.nextCursor ? `<button type="button" data-diag-action="next-page" ${diagState.loading ? 'disabled' : ''}>加载下一页</button>` : ''}
+        </header>
+        ${diagState.loading ? '<div class="diag-loading" data-diag-loading>正在查询客户连接记录…</div>' : `<div class="diag-table-wrap">
+          <table data-diag-connections-table>
+            <thead><tr><th>时间</th><th>节点</th><th>目标与路由标签</th><th>协议</th><th>阶段</th><th>结果</th><th>错误摘要</th><th>操作</th></tr></thead>
+            <tbody>${itemRows || `<tr><td colspan="8" class="diag-empty-cell" data-diag-empty>${escapeHtml(emptyText)}</td></tr>`}</tbody>
+          </table>
+        </div>`}
+      </section>
+
+      ${renderDiagnosticsConnectionDetail()}
+    </div>`;
+  }
+
+  function syncFilterInputsFromDom() {
+    const root = document.getElementById('admin-diagnostics-root');
+    if (!root) return;
+    root.querySelectorAll('[data-diag-filter]').forEach((el) => {
+      const key = el.dataset.diagFilter;
+      if (key && Object.prototype.hasOwnProperty.call(diagState.filters, key)) {
+        diagState.filters[key] = el.value;
+      }
+    });
+  }
+
+  async function handleDiagnosticsClick(event) {
+    const modeBtn = event.target.closest('[data-diag-mode]');
+    if (modeBtn) {
+      const nextMode = modeBtn.dataset.diagMode;
+      if (nextMode && nextMode !== diagState.mode) {
+        diagState.orderId = null;
+        resetDiagSubjectState(nextMode);
+        lastSyncedDiagRouteKey = '1:';
+        if (parseDiagnosticsRoute().orderId) {
+          setDiagnosticsRoute(true, null);
+        } else {
+          renderDiagnosticsCenter();
+        }
+      }
+      return;
+    }
+
+    const connBtn = event.target.closest('[data-diag-open-connection]');
+    if (connBtn) {
+      await openDiagnosticsConnectionDetail(Number(connBtn.dataset.diagOpenConnection), null);
+      return;
+    }
+
+    const action = event.target.closest('[data-diag-action]')?.dataset.diagAction;
+    if (!action) return;
+
+    if (action === 'close-center') {
+      stopDiagnosticsPolling();
+      abortDiagnosticsRequests();
+      setDiagnosticsRoute(false);
+    } else if (action === 'lookup-trade-no') {
+      const input = document.getElementById('diag-trade-no-input');
+      if (input) diagState.tradeNoInput = input.value;
+      await loadDiagnosticsByTradeNo(diagState.tradeNoInput);
+    } else if (action === 'query-diag-id') {
+      const input = document.getElementById('diag-id-input');
+      if (input) diagState.diagnosticIdInput = input.value;
+      await loadDiagnosticsByReadOnlyId(diagState.diagnosticIdInput);
+    } else if (action === 'apply-filters') {
+      syncFilterInputsFromDom();
+      await executeDiagnosticsQuery(null);
+    } else if (action === 'reset-filters') {
+      diagState.filters = {
+        trace_id: '',
+        node_id: '',
+        domain: '',
+        domain_match: 'contains',
+        error_stage: '',
+        reason_code: '',
+        outcome: '',
+      };
+      if (diagState.orderId || diagState.resolvedDiagnosticId) {
+        await executeDiagnosticsQuery(null);
+      } else {
+        renderDiagnosticsCenter();
+      }
+    } else if (action === 'next-page' && diagState.nextCursor) {
+      await executeDiagnosticsQuery(diagState.nextCursor);
+    } else if (action === 'start-lease') {
+      await startDiagnosticsLease();
+    } else if (action === 'stop-lease') {
+      await stopDiagnosticsLease();
+    } else if (action === 'close-detail') {
+      diagState.selectedConnection = null;
+      diagState.connectionDetail = null;
+      diagState.detailError = '';
+      renderDiagnosticsCenter();
+    } else if (action === 'next-detail-cursor' && diagState.connectionDetail?.next_cursor) {
+      await openDiagnosticsConnectionDetail(null, diagState.connectionDetail.next_cursor);
+    }
+  }
+
+  function handleDiagnosticsChange(event) {
+    const filterEl = event.target.closest('[data-diag-filter]');
+    if (filterEl) {
+      diagState.filters[filterEl.dataset.diagFilter] = filterEl.value;
+    }
+  }
+
+  function handleDiagnosticsInput(event) {
+    if (event.target.id === 'diag-trade-no-input') {
+      diagState.tradeNoInput = event.target.value;
+    } else if (event.target.id === 'diag-id-input') {
+      diagState.diagnosticIdInput = event.target.value;
+    } else if (event.target.dataset?.diagFilter) {
+      diagState.filters[event.target.dataset.diagFilter] = event.target.value;
+    }
+  }
+
+  function handleDiagnosticsKeydown(event) {
+    if (event.key !== 'Enter') return;
+    if (event.target.id === 'diag-trade-no-input') {
+      event.preventDefault();
+      diagState.tradeNoInput = event.target.value;
+      loadDiagnosticsByTradeNo(diagState.tradeNoInput);
+    } else if (event.target.id === 'diag-id-input') {
+      event.preventDefault();
+      diagState.diagnosticIdInput = event.target.value;
+      loadDiagnosticsByReadOnlyId(diagState.diagnosticIdInput);
+    } else if (event.target.dataset?.diagFilter) {
+      event.preventDefault();
+      syncFilterInputsFromDom();
+      if (diagState.orderId || diagState.resolvedDiagnosticId) {
+        executeDiagnosticsQuery(null);
+      }
+    }
+  }
+
+  function enhanceDiagnosticsCenter() {
+    installDiagnosticsMenu();
+    const route = parseDiagnosticsRoute();
+    const routeKey = `${route.active ? 1 : 0}:${route.orderId || ''}`;
+
+    if (!route.active) {
+      stopDiagnosticsPolling();
+      abortDiagnosticsRequests();
+      const existingRoot = document.getElementById?.('admin-diagnostics-root');
+      if (existingRoot && existingRoot.id === 'admin-diagnostics-root' && existingRoot.classList?.contains?.('open')) {
+        existingRoot.classList.remove('open');
+      }
+      lastSyncedDiagRouteKey = routeKey;
+      syncDiagnosticsMenuState();
+      return;
+    }
+
+    const root = ensureDiagnosticsRoot();
+    if (!root) return;
+
+    if (!authToken()) {
+      clearDiagnosticsOnAuthFailure('管理员登录已失效，已清空诊断数据');
+      lastSyncedDiagRouteKey = routeKey;
+      return;
+    }
+
+    if (routeKey !== lastSyncedDiagRouteKey) {
+      lastSyncedDiagRouteKey = routeKey;
+      if (route.orderId) {
+        loadDiagnosticsByOrderId(route.orderId);
+        return;
+      }
+      if (diagState.orderId !== null) {
+        diagState.orderId = null;
+        resetDiagSubjectState('order');
+      }
+      renderDiagnosticsCenter();
+      return;
+    }
+
+    if (!root.classList?.contains?.('open')) {
+      renderDiagnosticsCenter();
+    }
+    syncDiagnosticsMenuState();
+    syncDiagnosticsPolling();
+  }
+
+  document.addEventListener?.('click', (event) => {
+    const diagTrigger = event.target?.closest?.('[data-open-order-diagnostics]');
+    if (!diagTrigger) return;
+    event.preventDefault();
+    const orderId = Number(diagTrigger.dataset.openOrderDiagnostics);
+    if (!Number.isSafeInteger(orderId) || orderId <= 0) {
+      toast('无效的订单 ID', 'error');
+      return;
+    }
+    state.open = false;
+    renderPanel('');
+    const detailModal = document.getElementById?.('admin-dist-detail');
+    if (detailModal && detailModal.id === 'admin-dist-detail') {
+      detailModal.classList?.remove?.('open');
+      detailModal.innerHTML = '';
+    }
+    setDiagnosticsRoute(true, orderId);
+    enhanceDiagnosticsCenter();
+  });
+
+  if (typeof window.addEventListener === 'function') {
+    window.addEventListener('hashchange', enhanceDiagnosticsCenter);
+    window.addEventListener('popstate', enhanceDiagnosticsCenter);
+    window.addEventListener('resize', () => {
+      const root = document.getElementById?.('admin-diagnostics-root');
+      if (root && root.id === 'admin-diagnostics-root') {
+        root.style?.setProperty?.('--diag-sidebar-right', `${findDiagnosticsSidebarRight()}px`);
+      }
+    });
+  }
+  document.addEventListener?.('visibilitychange', syncDiagnosticsPolling);
+
+  if (document.readyState === 'loading') document.addEventListener?.('DOMContentLoaded', enhanceDiagnosticsCenter);
+  else enhanceDiagnosticsCenter();
+  setInterval(() => { mount(); mountNativeOrderManagement(); installDiagnosticsMenu(); if (parseDiagnosticsRoute().active && !authToken()) clearDiagnosticsOnAuthFailure('管理员登录已失效，已清空诊断数据'); }, 1000);
 })();

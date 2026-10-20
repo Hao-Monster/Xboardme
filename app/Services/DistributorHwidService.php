@@ -7,8 +7,8 @@ use App\Models\DistributorHwidDevice;
 use App\Models\DistributorOrder;
 use App\Models\Order;
 use App\Models\User;
+use App\Support\SqliteImmediateTransaction;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class DistributorHwidService
 {
@@ -38,7 +38,7 @@ class DistributorHwidService
             ];
         }
 
-        $allowed = DB::transaction(function () use ($delivery, $request, $hwid) {
+        $allowed = SqliteImmediateTransaction::write(function () use ($delivery, $request, $hwid) {
             $locked = DistributorOrder::query()->lockForUpdate()->find($delivery->id);
             if (!$locked || !$locked->hwid_enabled) {
                 return true;

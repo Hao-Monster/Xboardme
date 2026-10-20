@@ -546,7 +546,7 @@ class OrderController extends Controller
             return $this->fail([422, '请选择有效的分销商']);
         }
 
-        $result = DB::transaction(function () use (
+        $result = \App\Support\SqliteImmediateTransaction::write(function () use (
             $request,
             $distributor,
             $settlementService,

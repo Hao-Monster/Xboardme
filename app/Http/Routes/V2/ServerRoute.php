@@ -4,6 +4,7 @@ namespace App\Http\Routes\V2;
 use App\Http\Controllers\V1\Server\ShadowsocksTidalabController;
 use App\Http\Controllers\V1\Server\TrojanTidalabController;
 use App\Http\Controllers\V1\Server\UniProxyController;
+use App\Http\Controllers\V2\Server\DiagnosticsController;
 use App\Http\Controllers\V2\Server\ServerController;
 use App\Http\Controllers\V2\Server\MachineController;
 use Illuminate\Contracts\Routing\Registrar;
@@ -31,6 +32,15 @@ class ServerRoute
                 ->middleware(['server.body:control', 'throttle:server-pull', 'server.v2']);
             $route->post('status', [UniProxyController::class, 'status'])
                 ->middleware(['server.body:control', 'throttle:server-report', 'server.v2']);
+
+            $route->group([
+                'prefix' => 'diagnostics',
+            ], function ($diagRoute) {
+                $diagRoute->post('snapshot', [DiagnosticsController::class, 'snapshot'])
+                    ->middleware(['server.body:control', 'throttle:server-pull', 'server.v2:machine']);
+                $diagRoute->post('ack', [DiagnosticsController::class, 'ack'])
+                    ->middleware(['server.body:control', 'throttle:server-report', 'server.v2:machine']);
+            });
         });
 
         $router->group([

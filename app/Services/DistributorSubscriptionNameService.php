@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\DistributorOrder;
 use App\Rules\DistributorName;
+use App\Support\SqliteImmediateTransaction;
 use Carbon\Carbon;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
@@ -25,7 +26,7 @@ class DistributorSubscriptionNameService
             throw new LogicException('只能在新建分销订阅时分配名称');
         }
 
-        $identity = DB::transaction(function () use ($delivery): array {
+        $identity = SqliteImmediateTransaction::write(function () use ($delivery): array {
             $locked = DistributorOrder::query()->lockForUpdate()->findOrFail($delivery->id);
             if ($locked->subscription_code && $locked->subscription_name) {
                 return [$locked->subscription_code, $locked->subscription_name];

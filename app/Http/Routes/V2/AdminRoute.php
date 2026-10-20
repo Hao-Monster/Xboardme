@@ -350,6 +350,18 @@ class AdminRoute
                 $router->get('user/{userId}/history', [TrafficResetController::class, 'userHistory']);
                 $router->post('reset-user', [TrafficResetController::class, 'resetUser']);
             });
+            $router->post('/diagnostics/initialize', [\App\Http\Controllers\V2\Admin\OrderDiagnosticsController::class, 'initialize']);
+            $router->group([
+                'prefix' => 'order/diagnostics',
+            ], function ($router) {
+                $router->post('/initialize', [\App\Http\Controllers\V2\Admin\OrderDiagnosticsController::class, 'initialize']);
+                $router->post('/lookup', [\App\Http\Controllers\V2\Admin\OrderDiagnosticsController::class, 'lookup']);
+                $router->post('/query', [\App\Http\Controllers\V2\Admin\OrderDiagnosticsController::class, 'query']);
+                $router->post('/connection', [\App\Http\Controllers\V2\Admin\OrderDiagnosticsController::class, 'connection']);
+                $router->post('/start', [\App\Http\Controllers\V2\Admin\OrderDiagnosticsController::class, 'start']);
+                $router->post('/stop', [\App\Http\Controllers\V2\Admin\OrderDiagnosticsController::class, 'stop']);
+                $router->get('/status', [\App\Http\Controllers\V2\Admin\OrderDiagnosticsController::class, 'status']);
+            });
         });
 
     }

@@ -6,8 +6,8 @@ use App\Exceptions\ApiException;
 use App\Models\DistributorOrder;
 use App\Models\Order;
 use App\Models\User;
+use App\Support\SqliteImmediateTransaction;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Facades\DB;
 
 class DistributorOrderEntitlementService
 {
@@ -47,7 +47,7 @@ class DistributorOrderEntitlementService
 
     public function updateForOrder(int $orderId, array $attributes): array
     {
-        return DB::transaction(function () use ($orderId, $attributes) {
+        return SqliteImmediateTransaction::write(function () use ($orderId, $attributes) {
             $order = Order::query()
                 ->with(['distributorSubscription', 'distributorOrder'])
                 ->lockForUpdate()

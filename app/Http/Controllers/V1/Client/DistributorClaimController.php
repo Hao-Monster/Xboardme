@@ -6,8 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\DistributorOrder;
 use App\Models\User;
 use App\Services\DistributorOrderService;
+use App\Support\SqliteImmediateTransaction;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 
 class DistributorClaimController extends Controller
 {
@@ -26,7 +26,7 @@ class DistributorClaimController extends Controller
             return response('Invalid claim token', 404, ['Content-Type' => 'text/plain']);
         }
 
-        $delivery = DB::transaction(function () use ($request, $token) {
+        $delivery = SqliteImmediateTransaction::write(function () use ($request, $token) {
             $delivery = DistributorOrder::query()
                 ->where('claim_token_hash', hash('sha256', $token))
                 ->lockForUpdate()

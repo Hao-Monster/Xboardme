@@ -33,6 +33,9 @@ class Setting
      */
     public function set(string $key, mixed $value = null): bool
     {
+        if (strtolower($key) === 'diagnostics_panel_scope') {
+            return false;
+        }
         SettingModel::createOrUpdate(strtolower($key), $value);
         $this->flush();
         return true;
@@ -44,6 +47,9 @@ class Setting
     public function save(array $settings): bool
     {
         foreach ($settings as $key => $value) {
+            if (strtolower((string) $key) === 'diagnostics_panel_scope') {
+                continue;
+            }
             SettingModel::createOrUpdate(strtolower($key), $value);
         }
         $this->flush();
@@ -55,6 +61,9 @@ class Setting
      */
     public function remove(string $key): bool
     {
+        if (strtolower($key) === 'diagnostics_panel_scope') {
+            return false;
+        }
         SettingModel::where('name', $key)->delete();
         $this->flush();
         return true;
