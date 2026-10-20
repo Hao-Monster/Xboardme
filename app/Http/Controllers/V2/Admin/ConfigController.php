@@ -88,6 +88,10 @@ class ConfigController extends Controller
     private function getConfigMappings(): array
     {
         return [
+            'diagnostics' => [
+                'diagnostics_base_url' => admin_setting('diagnostics_base_url', ''),
+                'diagnostics_read_token_configured' => trim((string) admin_setting('diagnostics_read_token', '')) !== '',
+            ],
             'invite' => [
                 'invite_force' => (bool) admin_setting('invite_force', 0),
                 'invite_commission' => admin_setting('invite_commission', 10),

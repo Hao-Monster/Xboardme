@@ -11,6 +11,7 @@ class RequestLog
         'password',
         'token',
         'draft_token',
+        'diagnostics_read_token',
         'secret',
         'key',
         'api_key',
@@ -33,12 +34,21 @@ class RequestLog
 
             $action = $this->resolveAction($request->path());
             $data = collect($request->all())->except(self::SENSITIVE_KEYS)->toArray();
+            $uri = $request->getRequestUri();
+            if ($request->query->has('diagnostics_read_token')) {
+                $query = $request->query->all();
+                unset($query['diagnostics_read_token']);
+                $uri = $request->getBaseUrl() . $request->getPathInfo();
+                if ($query !== []) {
+                    $uri .= '?' . http_build_query($query);
+                }
+            }
 
             AdminAuditLog::insert([
                 'admin_id' => $admin->id,
                 'action' => $action,
                 'method' => $request->method(),
-                'uri' => $request->getRequestUri(),
+                'uri' => $uri,
                 'request_data' => json_encode($data, JSON_UNESCAPED_UNICODE),
                 'ip' => $request->getClientIp(),
                 'created_at' => time(),
