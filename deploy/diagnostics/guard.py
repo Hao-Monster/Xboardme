@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import threading
 import time
 from typing import Any
@@ -194,7 +195,7 @@ class DiagnosticsCapacityGuard:
             config.get("storage_writable_by_writer", True)
         )
         self.expected_fs_type = str(config.get("expected_fs_type", "ext4"))
-        self.expected_fs_uuid = str(config.get("expected_fs_uuid", "")).strip()
+        self.expected_fs_uuid = str(config.get("expected_fs_uuid", "")).strip().lower()
         self.max_check_age_seconds = int(config.get("max_check_age_seconds", 60))
 
         thresholds = config.get("thresholds") or {}
@@ -257,6 +258,19 @@ class DiagnosticsCapacityGuard:
             }
             atomic_write_json(self.state_file, corrupt, mode=0o600)
             return corrupt
+
+    def _mounted_filesystem_uuid(self, mount_path: Path, root_path: Path) -> str:
+        if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", self.expected_fs_uuid):
+            return ""
+        # Host udev UUID aliases identify block devices without opening them or requiring privileges.
+        try:
+            device = (root_path / "dev/disk/by-uuid" / self.expected_fs_uuid).stat()
+            mounted_device = mount_path.stat().st_dev
+        except OSError:
+            return ""
+        if stat.S_ISBLK(device.st_mode) and device.st_rdev == mounted_device:
+            return self.expected_fs_uuid
+        return ""
 
     def _default_mount_inspector(self, mount_path: Path, root_path: Path) -> dict[str, Any]:
         resolved = str(mount_path.resolve())
@@ -321,7 +335,7 @@ class DiagnosticsCapacityGuard:
                 return {
                     "mounted": True,
                     "fs_type": fs_type,
-                    "fs_uuid": "",
+                    "fs_uuid": self._mounted_filesystem_uuid(mount_path, root_path),
                     "guard_read_only": guard_read_only,
                     "superblock_writable": super_rw,
                     "writable": writable,
@@ -355,7 +369,7 @@ class DiagnosticsCapacityGuard:
         return {
             "mounted": True,
             "fs_type": fs_type,
-            "fs_uuid": "",
+            "fs_uuid": self._mounted_filesystem_uuid(mount_path, root_path),
             "guard_read_only": guard_read_only,
             "superblock_writable": writable,
             "writable": writable,
