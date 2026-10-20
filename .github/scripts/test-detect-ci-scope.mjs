@@ -111,6 +111,28 @@ test("workflow, Dockerfile, or unknown path changes escalate to L3 full regressi
   assert.equal(emptyScope.unknown_paths, "true");
 });
 
+test("diagnostics deployment files are known infrastructure and enforce the full L3 gate", () => {
+  const files = [
+    "deploy/diagnostics/configure.py",
+    "deploy/diagnostics/guard.py",
+    "deploy/diagnostics/diagnostics_test.py",
+    "scripts/diagnostics/preflight-storage.sh"
+  ];
+  for (const context of [
+    { eventName: "pull_request", ref: "refs/pull/93/merge" },
+    { eventName: "push", ref: "refs/heads/develop" }
+  ]) {
+    for (const file of files) {
+      const scope = analyzeCiScope([file], context);
+      assert.equal(scope.tier, "L3", file);
+      assert.equal(scope.unknown_paths, "false", file);
+      for (const key of ["run_php_core", "run_mysql_compat", "run_php84_compat", "run_browser_regression", "run_heavy_deploy_tests", "run_pr_image_build"]) {
+        assert.equal(scope[key], "true", `${file}: ${key}`);
+      }
+    }
+  }
+});
+
 test("every tracked file in Xboardme git ls-files is recognized without unknown_paths fallback", () => {
   const tracked = execFileSync("git", ["ls-files"], { encoding: "utf8" })
     .split(/\r?\n/)

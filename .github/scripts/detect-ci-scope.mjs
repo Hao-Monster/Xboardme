@@ -30,7 +30,9 @@ const infraExactFiles = new Set([
 const infraPrefixes = [
   ".github/",
   ".docker/",
-  "compose."
+  "compose.",
+  "deploy/diagnostics/",
+  "scripts/diagnostics/"
 ];
 
 const dbOrPlatformExactFiles = new Set([
