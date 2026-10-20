@@ -26,3 +26,14 @@ Isolated configuration generator, capacity/mount guard, and verification suite f
 python3 -m unittest discover -s deploy/diagnostics -p '*_test.py' -v
 bash -n scripts/diagnostics/preflight-storage.sh
 ```
+
+The collector must also pass native compilation and event-filter tests using the
+verified collector image already loaded in Docker (an image ID or digest, never
+a mutable tag). This validates generated VRL with the deployed Vector version;
+Python-only checks do not compile it. The test uses synthetic events and disables
+network access; it does not validate live ingestion or production credentials.
+
+```bash
+XBOARD_DIAGNOSTICS_TEST_COLLECTOR_IMAGE='sha256:<verified-image-id>' \
+  python3 -m unittest discover -s deploy/diagnostics -p '*_test.py' -v
+```
