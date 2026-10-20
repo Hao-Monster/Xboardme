@@ -7,6 +7,8 @@ use Illuminate\Foundation\Http\FormRequest;
 class ConfigSave extends FormRequest
 {
     const RULES = [
+        'diagnostics_base_url' => 'nullable|url:https|max:2048|regex:#\Ahttps://[^/?\#@]+/?\z#',
+        'diagnostics_read_token' => 'nullable|string|max:512',
         // invite & commission
         'invite_force' => '',
         'invite_commission' => 'integer|nullable',

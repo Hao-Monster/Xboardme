@@ -23,7 +23,7 @@ VL_IMAGE = "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c2
 AUTH_IMAGE = "victoriametrics/vmauth:v1.153.0@sha256:4ebf2f21490df3e8837302b85d9db6ac45765442dfa28db77ffacd3577035a74"
 GUARD_IMAGE = os.environ.get(
     "XBOARD_DIAGNOSTICS_GUARD_IMAGE",
-    "python:3.12-slim@sha256:f3614d98f38b0525d670f287b047438ef802e28eb53016667ab7006892954ce2",
+    "python:3.12.15-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1",
 )
 VECTOR_IMAGE = os.environ.get(
     "XBOARD_DIAGNOSTICS_COLLECTOR_IMAGE",

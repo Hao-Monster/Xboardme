@@ -10,10 +10,12 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -591,6 +593,55 @@ class DiagnosticsConfigAndGuardTest(unittest.TestCase):
                 guard_server.server_close()
                 vl_server.shutdown()
                 vl_server.server_close()
+
+    def test_mount_uuid_matches_block_device_and_unknown_identity_blocks_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            configure.generate_central(base, PANEL_SCOPE, [101], expected_fs_uuid=PANEL_SCOPE)
+            cfg = json.loads((base / "guard-config.json").read_text())
+            cfg.update(state_dir=str(base / "state"), data_mount_path=str(base / "data"), root_mount_path=str(base / "host-root"))
+            g = guard.DiagnosticsCapacityGuard(
+                cfg,
+                monotonic_fn=lambda: 100.0,
+                now_utc_fn=lambda: datetime.datetime(2026, 10, 18, 10, 0, 5, tzinfo=datetime.timezone.utc),
+                disk_usage_fn=lambda _p: DiskUsage(240 * GIB, 8 * GIB, 180 * GIB),
+            )
+            resolved = str(g.data_mount_path.resolve())
+            mountinfo = f"101 80 7:17 / {resolved} ro,relatime - ext4 /dev/loop17 rw,errors=remount-ro\n"
+            uuid_alias = g.root_mount_path / "dev/disk/by-uuid" / PANEL_SCOPE
+            real_stat = Path.stat
+            for name, device, expected_uuid in [
+                ("matching_device", SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=123), PANEL_SCOPE),
+                ("different_device", SimpleNamespace(st_mode=stat.S_IFBLK, st_rdev=456), ""),
+                ("regular_file", SimpleNamespace(st_mode=stat.S_IFREG, st_rdev=123), ""),
+                ("missing_alias", FileNotFoundError(), ""),
+                ("unreadable_alias", PermissionError(), ""),
+            ]:
+                with self.subTest(name=name):
+                    def inspect_stat(path: Path, *args: object, **kwargs: object) -> object:
+                        if path == uuid_alias:
+                            if isinstance(device, OSError):
+                                raise device
+                            return device
+                        if path == g.data_mount_path:
+                            return SimpleNamespace(st_dev=123)
+                        return real_stat(path, *args, **kwargs)
+
+                    with (
+                        patch.object(Path, "exists", return_value=True),
+                        patch.object(Path, "read_text", return_value=mountinfo),
+                        patch.object(Path, "stat", new=inspect_stat),
+                    ):
+                        inspection = g._default_mount_inspector(g.data_mount_path, g.root_mount_path)
+                    self.assertEqual(inspection["fs_uuid"], expected_uuid)
+                    g.mount_inspector_fn = lambda _m, _r: inspection
+                    health = g.enable_gate(reason="synthetic UUID device test")
+                    self.assertEqual(health["state"], "ready" if expected_uuid else "blocked")
+                    self.assertEqual(health["latched"], not bool(expected_uuid))
+                    if not expected_uuid:
+                        self.assertIn("filesystem_uuid_mismatch", health["reason_codes"])
+                        status, _, _ = g.validate_and_prepare_insert("/insert/jsonline", {}, b"")
+                        self.assertEqual(status, 503)
 
     def test_generated_guard_standalone_startup_and_readonly_mount_inspection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
