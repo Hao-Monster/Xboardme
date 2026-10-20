@@ -177,7 +177,9 @@ case "$MODE" in
     fallocate -l "$IMAGE_BYTES" "$IMAGE_PATH"
     chmod 0600 "$IMAGE_PATH"
     verify_non_sparse_image
-    mkfs.ext4 -F -m 1 -L "xboard_diag_30g" "$IMAGE_PATH" >/dev/null
+    # The default mkfs discard punches holes in the preallocated regular file.
+    mkfs.ext4 -F -E nodiscard -m 1 -L "xboard_diag_30g" "$IMAGE_PATH" >/dev/null
+    verify_non_sparse_image
     FS_UUID="$(blkid -s UUID -o value "$IMAGE_PATH")"
     printf '{\n  "schema_version": 1,\n  "image_path": "%s",\n  "mount_path": "%s",\n  "fs_type": "ext4",\n  "fs_uuid": "%s",\n  "size_bytes": %d\n}\n' \
       "$IMAGE_PATH" "$MOUNT_PATH" "$FS_UUID" "$IMAGE_BYTES" >"$META_PATH"

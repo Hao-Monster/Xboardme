@@ -8,6 +8,8 @@ import gzip
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -72,6 +74,25 @@ def sample_connection_event(**overrides: object) -> dict[str, object]:
 
 
 class DiagnosticsConfigAndGuardTest(unittest.TestCase):
+    def test_storage_format_preserves_physical_reservation(self) -> None:
+        if not all(shutil.which(tool) for tool in ("fallocate", "mkfs.ext4")):
+            self.skipTest("Native fallocate and mkfs.ext4 are required")
+        script = Path(__file__).resolve().parents[2] / "scripts/diagnostics/preflight-storage.sh"
+        format_commands = [line.strip() for line in script.read_text(encoding="utf-8").splitlines()
+                           if line.lstrip().startswith("mkfs.ext4 ")]
+        self.assertEqual(len(format_commands), 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "reservation.ext4"
+            size = 16 * 1024 * 1024
+            subprocess.run(["fallocate", "-l", str(size), str(image)], check=True, timeout=15)
+            self.assertGreaterEqual(image.stat().st_blocks * 512, size * 99 // 100)
+            # Exercise the actual production formatting command on a small,
+            # disposable regular file; no block device, loop mount or sudo.
+            command = shlex.split(format_commands[0].removesuffix(">/dev/null").strip())
+            command = [str(image) if arg == "$IMAGE_PATH" else arg for arg in command]
+            subprocess.run(command, check=True, capture_output=True, timeout=15)
+            self.assertGreaterEqual(image.stat().st_blocks * 512, size * 99 // 100)
+
     def test_collector_remap_with_native_vector(self) -> None:
         image = os.environ.get("XBOARD_DIAGNOSTICS_TEST_COLLECTOR_IMAGE")
         if not image:
