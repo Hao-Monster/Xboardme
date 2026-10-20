@@ -318,7 +318,6 @@ def build_vrl_remap(panel_scope: str, node_id: int, collector_id: str) -> str:
     conn_events_json = json.dumps(CONNECTION_EVENTS)
     res_events_json = json.dumps(RESOLVER_EVENTS)
     node_events_json = json.dumps(NODE_EVENTS)
-    forbidden_json = json.dumps(FORBIDDEN_PII_FIELDS)
     conn_fields_json = json.dumps(CONNECTION_ALLOWED_FIELDS)
     res_fields_json = json.dumps(RESOLVER_ALLOWED_FIELDS)
     node_fields_json = json.dumps(NODE_ALLOWED_FIELDS)
@@ -335,11 +334,8 @@ def build_vrl_remap(panel_scope: str, node_id: int, collector_id: str) -> str:
         "  abort",
         "}",
         "record = object!(parsed)",
-        f"forbidden = {forbidden_json}",
-        "for_each(forbidden) -> |_idx, bad_key| {",
-        "  if exists(record[bad_key]) {",
-        "    abort",
-        "  }",
+        "if " + " || ".join(f"exists(record.{field})" for field in FORBIDDEN_PII_FIELDS) + " {",
+        "  abort",
         "}",
         "schema_ver = int(record.schema_version) ?? 0",
         "if schema_ver != 1 {",

@@ -72,6 +72,81 @@ def sample_connection_event(**overrides: object) -> dict[str, object]:
 
 
 class DiagnosticsConfigAndGuardTest(unittest.TestCase):
+    def test_collector_remap_with_native_vector(self) -> None:
+        image = os.environ.get("XBOARD_DIAGNOSTICS_TEST_COLLECTOR_IMAGE")
+        if not image:
+            self.skipTest("Set XBOARD_DIAGNOSTICS_TEST_COLLECTOR_IMAGE to run native Vector validation")
+        if not image.startswith("sha256:") and "@sha256:" not in image:
+            self.fail("Native Vector tests require an immutable collector image")
+        now = datetime.datetime.now(datetime.timezone.utc)
+        valid = sample_connection_event(
+            event_time=now.isoformat(), node_id=999, panel_scope="forged", unlisted_extra_field="strip"
+        )
+        cases: list[dict[str, object]] = []
+
+        def add_case(name: str, event: object, accepted: bool) -> None:
+            case: dict[str, object] = {
+                "name": name,
+                "inputs": [{"insert_at": "diagnostics_whitelist", "type": "log",
+                            "log_fields": {"message": json.dumps(event)}}],
+            }
+            if accepted:
+                case["outputs"] = [{
+                    "extract_from": "diagnostics_whitelist",
+                    "conditions": [{"type": "vrl", "source": "\n".join([
+                        f"assert_eq!(.panel_scope, {json.dumps(PANEL_SCOPE)})",
+                        "assert_eq!(.node_id, 101)",
+                        'assert_eq!(.collector_id, "collector-node-101")',
+                        'assert_eq!(.service, "xboard-node")',
+                        "assert!(!exists(.message) && !exists(.unlisted_extra_field))",
+                        "assert!(exists(.collected_at) && is_string(.safe_message))",
+                    ])}],
+                }]
+            else:
+                case["no_outputs_from"] = ["diagnostics_whitelist"]
+            cases.append(case)
+
+        add_case("valid_connection_overrides_identity", valid, True)
+        resolver = {key: value for key, value in valid.items()
+                    if key not in ("diagnostic_id", "connection_id")}
+        resolver.update(event_family="resolver_operation", event="diag.dns.attempt",
+                        resolver_operation_id="b" * 32)
+        add_case("valid_resolver", resolver, True)
+        node = {**resolver, "event_family": "node", "event": "diag.observer.health"}
+        add_case("valid_node", node, True)
+        for field in configure.FORBIDDEN_PII_FIELDS:
+            add_case(f"reject_forbidden_{field}_even_when_null", {**valid, field: None}, False)
+        for label, overrides in [
+            ("invalid_time", {"event_time": "invalid"}),
+            ("old_time", {"event_time": (now - datetime.timedelta(days=4)).isoformat()}),
+            ("future_time", {"event_time": (now + datetime.timedelta(minutes=11)).isoformat()}),
+            ("invalid_event_id", {"event_id": "invalid"}),
+            ("invalid_diagnostic_id", {"diagnostic_id": "invalid"}),
+            ("invalid_connection_id", {"connection_id": "invalid"}),
+            ("invalid_family", {"event_family": "unknown"}),
+            ("invalid_schema", {"schema_version": 2}),
+        ]:
+            add_case(f"reject_{label}", {**valid, **overrides}, False)
+        add_case("reject_non_object", [], False)
+        add_case("reject_resolver_with_connection_identity", {**resolver, "diagnostic_id": DIAG_ID}, False)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            configure.generate_collector(
+                directory, PANEL_SCOPE, 101, "collector-node-101", "A" * 48,
+                "xboard-test-101", "http://127.0.0.1:19438", unit="xboard-diagnostics-pilot.service",
+            )
+            config = json.loads((directory / "collector.yaml").read_text(encoding="utf-8"))
+            config["tests"] = cases
+            (directory / "vector-tests.json").write_text(json.dumps(config), encoding="utf-8")
+            result = subprocess.run(
+                ["docker", "run", "--rm", "--pull=never", "--network=none", "--memory=384m", "--cpus=0.25",
+                 "--mount", f"type=bind,source={directory},target=/tests,readonly", image,
+                 "test", "/tests/vector-tests.json"],
+                capture_output=True, text=True, timeout=90,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_central_and_collector_generation_enforces_isolation_and_whitelists(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             central_dir = Path(tmp) / "central"
