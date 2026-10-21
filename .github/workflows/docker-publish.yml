@@ -370,6 +370,10 @@ jobs:
         if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
         run: npm run test:browser:distributor-rename
 
+      - name: Run distributor mobile recovery and checkout regressions
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
+        run: npm run test:browser:distributor-mobile
+
       - name: Validate deployment scripts
         env:
           RUN_HEAVY_DEPLOY_TESTS: ${{ steps.scope.outputs.run_heavy_deploy_tests }}

@@ -19,6 +19,7 @@ use App\Utils\Helper;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 use Laravel\Sanctum\Sanctum;
 use OpenSpout\Reader\XLSX\Reader;
@@ -1956,6 +1957,154 @@ class DistributorOrderTest extends TestCase
             ->assertJsonPath('data.0.trade_no', $order->trade_no)
             ->assertJsonMissingPath('total');
         $this->getJson('/api/v1/user/order/statistics')->assertForbidden();
+    }
+
+    public function test_distributor_order_fetch_preloads_subscription_origin_plans_without_resource_n_plus_one(): void
+    {
+        $distributor = $this->makeUser('nplusone-dealer@example.com', true);
+        $originPlan = Plan::create([
+            'group_id' => 1,
+            'transfer_enable' => 50,
+            'name' => 'Origin Plan Name',
+            'speed_limit' => 100,
+            'device_limit' => 2,
+            'show' => true,
+            'sell' => true,
+            'renew' => true,
+            'sort' => 1,
+            'prices' => [
+                Plan::PERIOD_MONTHLY => 30,
+                Plan::PERIOD_QUARTERLY => 80,
+            ],
+            'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
+        ]);
+        $otherPlan = $this->makePlan();
+
+        $orders = [];
+        for ($i = 0; $i < 5; ++$i) {
+            $orders[] = $this->createDistributorOrder(
+                $distributor,
+                $originPlan,
+                Plan::PERIOD_MONTHLY,
+                '预加载客户' . $i
+            );
+        }
+
+        $renewalOrder = Order::create([
+            'user_id' => $distributor->id,
+            'plan_id' => $otherPlan->id,
+            'period' => Plan::PERIOD_QUARTERLY,
+            'trade_no' => 'PRELOAD-RENEWAL-001',
+            'total_amount' => 8000,
+            'type' => Order::TYPE_RENEWAL,
+            'status' => Order::STATUS_COMPLETED,
+            'distributor_order_id' => $orders[0]->distributor_order_id,
+        ]);
+
+        Sanctum::actingAs($distributor);
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $response = $this->getJson('/api/v1/user/order/fetch?per_page=20');
+        $fetchQueries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $response->assertOk()
+            ->assertJsonPath('total', 6);
+
+        $renewalPayload = collect($response->json('data'))->firstWhere('trade_no', $renewalOrder->trade_no);
+        $this->assertNotNull($renewalPayload);
+        $this->assertSame('Origin Plan Name', $renewalPayload['subscription_entitlement']['plan_name'] ?? null);
+
+        $planQueries = array_filter($fetchQueries, static function (array $entry): bool {
+            return str_contains(strtolower($entry['query']), 'v2_plan');
+        });
+        $this->assertLessThanOrEqual(2, count($planQueries));
+        $this->assertLessThanOrEqual(10, count($fetchQueries));
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        $detailResponse = $this->getJson('/api/v1/user/order/detail?' . http_build_query([
+            'trade_no' => $renewalOrder->trade_no,
+        ]));
+        $detailQueries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $detailResponse->assertOk()
+            ->assertJsonPath('data.trade_no', $renewalOrder->trade_no)
+            ->assertJsonPath('data.subscription_entitlement.plan_name', 'Origin Plan Name');
+        $this->assertLessThanOrEqual(8, count($detailQueries));
+    }
+
+    public function test_plan_fetch_reuses_authenticated_user_and_aggregates_capacity_counts_preserving_semantics(): void
+    {
+        $distributor = $this->makeUser('capacity-dealer@example.com', true);
+        $unlimitedPlan = $this->makePlan();
+
+        $fullLimitedPlan = Plan::create([
+            'group_id' => 1,
+            'transfer_enable' => 40,
+            'name' => 'Full Limited Plan',
+            'capacity_limit' => 2,
+            'show' => true,
+            'sell' => true,
+            'renew' => true,
+            'sort' => 2,
+            'prices' => [Plan::PERIOD_MONTHLY => 40],
+            'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
+        ]);
+
+        $openLimitedPlan = Plan::create([
+            'group_id' => 1,
+            'transfer_enable' => 60,
+            'name' => 'Open Limited Plan',
+            'capacity_limit' => 2,
+            'show' => true,
+            'sell' => true,
+            'renew' => true,
+            'sort' => 3,
+            'prices' => [Plan::PERIOD_MONTHLY => 60],
+            'reset_traffic_method' => Plan::RESET_TRAFFIC_NEVER,
+        ]);
+
+        // 1 active internal subscriber created via distributor order + 1 banned permanent subscriber = 2 (reaches capacity_limit=2)
+        $this->createDistributorOrder($distributor, $fullLimitedPlan, Plan::PERIOD_MONTHLY, '容量占用客户');
+        $this->makeUser('banned-permanent@example.com', false, [
+            'plan_id' => $fullLimitedPlan->id,
+            'banned' => true,
+            'expired_at' => null,
+        ]);
+        // Expired user must not count toward capacity
+        $this->makeUser('expired-holder@example.com', false, [
+            'plan_id' => $fullLimitedPlan->id,
+            'expired_at' => time() - 3600,
+        ]);
+
+        // Only 1 active user on openLimitedPlan (below capacity_limit=2)
+        $this->makeUser('open-active@example.com', false, [
+            'plan_id' => $openLimitedPlan->id,
+            'expired_at' => time() + 86400,
+        ]);
+
+        Sanctum::actingAs($distributor);
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+
+        $response = $this->getJson('/api/v1/user/plan/fetch');
+        $queries = DB::getQueryLog();
+        DB::disableQueryLog();
+
+        $response->assertOk();
+        $returnedNames = collect($response->json('data'))->pluck('name')->all();
+        $this->assertContains($unlimitedPlan->name, $returnedNames);
+        $this->assertContains($openLimitedPlan->name, $returnedNames);
+        $this->assertNotContains($fullLimitedPlan->name, $returnedNames);
+
+        $userQueries = array_values(array_filter($queries, static function (array $entry): bool {
+            return str_contains(strtolower($entry['query']), 'v2_user');
+        }));
+        $this->assertCount(1, $userQueries);
+        $this->assertStringContainsString('group by', strtolower($userQueries[0]['query']));
     }
 
     private function adminRouteUri(string $method): string
