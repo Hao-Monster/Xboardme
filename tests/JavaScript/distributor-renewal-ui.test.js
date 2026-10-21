@@ -9,7 +9,7 @@ const adminSource = fs.readFileSync('public/assets/admin-distributor.js', 'utf8'
 test('distributor order page renews the stable subscription with an idempotent request', () => {
   assert.match(source, /data-renew="\$\{escapeHtml\(order\.trade_no\)\}"/);
   assert.match(source, /\/user\/order\/renew/);
-  assert.match(source, /idempotency_key: state\.modal\.idempotencyKey/);
+  assert.match(source, /idempotency_key: renewalModal\.idempotencyKey/);
   assert.match(source, /order\.is_subscription_origin/);
   assert.match(source, /续费后订阅链接、二维码、UUID 和已绑定设备保持不变/);
   assert.match(source, /expired_at_after/);

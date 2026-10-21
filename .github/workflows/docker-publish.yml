@@ -162,7 +162,9 @@ jobs:
     if: >-
       ${{ github.event_name != 'workflow_dispatch' ||
           inputs.production_release_action == 'admin_assets' }}
-    runs-on: ubuntu-latest
+    # The Docker retention fixture verifies classic-store config image IDs.
+    # Ubuntu 26.04's Docker 29 containerd store uses manifest IDs instead.
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -369,6 +371,10 @@ jobs:
       - name: Run distributor rename browser regressions
         if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
         run: npm run test:browser:distributor-rename
+
+      - name: Run distributor mobile recovery and checkout regressions
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
+        run: npm run test:browser:distributor-mobile
 
       - name: Validate deployment scripts
         env:

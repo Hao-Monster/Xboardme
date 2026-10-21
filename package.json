@@ -1,7 +1,8 @@
 {
   "private": true,
   "scripts": {
-    "test:browser:distributor-rename": "node --test --test-timeout=20000 tests/Browser/admin-distributor-rename.cjs tests/Browser/admin-distributor-rename-native.cjs"
+    "test:browser:distributor-rename": "node --test --test-timeout=20000 tests/Browser/admin-distributor-rename.cjs tests/Browser/admin-distributor-rename-native.cjs",
+    "test:browser:distributor-mobile": "node --test --test-timeout=20000 tests/Browser/distributor-mobile-recovery.cjs"
   },
   "dependencies": {
     "chokidar": "^4.0.3"

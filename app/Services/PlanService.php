@@ -27,12 +27,44 @@ class PlanService
         $query = Plan::where('show', true)->where('sell', true);
         app(PlanVisibilityService::class)->applyTo($query, $user);
 
-        return $query
-            ->orderBy('sort')
-            ->get()
-            ->filter(function ($plan) {
-                return $this->hasCapacity($plan);
-            });
+        return $this->filterAvailablePlansByCapacity($query->orderBy('sort')->get());
+    }
+
+    /**
+     * @param Collection<int, Plan> $plans
+     * @return Collection<int, Plan>
+     */
+    private function filterAvailablePlansByCapacity(Collection $plans): Collection
+    {
+        $limitedPlanIds = $plans
+            ->filter(fn(Plan $plan): bool => $plan->capacity_limit !== null && $plan->capacity_limit > 0)
+            ->pluck('id')
+            ->all();
+
+        if ($limitedPlanIds === []) {
+            return $plans;
+        }
+
+        $now = time();
+        $activeCounts = User::query()
+            ->whereIn('plan_id', $limitedPlanIds)
+            ->where(function ($query) use ($now) {
+                $query->where('expired_at', '>=', $now)
+                    ->orWhereNull('expired_at');
+            })
+            ->selectRaw('plan_id, COUNT(*) as aggregate')
+            ->groupBy('plan_id')
+            ->pluck('aggregate', 'plan_id');
+
+        return $plans->filter(function (Plan $plan) use ($activeCounts): bool {
+            if ($plan->capacity_limit === null || $plan->capacity_limit <= 0) {
+                return true;
+            }
+
+            $activeUserCount = (int) ($activeCounts[$plan->id] ?? 0);
+
+            return ($plan->capacity_limit - $activeUserCount) > 0;
+        });
     }
 
     /**

@@ -32,6 +32,11 @@
       perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次性交付',
       saved: '已省', orderAction: '已确认，直接下单', soldOut: '已售罄',
       showPrices: '显示价格', hidePrices: '隐藏价格', retry: '重试',
+      networkUnavailable: '网络暂时不可用，请检查网络后重试', serviceUnavailable: '服务暂时不可用，请稍后重试',
+      orderUnconfirmed: '未能确认下单结果，请先查看我的订单', checkPurchaseOrders: '查看我的订单',
+      writeUnconfirmed: '未能确认操作结果，请先核对记录，勿重复提交',
+      purchaseChecked: '我已核对，继续下单', retryDelivery: '重新获取交付信息',
+      deliveryUnavailable: '订单已创建，暂未获取到交付信息，请查看订单或重新获取',
       promoStable: '稳定', promoFast: '高速', promoCompensation: '慢必赔',
       deliveryStepOne: '选择套餐并下单', deliveryStepTwo: '客户扫描二维码', deliveryStepThree: '确认节点可用',
       loading: '加载中…', empty: '暂无数据', settled: '已结算', unsettled: '未结算',
@@ -51,6 +56,7 @@
       entitlement: '订阅权益', viewEntitlement: '查看订阅权益', hideEntitlement: '收起订阅权益', entitlementAction: '权益', totalTraffic: '总流量', usedTraffic: '已用流量', remainingTraffic: '剩余流量',
       expiresAt: '到期时间', speedLimit: '限速', deviceLimit: '设备限制', permanent: '长期有效', unlimited: '不限',
       renew: '续费', renewTitle: '续费现有订阅', renewHint: '续费后订阅链接、二维码、UUID 和已绑定设备保持不变。',
+      renewUnconfirmed: '续费结果尚未确认。点击重试将继续核对同一次续费，请勿另外发起续费。',
       renewPeriod: '续费周期', renewCurrentExpiry: '当前到期时间', renewConfirm: '确认续费', renewSuccess: '续费成功',
       renewOrder: '续费订单', renewNewExpiry: '新的到期时间', orderType: '订单类型', originalOrder: '关联原订单', newPurchase: '新购',
       inviteUsers: '已邀请用户', validCommission: '有效佣金', pendingCommission: '确认中佣金',
@@ -80,6 +86,11 @@
       perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time delivery',
       saved: 'Saved', orderAction: 'Confirmed — place order', soldOut: 'Sold out',
       showPrices: 'Show prices', hidePrices: 'Hide prices', retry: 'Retry',
+      networkUnavailable: 'Network unavailable. Check your connection and retry.', serviceUnavailable: 'Service temporarily unavailable. Please try again later.',
+      orderUnconfirmed: 'Order result unconfirmed. Please check My Orders first.', checkPurchaseOrders: 'Check My Orders',
+      writeUnconfirmed: 'Operation result unconfirmed. Check your records before submitting again.',
+      purchaseChecked: 'I have checked, place a new order', retryDelivery: 'Retrieve delivery again',
+      deliveryUnavailable: 'Your order was created, but delivery details could not be loaded. Check My Orders or retrieve delivery again.',
       promoStable: 'Stable', promoFast: 'Fast', promoCompensation: 'Performance guaranteed',
       deliveryStepOne: 'Choose and order', deliveryStepTwo: 'Customer scans QR', deliveryStepThree: 'Verify service',
       loading: 'Loading…', empty: 'No data', settled: 'Settled', unsettled: 'Unsettled',
@@ -99,6 +110,7 @@
       entitlement: 'Subscription entitlement', viewEntitlement: 'View subscription entitlement', hideEntitlement: 'Hide subscription entitlement', entitlementAction: 'Entitlement', totalTraffic: 'Total traffic', usedTraffic: 'Used traffic', remainingTraffic: 'Remaining traffic',
       expiresAt: 'Expires at', speedLimit: 'Speed limit', deviceLimit: 'Device limit', permanent: 'Never expires', unlimited: 'Unlimited',
       renew: 'Renew', renewTitle: 'Renew subscription', renewHint: 'The subscription URL, QR code, UUID, and bound devices will stay unchanged.',
+      renewUnconfirmed: 'Renewal result unconfirmed. Retry to resolve this same renewal before starting another one.',
       renewPeriod: 'Renewal period', renewCurrentExpiry: 'Current expiry', renewConfirm: 'Confirm renewal', renewSuccess: 'Renewed',
       renewOrder: 'Renewal order', renewNewExpiry: 'New expiry', orderType: 'Order type', originalOrder: 'Original order', newPurchase: 'New purchase',
       inviteUsers: 'Invited users', validCommission: 'Valid commission', pendingCommission: 'Pending commission',
@@ -154,11 +166,35 @@
     planFilter: 'all',
     selectedPeriods: {},
     purchasingPlanId: null,
+    purchaseRecovery: null,
+    renewalOperations: new Map(),
+    purchaseOperationId: 0,
+    modalOperationId: 0,
     planPricesVisible: false,
     planPricesTimer: null,
     renderGeneration: 0,
+    routeRenderHash: null,
+    contentRouteHash: null,
     analyticsRequestToken: 0,
     orders: [],
+    sessionEpoch: 1,
+    sharedSessionEpoch: null,
+    sessionToken: null,
+    activeSessionEpoch: null,
+    activeUserKey: null,
+    detectInFlight: null,
+    decidedToken: null,
+    detectFailureCount: 0,
+    nextDetectAt: 0,
+    sessionControllers: new Set(),
+    routeControllers: new Set(),
+    modalControllers: new Set(),
+    lastHiddenAt: 0,
+    resumeTimer: null,
+    pendingResume: null,
+    needsRouteRecovery: false,
+    sessionCheckInFlight: null,
+    detectorTimer: null,
   };
 
   const t = (key) => (COPY[state.locale] || COPY['zh-CN'])[key] || key;
@@ -346,8 +382,194 @@
     }
   }
 
+  const READ_TIMEOUT_MS = 12000;
+  const RESUME_REVALIDATE_MS = 60000;
+  const RESUME_COALESCE_MS = 50;
+  const READ_RETRY_DELAY_MS = 400;
+
+  function classifyApiRequest(path, method = 'GET') {
+    const cleanPath = String(path || '').split('?')[0];
+    const upperMethod = String(method || 'GET').toUpperCase();
+    if (upperMethod !== 'GET') {
+      return { readOnly: false, scope: 'none', timeoutMs: 0 };
+    }
+    if (cleanPath === '/user/info') {
+      return { readOnly: true, scope: 'session', timeoutMs: READ_TIMEOUT_MS };
+    }
+    if ([
+      '/user/plan/fetch',
+      '/user/notice/fetch',
+      '/user/order/fetch',
+      '/user/order/detail',
+      '/user/order/statistics',
+      '/user/invite/fetch',
+      '/user/invite/details',
+    ].includes(cleanPath)) {
+      return { readOnly: true, scope: 'route', timeoutMs: READ_TIMEOUT_MS };
+    }
+    if (['/user/distributor/delivery', '/user/distributor/subscription-qr'].includes(cleanPath)) {
+      return { readOnly: true, scope: 'modal', timeoutMs: READ_TIMEOUT_MS };
+    }
+    if (cleanPath === '/user/knowledge/fetch') {
+      return {
+        readOnly: true,
+        scope: /[?&]id=/.test(String(path || '')) ? 'modal' : 'route',
+        timeoutMs: READ_TIMEOUT_MS,
+      };
+    }
+    return { readOnly: false, scope: 'none', timeoutMs: 0 };
+  }
+
+  function controllerSetForScope(scope) {
+    if (scope === 'session') return state.sessionControllers;
+    if (scope === 'route') return state.routeControllers;
+    if (scope === 'modal') return state.modalControllers;
+    return null;
+  }
+
+  function abortScopedRequests(scope, reason = 'cancelled') {
+    const set = controllerSetForScope(scope);
+    if (!set) return;
+    Array.from(set).forEach((record) => {
+      set.delete(record);
+      if (typeof record.triggerAbort === 'function') {
+        record.triggerAbort(reason);
+      }
+    });
+  }
+
+  function isConfirmedAuthFailure(status, message) {
+    if (window.__xboardAuthSession?.isConfirmedAuthFailure) {
+      return Boolean(window.__xboardAuthSession.isConfirmedAuthFailure(status, message));
+    }
+    const code = Number(status || 0);
+    const normalized = typeof message === 'string' ? message.trim() : '';
+    return code === 401 || (code === 403 && normalized === '未登录或登陆已过期');
+  }
+
+  function makeCancelledError() {
+    const error = new Error('Request cancelled');
+    error.name = 'AbortError';
+    error.abortReason = 'cancelled';
+    error.isCancelled = true;
+    return error;
+  }
+
+  function makeTimeoutError() {
+    const error = new Error(state.locale === 'zh-CN' ? '请求超时，请点击重试' : 'Request timed out. Please retry.');
+    error.name = 'AbortError';
+    error.abortReason = 'timeout';
+    error.isTimeout = true;
+    error.status = 0;
+    return error;
+  }
+
+  function makeNetworkError() {
+    const error = new Error(t('networkUnavailable'));
+    error.status = 0;
+    error.isNetworkError = true;
+    error.isTransientRead = true;
+    return error;
+  }
+
+  function displayError(error) {
+    if (error?.isNetworkError || error?.message === 'Failed to fetch') return t('networkUnavailable');
+    if (Number(error?.status) >= 500) return t('serviceUnavailable');
+    return error?.message || t('serviceUnavailable');
+  }
+
+  function isValidUserIdentity(user) {
+    if (!user || typeof user !== 'object' || Array.isArray(user)) return false;
+    const hasIdentity = (typeof user.email === 'string' && user.email.trim() !== '')
+      || (user.id !== undefined && user.id !== null)
+      || (typeof user.uuid === 'string' && user.uuid.trim() !== '');
+    const hasRole = typeof user.is_distributor === 'boolean'
+      || user.is_distributor === 0
+      || user.is_distributor === 1;
+    return Boolean(hasIdentity && hasRole);
+  }
+
+  function resetAccountScopedState() {
+    state.plans = [];
+    state.planFilter = 'all';
+    state.selectedPeriods = {};
+    state.orders = [];
+    state.orderSettlementStatus = '';
+    state.orderSearch = '';
+    state.orderFiltersOpen = false;
+    state.orderFixedColumnsExpanded = true;
+    state.orderFilters = { startDate: '', endDate: '', periods: [], minAmount: '', maxAmount: '' };
+    state.orderPage = 1;
+    state.orderPerPage = 20;
+    state.orderTotal = 0;
+    state.orderLastPage = 1;
+    state.expandedDeviceOrders = {};
+    state.orderSummaryRange = null;
+    state.orderTrendPreset = 'week';
+    state.orderTrendRange = null;
+    state.orderSummary = null;
+    state.orderTrend = null;
+    state.knowledgeSearch = '';
+    state.notices = [];
+    state.noticeIndex = 0;
+    state.noticeError = false;
+    state.purchasingPlanId = null;
+    state.purchaseRecovery = null;
+    state.renewalOperations.clear();
+    state.needsRouteRecovery = false;
+    state.routeRenderHash = null;
+    state.contentRouteHash = null;
+    state.purchaseOperationId += 1;
+    state.modalOperationId += 1;
+  }
+
+  function syncSession() {
+    const shared = window.__xboardAuthSession?.captureSession ? window.__xboardAuthSession.captureSession() : null;
+    const nextToken = shared ? shared.token : authToken();
+    const nextSharedEpoch = shared ? shared.epoch : null;
+    if (
+      nextToken !== state.sessionToken ||
+      (nextSharedEpoch !== null && nextSharedEpoch !== state.sharedSessionEpoch)
+    ) {
+      state.sessionToken = nextToken;
+      state.sharedSessionEpoch = nextSharedEpoch;
+      state.sessionEpoch += 1;
+      state.decidedToken = null;
+      state.detectFailureCount = 0;
+      state.nextDetectAt = 0;
+      state.detectInFlight = null;
+      state.sessionCheckInFlight = null;
+      resetAccountScopedState();
+      abortScopedRequests('session', 'cancelled');
+      abortScopedRequests('route', 'cancelled');
+      abortScopedRequests('modal', 'cancelled');
+      if (state.active) {
+        deactivateDistributorView();
+      }
+    }
+    return {
+      epoch: shared ? shared.epoch : state.sessionEpoch,
+      localEpoch: state.sessionEpoch,
+      token: state.sessionToken,
+    };
+  }
+
+  function isCurrentSession(snapshot) {
+    const current = syncSession();
+    if (!snapshot) return false;
+    if (window.__xboardAuthSession?.isCurrentSession && !window.__xboardAuthSession.isCurrentSession(snapshot)) {
+      return false;
+    }
+    const snapshotLocalEpoch = snapshot.localEpoch ?? snapshot.epoch;
+    return (
+      snapshotLocalEpoch === current.localEpoch &&
+      snapshot.token === current.token
+    );
+  }
+
   async function api(path, options = {}) {
-    const token = authToken();
+    const requestSession = syncSession();
+    const token = requestSession.token;
     if (!token) throw new Error('Unauthorized');
     const method = options.method || 'GET';
     const headers = {
@@ -363,19 +585,160 @@
         if (value !== undefined && value !== null) body.append(key, String(value));
       });
     }
-    const separator = path.includes('?') ? '&' : '?';
-    const response = await fetch(`${API_BASE}${path}${method === 'GET' ? `${separator}t=${Date.now()}` : ''}`, {
-      method, headers, body, cache: 'no-store', credentials: 'same-origin',
-    });
-    let payload = null;
-    try { payload = await response.json(); } catch (_) { /* plain response */ }
-    if (!response.ok || payload?.status === 'fail') {
-      const error = new Error(payload?.message || `Request failed (${response.status})`);
-      error.status = response.status;
-      error.payload = payload;
-      throw error;
+    const policy = classifyApiRequest(path, method);
+    if (policy.readOnly && document.hidden) {
+      if (policy.scope === 'route' && String(path).split('?')[0] !== '/user/notice/fetch') state.needsRouteRecovery = true;
+      throw makeCancelledError();
     }
-    return payload;
+    const canRetryRead = policy.readOnly && ['/user/info', '/user/plan/fetch'].includes(String(path).split('?')[0]);
+    const deadline = Date.now() + policy.timeoutMs;
+    const scopeSet = controllerSetForScope(policy.scope);
+    let rejectAbort = null;
+    const record = policy.readOnly ? {
+      path: String(path).split('?')[0],
+      controller: typeof AbortController === 'function' ? new AbortController() : null,
+      timer: null,
+      abortReason: null,
+      triggerAbort(reason) {
+        if (this.abortReason) return;
+        this.abortReason = reason;
+        if (this.timer) {
+          clearTimeout(this.timer);
+          this.timer = null;
+        }
+        try { this.controller?.abort(); } catch (_) { /* ignore */ }
+        if (rejectAbort) {
+          rejectAbort(reason === 'timeout' ? makeTimeoutError() : makeCancelledError());
+        }
+      },
+    } : null;
+    const abortPromise = record ? new Promise((_, reject) => {
+      rejectAbort = reject;
+    }) : null;
+    if (record && scopeSet) scopeSet.add(record);
+    if (record && policy.timeoutMs > 0) {
+      record.timer = setTimeout(() => {
+        record.triggerAbort('timeout');
+      }, policy.timeoutMs);
+    }
+
+    const separator = path.includes('?') ? '&' : '?';
+    const fetchOptions = {
+      method, headers, body, cache: 'no-store', credentials: 'same-origin',
+    };
+    if (record?.controller) {
+      fetchOptions.signal = record.controller.signal;
+    }
+
+    const fetchAndRead = async () => {
+      const response = await fetch(`${API_BASE}${path}${method === 'GET' ? `${separator}t=${Date.now()}` : ''}`, fetchOptions);
+      let payload = null;
+      let parseFailed = false;
+      if (typeof response.text === 'function') {
+        const rawText = await response.text();
+        try {
+          payload = rawText ? JSON.parse(rawText) : null;
+        } catch (_) {
+          parseFailed = true;
+        }
+      } else if (typeof response.json === 'function') {
+        try {
+          payload = await response.json();
+        } catch (readError) {
+          if (readError?.name !== 'SyntaxError') throw readError;
+          parseFailed = true;
+        }
+      }
+      return { response, payload, parseFailed };
+    };
+
+    const runAttempts = async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        if (!isCurrentSession(requestSession) || record?.abortReason === 'cancelled') throw makeCancelledError();
+        if (record?.abortReason === 'timeout' || (policy.readOnly && Date.now() >= deadline)) throw makeTimeoutError();
+        let result;
+        let networkError = null;
+        try {
+          result = await fetchAndRead();
+        } catch (error) {
+          if (error?.name !== 'TypeError' && error?.message !== 'Failed to fetch') throw error;
+          networkError = makeNetworkError();
+        }
+        if (!isCurrentSession(requestSession) || record?.abortReason === 'cancelled') throw makeCancelledError();
+        if (record?.abortReason === 'timeout') throw makeTimeoutError();
+        if (policy.readOnly && document.hidden) {
+          if (policy.scope === 'route' && String(path).split('?')[0] !== '/user/notice/fetch') state.needsRouteRecovery = true;
+          throw makeCancelledError();
+        }
+        const transientStatus = [502, 503, 504].includes(Number(result?.response?.status));
+        if (canRetryRead && attempt === 0 && (networkError || transientStatus)) {
+          await new Promise((resolve) => setTimeout(resolve, READ_RETRY_DELAY_MS));
+          continue;
+        }
+        if (networkError) throw networkError;
+        return result;
+      }
+    };
+
+    try {
+      const task = runAttempts();
+      if (abortPromise) task.catch(() => {});
+      const { response, payload, parseFailed } = abortPromise
+        ? await Promise.race([task, abortPromise])
+        : await task;
+      if (record?.abortReason === 'cancelled' || !isCurrentSession(requestSession)) {
+        throw makeCancelledError();
+      }
+      if (record?.abortReason === 'timeout') {
+        throw makeTimeoutError();
+      }
+      if (!response.ok || payload?.status === 'fail' || parseFailed || !payload || typeof payload !== 'object') {
+        const rawMessage = typeof payload?.message === 'string' ? payload.message : '';
+        const error = new Error(rawMessage || `Request failed (${response.status})`);
+        error.status = response.status;
+        error.rawMessage = rawMessage;
+        error.payload = payload;
+        error.isTransientRead = [502, 503, 504].includes(Number(response.status));
+        error.isUncertainWrite = !policy.readOnly && (response.status >= 500 || parseFailed || !payload || typeof payload !== 'object');
+        if (isCurrentSession(requestSession) && isConfirmedAuthFailure(response.status, rawMessage)) {
+          state.decidedToken = requestSession.token;
+          const wasActive = state.active;
+          if (window.__xboardAuthSession?.invalidateSession) {
+            window.__xboardAuthSession.invalidateSession(requestSession);
+          } else {
+            localStorage.removeItem(TOKEN_KEY);
+          }
+          syncSession();
+          if (wasActive) {
+            deactivateDistributorView();
+            window.location.href = '/#/login';
+          }
+        }
+        throw error;
+      }
+      return payload;
+    } catch (error) {
+      if (record?.abortReason === 'cancelled' || error?.isCancelled) {
+        throw makeCancelledError();
+      }
+      if (policy.readOnly && (record?.abortReason === 'timeout' || error?.isTimeout || error?.name === 'AbortError')) {
+        throw makeTimeoutError();
+      }
+      if (!isCurrentSession(requestSession)) {
+        throw makeCancelledError();
+      }
+      if (!policy.readOnly && (!error?.status || error.status >= 500)) error.isUncertainWrite = true;
+      if (error.isUncertainWrite) error.message = t('writeUnconfirmed');
+      throw error;
+    } finally {
+      if (record?.timer) {
+        clearTimeout(record.timer);
+        record.timer = null;
+      }
+      if (record && scopeSet) {
+        scopeSet.delete(record);
+      }
+    }
   }
 
   async function downloadFile(path) {
@@ -470,6 +833,13 @@
     setTimeout(() => item.remove(), 3200);
   }
 
+  function toastErrorIfCurrent(error, sessionSnapshot = null) {
+    if (!error || error.isCancelled) return;
+    if (sessionSnapshot && !isCurrentSession(sessionSnapshot)) return;
+    if (!state.active || document.hidden) return;
+    toast(displayError(error), 'error');
+  }
+
   function currentPage() {
     const hash = (window.location.hash || '#/plan').replace(/^#/, '');
     const [path, query = ''] = hash.split('?');
@@ -491,6 +861,8 @@
   }
 
   function beginRouteRender(route) {
+    abortScopedRequests('route', 'cancelled');
+    state.routeRenderHash = window.location.hash;
     return { route, generation: ++state.renderGeneration };
   }
 
@@ -542,7 +914,7 @@
               <button class="dist-logout" data-action="logout">${t('logout')}</button>
             </div>
           </header>
-          <main class="dist-content">${page === '/plan' ? `<div id="dist-notice-slot">${renderNoticeBar()}</div>` : ''}${content}</main>
+          <main class="dist-content">${page === '/plan' ? `<div id="dist-notice-slot">${renderNoticeBar()}</div>` : ''}${renderPurchaseRecovery()}${content}</main>
         </section>
       </div>`;
   }
@@ -551,6 +923,7 @@
     const root = document.getElementById('distributor-app');
     if (!root) return;
     root.innerHTML = shell(content);
+    state.contentRouteHash = window.location.hash;
     startNoticeRotation();
     window.requestAnimationFrame(() => {
       const nav = root.querySelector('.dist-sidebar nav');
@@ -586,15 +959,19 @@
     setContent(`<div class="dist-loading"><span></span>${t('loading')}</div>`);
   }
 
-  async function renderPage() {
+  async function renderPage(options = {}) {
     if (!state.active) return;
+    if (document.hidden) { state.needsRouteRecovery = true; return; }
     const page = currentPage();
     if (!isCurrentRouteCanonical(page)) {
       navigate(page);
       return;
     }
     const renderContext = beginRouteRender(page);
-    loadingView();
+    const root = document.getElementById('distributor-app');
+    const preserveContent = options.preserveContent && state.contentRouteHash === window.location.hash && root?.children.length
+      && !root.querySelector('.dist-loading, .dist-error');
+    if (!preserveContent) loadingView();
     try {
       if (page === '/overview') await renderOverview(renderContext);
       else if (page === '/order') await renderOrders({ renderContext });
@@ -603,12 +980,43 @@
       else if (page === '/clients') await renderClients();
       else await renderPlans(renderContext);
     } catch (error) {
-      if (isCurrentRouteRender(renderContext)) renderRouteError(error);
+      if (error?.isCancelled) return;
+      if (document.hidden) { state.needsRouteRecovery = true; return; }
+      if (isCurrentRouteRender(renderContext)) {
+        if (preserveContent) {
+          state.needsRouteRecovery = true;
+          toastErrorIfCurrent(error);
+        } else renderRouteError(error);
+      }
     }
   }
 
   function renderRouteError(error) {
-    setContent(`<div class="dist-error" role="alert"><h2>${escapeHtml(error.message)}</h2><button data-action="retry">${t('retry')}</button></div>`);
+    if (document.hidden) { state.needsRouteRecovery = true; return; }
+    setContent(`<div class="dist-error" role="alert"><h2>${escapeHtml(displayError(error))}</h2><button data-action="retry">${t('retry')}</button></div>`);
+  }
+
+  function renderPurchaseRecovery() {
+    const recovery = state.purchaseRecovery;
+    if (!recovery) return '';
+    return `<section class="dist-panel dist-purchase-recovery" role="alert"><p>${escapeHtml(t(recovery.tradeNo ? 'deliveryUnavailable' : 'orderUnconfirmed'))}</p>
+      ${recovery.tradeNo ? `<p>${t('orderNo')}：${escapeHtml(recovery.tradeNo)}</p>` : ''}<div class="dist-modal-actions">
+      ${recovery.tradeNo ? `<button data-action="retry-purchase-delivery">${t('retryDelivery')}</button>` : ''}
+      <button data-action="check-purchase-orders">${t('checkPurchaseOrders')}</button>
+      ${recovery.checked ? `<button data-action="acknowledge-order-check">${t('purchaseChecked')}</button>` : ''}</div></section>`;
+  }
+
+  async function checkPurchaseOrders() {
+    const recovery = state.purchaseRecovery;
+    if (!recovery) return;
+    state.orderSearch = recovery.tradeNo || '';
+    state.orderSettlementStatus = '';
+    state.orderFilters = { startDate: '', endDate: '', periods: [], minAmount: '', maxAmount: '' };
+    state.orderPage = 1;
+    recovery.checked = false;
+    recovery.checking = true;
+    if (currentPage() === '/order') await renderPage();
+    else navigate('/order');
   }
 
   async function fetchAvailablePlans() {
@@ -645,7 +1053,7 @@
       state.noticeIndex = 0;
       state.noticeError = false;
     } catch (error) {
-      if (!isCurrentRouteRender(renderContext)) return;
+      if (error?.isCancelled || !isCurrentRouteRender(renderContext)) return;
       state.notices = [];
       state.noticeError = true;
     }
@@ -812,28 +1220,57 @@
       return;
     }
     if (state.purchasingPlanId !== null) return;
+    const purchaseSession = syncSession();
+    const operationId = ++state.purchaseOperationId;
+    const isCurrentPurchase = () => state.active
+      && state.purchaseOperationId === operationId
+      && isCurrentSession(purchaseSession);
     state.selectedPeriods[plan.id] = period;
     state.purchasingPlanId = plan.id;
     if (button) button.disabled = true;
+    let createdTradeNo = null;
     try {
       const tradeNo = dataOf(await api('/user/order/save', {
         method: 'POST', data: { plan_id: plan.id, period },
       }));
+      if (!isCurrentPurchase()) return;
+      if (typeof tradeNo !== 'string' || !tradeNo.trim()) {
+        const error = new Error(t('orderUnconfirmed'));
+        error.isUncertainWrite = true;
+        throw error;
+      }
+      createdTradeNo = tradeNo;
       invalidateOrderAnalytics();
-      await openDelivery(tradeNo);
+      const opened = await openDelivery(tradeNo);
+      if (!opened && isCurrentPurchase()) {
+        state.purchaseRecovery = { tradeNo, checked: false, checking: false };
+      }
     } catch (error) {
-      toast(error.message, 'error');
+      if (!isCurrentPurchase()) return;
+      if (createdTradeNo || error?.isUncertainWrite) {
+        state.purchaseRecovery = { tradeNo: createdTradeNo, checked: false, checking: false };
+        if (!document.hidden && currentPage() !== '/plan') renderPage();
+      } else if (!error?.isCancelled) {
+        toast(displayError(error), 'error');
+      }
     } finally {
-      state.purchasingPlanId = null;
-      if (currentPage() === '/plan') renderPlanCatalog();
-      else if (button) button.disabled = false;
+      if (isCurrentPurchase()) {
+        if (!state.purchaseRecovery) state.purchasingPlanId = null;
+        if (currentPage() === '/plan') renderPlanCatalog();
+        else if (button && !state.purchaseRecovery) button.disabled = false;
+      }
     }
   }
 
   async function repurchaseDelivery() {
+    const repurchaseSession = syncSession();
     const delivery = state.modal?.type === 'delivery' ? state.modal.delivery : null;
     if (!delivery) return;
-    if (!state.plans.length) state.plans = await fetchAvailablePlans();
+    if (!state.plans.length) {
+      const plans = await fetchAvailablePlans();
+      if (!state.active || !isCurrentSession(repurchaseSession)) return;
+      state.plans = plans;
+    }
     const plan = state.plans.find((item) => String(item.id) === String(delivery.plan_id));
     if (!plan || !availablePeriods(plan).some(([key]) => key === delivery.period) || Number(plan[delivery.period]) <= 0) {
       toast(t('planUnavailable'), 'error');
@@ -966,6 +1403,7 @@
       const current = document.querySelector('.dist-order-insights');
       if (current) current.outerHTML = renderOrderAnalytics();
     } catch (error) {
+      if (error?.isCancelled) return;
       if (isCurrentRouteRender(renderContext)) renderRouteError(error);
     }
   }
@@ -1013,10 +1451,24 @@
     if (state.orderSettlementStatus !== '') params.set('settlement_status', state.orderSettlementStatus);
     if (state.orderSearch) params.set('search', state.orderSearch);
     appendOrderFilters(params);
+    const recovery = state.purchaseRecovery;
+    const checkingRecovery = recovery?.checking && !append && requestedPage === 1
+      && (params.get('search') || '') === (recovery.tradeNo || '')
+      && Array.from(params.keys()).every((key) => ['page', 'per_page', 'search'].includes(key));
     const oldScrollY = window.scrollY;
-    const payload = await api(`/user/order/fetch?${params}`);
+    let payload;
+    if (checkingRecovery && recovery.tradeNo) {
+      const order = dataOf(await api(`/user/order/detail?${new URLSearchParams({ trade_no: recovery.tradeNo })}`));
+      if (order?.trade_no !== recovery.tradeNo) throw new Error(t('deliveryUnavailable'));
+      payload = { data: [order], current_page: 1, per_page: state.orderPerPage, total: 1, last_page: 1 };
+    } else payload = await api(`/user/order/fetch?${params}`);
     if (!isCurrentRouteRender(renderContext)) return;
+    if (!Array.isArray(payload?.data)) throw new Error(t('serviceUnavailable'));
     const fetchedOrders = Array.isArray(payload?.data) ? payload.data : [];
+    if (checkingRecovery && state.purchaseRecovery === recovery) {
+      recovery.checked = true;
+      recovery.checking = false;
+    }
     state.orders = append ? [...state.orders, ...fetchedOrders] : fetchedOrders;
     state.orderPage = Number(payload?.current_page || requestedPage);
     state.orderPerPage = Number(payload?.per_page || state.orderPerPage);
@@ -1148,8 +1600,11 @@
   }
 
   async function openKnowledge(id) {
+    const modalSession = syncSession();
+    const modalOpId = ++state.modalOperationId;
     const params = new URLSearchParams({ id, language: state.locale, render: 'html' });
     const article = dataOf(await api(`/user/knowledge/fetch?${params}`));
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) return;
     if (!article) throw new Error(t('noArticles'));
     state.modal = { type: 'knowledge', article };
     renderModal();
@@ -1163,15 +1618,26 @@
   }
 
   async function openDelivery(tradeNo) {
+    const modalSession = syncSession();
+    const modalOpId = ++state.modalOperationId;
     const delivery = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(tradeNo)}`));
-    state.modal = await makeDeliveryModal(delivery);
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) return false;
+    const local_state = { modal: null };
+    local_state.modal = await makeDeliveryModal(delivery);
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) return false;
+    state.modal = local_state.modal;
     renderModal();
     startPolling();
+    return true;
   }
 
   async function openSubscriptionQr(tradeNo) {
+    const modalSession = syncSession();
+    const modalOpId = ++state.modalOperationId;
     const payload = dataOf(await api(`/user/distributor/subscription-qr?trade_no=${encodeURIComponent(tradeNo)}`));
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) return;
     const png = await composeSubscriptionQrPng(payload);
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) return;
     state.modal = { type: 'subscriptionQr', payload, ...png, copied: false };
     renderModal();
     focusOrderActionModal();
@@ -1195,15 +1661,22 @@
     if (!order) throw new Error(t('planUnavailable'));
     const periods = renewalPeriods(order);
     if (!periods.length) throw new Error(t('planUnavailable'));
-    state.modal = {
-      type: 'renewal',
-      order,
-      periods,
-      period: periods.some(([key]) => key === order.period) ? order.period : periods[0][0],
-      idempotencyKey: makeIdempotencyKey(),
-      submitting: false,
-      result: null,
-    };
+    state.modalOperationId += 1;
+    let operation = state.renewalOperations.get(tradeNo);
+    if (!operation) {
+      operation = {
+        type: 'renewal',
+        order,
+        periods,
+        period: periods.some(([key]) => key === order.period) ? order.period : periods[0][0],
+        idempotencyKey: makeIdempotencyKey(),
+        submitting: false,
+        uncertain: false,
+        result: null,
+      };
+      state.renewalOperations.set(tradeNo, operation);
+    }
+    state.modal = operation;
     renderModal();
     focusOrderActionModal();
   }
@@ -1281,8 +1754,9 @@
         <div><dt>${t('plan')}</dt><dd>${escapeHtml(modal.order.plan?.name || '-')}</dd></div>
         <div><dt>${t('renewCurrentExpiry')}</dt><dd>${formatTime(modal.order.subscription_entitlement?.expired_at)}</dd></div>
         <div><dt>${t('amount')}</dt><dd>${money(selectedPrice)}</dd></div></dl>
-        <label class="dist-renewal-period">${t('renewPeriod')}<select id="dist-renewal-period" ${modal.submitting ? 'disabled' : ''}>${options}</select></label>
-        <div class="dist-modal-actions"><button data-modal-action="cancel" ${modal.submitting ? 'disabled' : ''}>${t('cancel')}</button><button class="primary" data-modal-action="confirm-renewal" ${modal.submitting ? 'disabled' : ''}>${modal.submitting ? t('loading') : t('renewConfirm')}</button></div></section></div>`;
+        ${modal.uncertain ? `<p role="alert">${t('renewUnconfirmed')}</p>` : ''}
+        <label class="dist-renewal-period">${t('renewPeriod')}<select id="dist-renewal-period" ${modal.submitting || modal.uncertain ? 'disabled' : ''}>${options}</select></label>
+        <div class="dist-modal-actions"><button data-modal-action="cancel" ${modal.submitting ? 'disabled' : ''}>${t('cancel')}</button><button class="primary" data-modal-action="confirm-renewal" ${modal.submitting ? 'disabled' : ''}>${modal.submitting ? t('loading') : modal.uncertain ? t('retry') : t('renewConfirm')}</button></div></section></div>`;
       return;
     }
     if (state.modal.type === 'entitlement') {
@@ -1307,6 +1781,8 @@
   }
 
   function closeModal() {
+    state.modalOperationId += 1;
+    abortScopedRequests('modal', 'cancelled');
     const entitlementTrigger = state.modal?.type === 'entitlement' ? state.modal.trigger : null;
     const modalTrigger = state.modalTrigger;
     state.modal = null;
@@ -1329,14 +1805,17 @@
   function startPolling() {
     stopPolling();
     state.poller = setInterval(async () => {
-      if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.delivery_status === 2 || state.modal.delivery.connected_at) return;
+      if (document.hidden || !state.active || !state.modal || state.modal.type !== 'delivery' || state.modal.delivery.delivery_status === 2 || state.modal.delivery.connected_at) return;
+      const pollSession = syncSession();
+      const pollModalOpId = state.modalOperationId;
       try {
         const currentTradeNo = state.modal.delivery.trade_no;
         const updated = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(currentTradeNo)}`));
+        if (!state.active || !isCurrentSession(pollSession) || state.modalOperationId !== pollModalOpId || !state.modal || state.modal.type !== 'delivery' || state.modal.delivery.trade_no !== currentTradeNo) return;
         const devicesChanged = JSON.stringify(updated.hwid_devices || []) !== JSON.stringify(state.modal.delivery.hwid_devices || []);
         if (updated.delivery_status !== state.modal.delivery.delivery_status || updated.config_issued_at !== state.modal.delivery.config_issued_at || updated.connected_at !== state.modal.delivery.connected_at || devicesChanged) {
           const nextModal = await makeDeliveryModal(updated);
-          if (!state.modal || state.modal.type !== 'delivery' || state.modal.delivery.trade_no !== currentTradeNo) return;
+          if (!state.active || !isCurrentSession(pollSession) || state.modalOperationId !== pollModalOpId || !state.modal || state.modal.type !== 'delivery' || state.modal.delivery.trade_no !== currentTradeNo) return;
           state.modal = nextModal;
           renderModal();
         }
@@ -1378,7 +1857,11 @@
 
   async function handleAction(target) {
     const nav = target.closest('[data-nav]');
-    if (nav) { navigate(nav.dataset.nav); return; }
+    if (nav) {
+      if (nav.dataset.nav === '/order' && state.purchaseRecovery) await checkPurchaseOrders();
+      else navigate(nav.dataset.nav);
+      return;
+    }
     const filter = target.closest('[data-plan-filter]');
     if (filter) {
       state.planFilter = filter.dataset.planFilter;
@@ -1406,7 +1889,7 @@
     const pageButton = target.closest('[data-order-page]');
     if (pageButton && !pageButton.disabled) {
       state.orderPage = Number(pageButton.dataset.orderPage);
-      try { await renderOrders(); window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { toast(e.message, 'error'); }
+      try { await renderOrders(); window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { toastErrorIfCurrent(e); }
       return;
     }
     const jumpPageButton = target.closest('[data-action="jump-order-page"]');
@@ -1415,7 +1898,7 @@
       const requestedPage = Number.parseInt(pageInput?.value || '', 10);
       if (!Number.isInteger(requestedPage)) { pageInput?.focus(); return; }
       state.orderPage = Math.min(Math.max(requestedPage, 1), state.orderLastPage);
-      try { await renderOrders(); window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { toast(e.message, 'error'); }
+      try { await renderOrders(); window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { toastErrorIfCurrent(e); }
       return;
     }
     const trendPreset = target.closest('[data-trend-preset]');
@@ -1430,7 +1913,7 @@
         });
       } else {
         state.orderTrendRange = defaultTrendRange(state.orderTrendPreset);
-        try { await refreshOrderAnalytics(false, true); } catch (e) { toast(e.message, 'error'); }
+        try { await refreshOrderAnalytics(false, true); } catch (e) { toastErrorIfCurrent(e); }
       }
       return;
     }
@@ -1453,7 +1936,7 @@
         await openSubscriptionQr(subscriptionQr.dataset.subscriptionQr);
       } catch (e) {
         if (mobileOrderAction) state.modalTrigger = null;
-        toast(e.message, 'error');
+        toastErrorIfCurrent(e);
       } finally {
         if (mobileOrderAction && subscriptionQr.isConnected) {
           subscriptionQr.disabled = false;
@@ -1481,6 +1964,7 @@
       if (noticeAction.dataset.action === 'next-notice') advanceNotice();
       else if (noticeAction.dataset.action === 'retry-notices') await loadNotices(beginRouteRender('/plan'));
       else if (state.notices[state.noticeIndex]) {
+        state.modalOperationId += 1;
         state.modalTrigger = noticeAction;
         state.modal = { type: 'notice', notice: state.notices[state.noticeIndex] };
         renderModal();
@@ -1488,7 +1972,7 @@
       return;
     }
     const knowledge = target.closest('[data-knowledge-id]');
-    if (knowledge) { try { await openKnowledge(knowledge.dataset.knowledgeId); } catch (e) { toast(e.message, 'error'); } return; }
+    if (knowledge) { try { await openKnowledge(knowledge.dataset.knowledgeId); } catch (e) { toastErrorIfCurrent(e); } return; }
     const copy = target.closest('[data-copy]');
     if (copy) {
       try {
@@ -1515,7 +1999,14 @@
     const action = target.closest('[data-action]')?.dataset.action;
     if (action === 'logout') {
       closePlanPrices(false);
-      localStorage.removeItem(TOKEN_KEY);
+      const tokenToLogout = authToken();
+      deactivateDistributorView();
+      if (window.__xboardAuthSession?.logoutSession) {
+        window.__xboardAuthSession.logoutSession(tokenToLogout);
+      } else {
+        localStorage.removeItem(TOKEN_KEY);
+      }
+      syncSession();
       window.location.href = '/#/login';
     } else if (action === 'toggle-plan-prices') {
       togglePlanPrices();
@@ -1534,16 +2025,37 @@
       if (state.modal) renderModal();
     } else if (action === 'retry') {
       await renderPage();
+    } else if (action === 'check-purchase-orders') {
+      await checkPurchaseOrders();
+    } else if (action === 'acknowledge-order-check') {
+      if (!state.purchaseRecovery?.checked) return;
+      state.purchaseRecovery = null;
+      state.purchasingPlanId = null;
+      state.purchaseOperationId += 1;
+      if (currentPage() === '/plan') renderPlanCatalog();
+      else navigate('/plan');
+    } else if (action === 'retry-purchase-delivery') {
+      const recovery = state.purchaseRecovery;
+      const session = syncSession();
+      if (!recovery?.tradeNo) return;
+      try {
+        const opened = await openDelivery(recovery.tradeNo);
+        if (!opened || !isCurrentSession(session) || state.purchaseRecovery !== recovery) return;
+        state.purchaseRecovery = null;
+        state.purchasingPlanId = null;
+        if (currentPage() === '/plan') renderPlanCatalog();
+        else document.querySelector('#distributor-app .dist-purchase-recovery')?.remove();
+      } catch (error) { toastErrorIfCurrent(error, session); }
     } else if (action === 'export-orders') {
-      try { await exportOrders(target.closest('[data-action]')); } catch (e) { toast(e.message, 'error'); }
+      try { await exportOrders(target.closest('[data-action]')); } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'search-orders') {
       state.orderSearch = document.getElementById('dist-order-search')?.value.trim() || '';
       state.orderPage = 1;
-      try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+      try { await renderOrders(); } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'clear-order-search') {
       state.orderSearch = '';
       state.orderPage = 1;
-      try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+      try { await renderOrders(); } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'toggle-order-columns') {
       state.orderFixedColumnsExpanded = !state.orderFixedColumnsExpanded;
       document.querySelector('.dist-orders-table')?.classList.toggle('is-order-columns-collapsed', !state.orderFixedColumnsExpanded);
@@ -1563,37 +2075,49 @@
       state.orderSettlementStatus = settlementStatus;
       state.orderFilters = filters;
       state.orderPage = 1;
-      try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+      try { await renderOrders(); } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'reset-order-filters') {
       state.orderSettlementStatus = '';
       state.orderFilters = { startDate: '', endDate: '', periods: [], minAmount: '', maxAmount: '' };
       state.orderPage = 1;
-      try { await renderOrders(); } catch (e) { toast(e.message, 'error'); }
+      try { await renderOrders(); } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'apply-summary-range') {
       try {
         state.orderSummaryRange = checkedDateRange('dist-summary-start', 'dist-summary-end');
         await refreshOrderAnalytics(true, false);
-      } catch (e) { toast(e.message, 'error'); }
+      } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'apply-trend-range') {
       try {
         state.orderTrendPreset = 'custom';
         state.orderTrendRange = checkedDateRange('dist-trend-start', 'dist-trend-end');
         await refreshOrderAnalytics(false, true);
-      } catch (e) { toast(e.message, 'error'); }
+      } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'load-more-orders') {
-      try { await renderOrders({ append: true }); } catch (e) { toast(e.message, 'error'); }
+      try { await renderOrders({ append: true }); } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'search-knowledge') {
       state.knowledgeSearch = document.getElementById('dist-knowledge-search')?.value.trim() || '';
-      try { await renderKnowledge(); } catch (e) { toast(e.message, 'error'); }
+      try { await renderKnowledge(); } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'clear-knowledge-search') {
       state.knowledgeSearch = '';
-      try { await renderKnowledge(); } catch (e) { toast(e.message, 'error'); }
+      try { await renderKnowledge(); } catch (e) { toastErrorIfCurrent(e); }
     } else if (action === 'generate-code') {
-      try { await api('/user/invite/save'); toast(t('success')); await renderInvite(); } catch (e) { toast(e.message, 'error'); }
+      const actionSession = syncSession();
+      try {
+        await api('/user/invite/save');
+        if (!state.active || !isCurrentSession(actionSession)) return;
+        toast(t('success'));
+        await renderInvite();
+      } catch (e) { toastErrorIfCurrent(e, actionSession); }
     } else if (action === 'transfer') {
       const yuan = Number(document.getElementById('transfer-amount')?.value || 0);
       if (yuan <= 0) return;
-      try { await api('/user/transfer', { method: 'POST', data: { transfer_amount: Math.round(yuan * 100) } }); toast(t('success')); await renderInvite(); } catch (e) { toast(e.message, 'error'); }
+      const actionSession = syncSession();
+      try {
+        await api('/user/transfer', { method: 'POST', data: { transfer_amount: Math.round(yuan * 100) } });
+        if (!state.active || !isCurrentSession(actionSession)) return;
+        toast(t('success'));
+        await renderInvite();
+      } catch (e) { toastErrorIfCurrent(e, actionSession); }
     }
   }
 
@@ -1601,32 +2125,57 @@
     const action = target.closest('[data-modal-action]')?.dataset.modalAction;
     if (!action) return;
     if (action === 'close-delivery') closeModal();
-    else if (action === 'renew-done') closeModal();
+    else if (action === 'renew-done') {
+      if (state.modal?.type === 'renewal' && state.modal.result) state.renewalOperations.delete(state.modal.order.trade_no);
+      closeModal();
+    }
     else if (action === 'confirm-renewal') {
-      if (!state.modal || state.modal.type !== 'renewal' || state.modal.submitting) return;
-      state.modal.submitting = true;
+      if (!state.modal || state.modal.type !== 'renewal' || state.modal.submitting || state.modal.result) return;
+      const renewalModal = state.modal;
+      const renewalSession = syncSession();
+      const isCurrentRenewal = () => state.active
+        && isCurrentSession(renewalSession)
+        && state.renewalOperations.get(renewalModal.order.trade_no) === renewalModal;
+      renewalModal.submitting = true;
       renderModal();
       try {
-        state.modal.result = dataOf(await api('/user/order/renew', {
+        const result = dataOf(await api('/user/order/renew', {
           method: 'POST',
           data: {
-            trade_no: state.modal.order.trade_no,
-            period: state.modal.period,
-            idempotency_key: state.modal.idempotencyKey,
+            trade_no: renewalModal.order.trade_no,
+            period: renewalModal.period,
+            idempotency_key: renewalModal.idempotencyKey,
           },
         }));
-        state.modal.submitting = false;
+        if (!isCurrentRenewal()) return;
+        if (typeof result?.trade_no !== 'string' || !result.trade_no.trim()) {
+          const error = new Error(t('writeUnconfirmed'));
+          error.isUncertainWrite = true;
+          throw error;
+        }
+        renewalModal.result = result;
+        renewalModal.uncertain = false;
         invalidateOrderAnalytics();
-        await renderOrders();
-        renderModal();
       } catch (error) {
-        state.modal.submitting = false;
-        renderModal();
-        toast(error.message, 'error');
+        if (!isCurrentRenewal() || error?.isCancelled) return;
+        // A later rejection cannot rule out an earlier unconfirmed commit.
+        renewalModal.uncertain = renewalModal.uncertain || Boolean(error?.isUncertainWrite || error?.isNetworkError
+          || !error?.status || Number(error.status) >= 500 || Number(error.status) === 409);
+        if (!renewalModal.uncertain) renewalModal.idempotencyKey = makeIdempotencyKey();
+        toastErrorIfCurrent(error, renewalSession);
+      } finally {
+        if (isCurrentRenewal()) {
+          renewalModal.submitting = false;
+          if (state.modal === renewalModal) renderModal();
+        }
+      }
+      if (isCurrentRenewal() && renewalModal.result && currentPage() === '/order') {
+        try { await renderOrders(); } catch (error) { toastErrorIfCurrent(error, renewalSession); }
       }
     }
     else if (action === 'buy-again') {
-      try { await repurchaseDelivery(); } catch (error) { toast(error.message, 'error'); }
+      const actionSession = syncSession();
+      try { await repurchaseDelivery(); } catch (error) { toastErrorIfCurrent(error, actionSession); }
     }
     else if (action === 'copy-subscription-qr') {
       if (!state.modal || !['subscriptionQr', 'delivery'].includes(state.modal.type) || !state.modal.blob) return;
@@ -1659,9 +2208,53 @@
     else if (action === 'cancel') closeModal();
   }
 
+  function userIdentityKey(user, sessionSnapshot) {
+    const idPart = user?.id ?? user?.email ?? user?.uuid ?? '';
+    return `${sessionSnapshot?.token || ''}:${String(idPart)}`;
+  }
+
+  function deactivateDistributorView() {
+    state.active = false;
+    state.user = null;
+    state.activeSessionEpoch = null;
+    state.activeUserKey = null;
+    state.renderGeneration += 1;
+    state.analyticsRequestToken += 1;
+    resetAccountScopedState();
+    closePlanPrices(false);
+    clearInterval(state.noticeTimer);
+    state.noticeTimer = null;
+    stopPolling();
+    if (state.modal) closeModal();
+    abortScopedRequests('route', 'cancelled');
+    abortScopedRequests('modal', 'cancelled');
+    document.getElementById('distributor-app')?.remove();
+    document.documentElement.classList.remove('distributor-mode');
+    const normalApp = document.getElementById('app');
+    if (normalApp) normalApp.style.display = '';
+    startDetectorLoop();
+  }
+
   function activate(user) {
+    const currentSession = syncSession();
+    if (!user?.is_distributor) {
+      if (state.active) deactivateDistributorView();
+      return;
+    }
+    const nextUserKey = userIdentityKey(user, currentSession);
+    const sameSessionAndUser = state.active
+      && state.activeSessionEpoch === currentSession.localEpoch
+      && state.activeUserKey === nextUserKey;
+    if (state.active && !sameSessionAndUser) {
+      deactivateDistributorView();
+    }
     state.active = true;
     state.user = user;
+    state.activeSessionEpoch = currentSession.localEpoch;
+    state.activeUserKey = nextUserKey;
+    state.decidedToken = currentSession.token;
+    stopDetectorLoop();
+    window.__xboardAuthSession?.hideRecoveryPrompt?.();
     const normalApp = document.getElementById('app');
     if (normalApp) normalApp.style.display = 'none';
     let root = document.getElementById('distributor-app');
@@ -1671,16 +2264,92 @@
       document.body.appendChild(root);
     }
     document.documentElement.classList.add('distributor-mode');
+    if (sameSessionAndUser && root.children.length > 0 && !root.querySelector('.dist-loading, .dist-error')) {
+      const accountEl = root.querySelector('.dist-account');
+      if (accountEl) accountEl.textContent = `● ${distributorAccountLabel(state.user)}`;
+      return;
+    }
     if (!['/plan', '/overview', '/order', '/invite', '/knowledge', '/clients'].includes(currentPage())) navigate('/plan');
     renderPage();
   }
 
-  async function detectDistributor() {
-    if (state.active || !authToken()) return;
-    try {
-      const user = dataOf(await api('/user/info'));
-      if (user?.is_distributor) activate(user);
-    } catch (_) { /* login may still be in progress */ }
+  function detectDistributor(options = {}) {
+    const sessionSnapshot = syncSession();
+    if (!sessionSnapshot.token) {
+      if (state.active) deactivateDistributorView();
+      return Promise.resolve();
+    }
+    if (state.active && state.activeSessionEpoch === sessionSnapshot.localEpoch && !options.force) {
+      return Promise.resolve();
+    }
+    if (!options.force && state.decidedToken === sessionSnapshot.token) {
+      return Promise.resolve();
+    }
+    if (!options.force && state.nextDetectAt > Date.now()) {
+      return Promise.resolve();
+    }
+    if (
+      state.detectInFlight &&
+      state.detectInFlight.localEpoch === sessionSnapshot.localEpoch &&
+      state.detectInFlight.token === sessionSnapshot.token
+    ) {
+      return state.detectInFlight.promise;
+    }
+    const confirmedUser = !options.force && window.__xboardAuthSession?.getConfirmedUser?.(sessionSnapshot);
+    if (isValidUserIdentity(confirmedUser)) {
+      state.decidedToken = sessionSnapshot.token;
+      if (confirmedUser.is_distributor) activate(confirmedUser);
+      return Promise.resolve();
+    }
+    const task = (async () => {
+      try {
+        const user = dataOf(await api('/user/info'));
+        if (!isCurrentSession(sessionSnapshot)) return;
+        if (!isValidUserIdentity(user)) {
+          throw new Error('Invalid user identity response');
+        }
+        state.detectFailureCount = 0;
+        state.nextDetectAt = 0;
+        state.decidedToken = sessionSnapshot.token;
+        window.__xboardAuthSession?.confirmUserIdentity?.(sessionSnapshot, user);
+        if (user?.is_distributor) activate(user);
+        else if (state.active) deactivateDistributorView();
+      } catch (error) {
+        if (!isCurrentSession(sessionSnapshot) || error?.isCancelled) return;
+        if (isConfirmedAuthFailure(error?.status, error?.rawMessage || error?.message)) {
+          state.decidedToken = sessionSnapshot.token;
+          state.detectFailureCount = 0;
+          state.nextDetectAt = 0;
+          return;
+        }
+        if (error?.isTransientRead || error?.isTimeout) {
+          state.nextDetectAt = Infinity;
+          if (!document.hidden) {
+            window.__xboardAuthSession?.showRecoveryPrompt?.({
+              owner: 'distributor-detection',
+              targetPath: window.location.hash.replace(/^#/, '') || '/plan',
+              message: displayError(error),
+              onRetry: () => detectDistributor({ force: true }),
+            });
+          }
+          return;
+        }
+        state.detectFailureCount += 1;
+        const delay = Math.min(5000, 600 * (2 ** Math.min(state.detectFailureCount - 1, 4)));
+        state.nextDetectAt = Date.now() + delay;
+      } finally {
+        if (state.detectInFlight?.promise === task) {
+          state.detectInFlight = null;
+        }
+      }
+    })();
+    state.detectInFlight = {
+      localEpoch: sessionSnapshot.localEpoch,
+      token: sessionSnapshot.token,
+      startedAt: Date.now(),
+      promise: task,
+    };
+    return task;
   }
 
   document.addEventListener('click', (event) => {
@@ -1694,8 +2363,9 @@
     if (event.target.id === 'dist-order-page-size') {
       state.orderPerPage = Number(event.target.value) || 20;
       state.orderPage = 1;
-      renderOrders().catch((error) => toast(error.message, 'error'));
+      renderOrders().catch((error) => toastErrorIfCurrent(error));
     } else if (event.target.id === 'dist-renewal-period' && state.modal?.type === 'renewal') {
+      if (state.modal.submitting || state.modal.uncertain || state.modal.result) return;
       state.modal.period = event.target.value;
       renderModal();
     }
@@ -1719,11 +2389,11 @@
       event.preventDefault();
       state.orderSearch = event.target.value.trim();
       state.orderPage = 1;
-      renderOrders().catch((error) => toast(error.message, 'error'));
+      renderOrders().catch((error) => toastErrorIfCurrent(error));
     } else if (event.target.id === 'dist-knowledge-search') {
       event.preventDefault();
       state.knowledgeSearch = event.target.value.trim();
-      renderKnowledge().catch((error) => toast(error.message, 'error'));
+      renderKnowledge().catch((error) => toastErrorIfCurrent(error));
     }
   });
   document.addEventListener('focusin', (event) => {
@@ -1738,26 +2408,180 @@
     const ratio = Math.min(1, Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)));
     setActiveTrendPoint(Math.round(ratio * (daily.length - 1)));
   });
+  function verifyActiveSession(sessionSnapshot = syncSession()) {
+    if (!state.active || !sessionSnapshot.token) return Promise.resolve();
+    if (
+      state.sessionCheckInFlight &&
+      state.sessionCheckInFlight.localEpoch === sessionSnapshot.localEpoch &&
+      state.sessionCheckInFlight.token === sessionSnapshot.token
+    ) {
+      return state.sessionCheckInFlight.promise;
+    }
+    const task = (async () => {
+      try {
+        const user = dataOf(await api('/user/info'));
+        if (!isCurrentSession(sessionSnapshot) || !isValidUserIdentity(user)) return;
+        window.__xboardAuthSession?.confirmUserIdentity?.(sessionSnapshot, user);
+        if (!user?.is_distributor) {
+          deactivateDistributorView();
+          return;
+        }
+        state.user = user;
+        const accountEl = document.querySelector('#distributor-app .dist-account');
+        if (accountEl) accountEl.textContent = `● ${distributorAccountLabel(state.user)}`;
+      } catch (_) {
+        // Confirmed auth failures are already handled by api(); ignore transient errors during silent check.
+      } finally {
+        if (state.sessionCheckInFlight?.promise === task) {
+          state.sessionCheckInFlight = null;
+        }
+      }
+    })();
+    state.sessionCheckInFlight = {
+      localEpoch: sessionSnapshot.localEpoch,
+      token: sessionSnapshot.token,
+      promise: task,
+    };
+    return task;
+  }
+
+  function recoverDistributorView(options = {}) {
+    if (document.hidden || navigator.onLine === false) return;
+    const currentSession = syncSession();
+    if (!currentSession.token) return;
+    const persisted = Boolean(options.persisted);
+    const hiddenDuration = Number(options.hiddenDuration || 0);
+    if (!state.active) {
+      if (
+        state.detectInFlight &&
+        Date.now() - Number(state.detectInFlight.startedAt || 0) >= READ_TIMEOUT_MS
+      ) {
+        abortScopedRequests('session', 'cancelled');
+        state.detectInFlight = null;
+      }
+      if (persisted || state.decidedToken !== currentSession.token) {
+        state.nextDetectAt = 0;
+        detectDistributor({ force: true });
+      }
+      return;
+    }
+    const root = document.getElementById('distributor-app');
+    const isStuckLoadingOrError = state.needsRouteRecovery || !root
+      || !root.children.length
+      || Boolean(root.querySelector('.dist-loading, .dist-error'));
+    if (isStuckLoadingOrError) {
+      if (!state.needsRouteRecovery && state.routeControllers.size) return;
+      state.needsRouteRecovery = false;
+      abortScopedRequests('route', 'cancelled');
+      renderPage({ preserveContent: true });
+      if (persisted || hiddenDuration >= RESUME_REVALIDATE_MS) {
+        verifyActiveSession(currentSession);
+      }
+      return;
+    }
+    if (persisted || hiddenDuration >= RESUME_REVALIDATE_MS) {
+      verifyActiveSession(currentSession);
+    }
+  }
+
+  function scheduleResumeCheck(options = {}) {
+    state.pendingResume = {
+      persisted: Boolean(state.pendingResume?.persisted || options.persisted),
+      hiddenDuration: Math.max(
+        Number(state.pendingResume?.hiddenDuration || 0),
+        Number(options.hiddenDuration || 0)
+      ),
+    };
+    if (state.resumeTimer) clearTimeout(state.resumeTimer);
+    state.resumeTimer = setTimeout(() => {
+      state.resumeTimer = null;
+      const merged = state.pendingResume || { persisted: false, hiddenDuration: 0 };
+      state.pendingResume = null;
+      recoverDistributorView(merged);
+    }, RESUME_COALESCE_MS);
+  }
+
+  function startDetectorLoop() {
+    if (state.detectorTimer) return;
+    state.detectorTimer = setInterval(() => {
+      if (document.hidden) return;
+      const current = syncSession();
+      if (state.active || !current.token || state.decidedToken === current.token) return;
+      detectDistributor();
+    }, 300);
+  }
+
+  function stopDetectorLoop() {
+    if (!state.detectorTimer) return;
+    clearInterval(state.detectorTimer);
+    state.detectorTimer = null;
+  }
+
+  function handleSessionChange() {
+    const current = syncSession();
+    if (!current.token) {
+      if (state.active) deactivateDistributorView();
+      return;
+    }
+    startDetectorLoop();
+    detectDistributor({ force: true });
+  }
+
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) closePlanPrices();
+    if (document.hidden) {
+      state.lastHiddenAt = Date.now();
+      const root = document.getElementById('distributor-app');
+      if (root?.querySelector('.dist-loading, .dist-error')
+        || Array.from(state.routeControllers).some((record) => record.path !== '/user/notice/fetch')) state.needsRouteRecovery = true;
+      abortScopedRequests('route', 'cancelled');
+      abortScopedRequests('session', 'cancelled');
+      state.detectInFlight = null;
+      state.sessionCheckInFlight = null;
+      return;
+    }
+    const hiddenDuration = state.lastHiddenAt > 0 ? Math.max(0, Date.now() - state.lastHiddenAt) : 0;
+    state.lastHiddenAt = 0;
+    scheduleResumeCheck({ persisted: false, hiddenDuration });
   });
+  window.addEventListener('pageshow', (event) => {
+    if (document.hidden) return;
+    const hiddenDuration = state.lastHiddenAt > 0 ? Math.max(0, Date.now() - state.lastHiddenAt) : 0;
+    state.lastHiddenAt = 0;
+    scheduleResumeCheck({ persisted: Boolean(event?.persisted), hiddenDuration });
+  });
+  window.addEventListener('online', () => {
+    if (!document.hidden) scheduleResumeCheck();
+  });
+  window.addEventListener('xboard:auth-user-confirmed', () => {
+    const snapshot = syncSession();
+    const user = window.__xboardAuthSession?.getConfirmedUser?.(snapshot);
+    if (!isValidUserIdentity(user) || state.detectInFlight) return;
+    state.decidedToken = snapshot.token;
+    if (!user.is_distributor) {
+      if (state.active) deactivateDistributorView();
+    } else if (!state.active) activate(user);
+  });
+  window.addEventListener('storage', (event) => {
+    if (!event || !event.key || String(event.key).toUpperCase() === TOKEN_KEY) {
+      handleSessionChange();
+    }
+  });
+  window.addEventListener('xboard:auth-token-change', handleSessionChange);
   let routeRenderQueued = false;
   function queueRouteRender() {
-    if (!state.active) return;
+    if (!state.active || state.routeRenderHash === window.location.hash) return;
     if (routeRenderQueued) return;
     routeRenderQueued = true;
     window.queueMicrotask(() => {
       routeRenderQueued = false;
-      if (!state.active) return;
+      if (!state.active || state.routeRenderHash === window.location.hash) return;
       if (currentPage() !== '/plan') closePlanPrices(false);
       renderPage();
     });
   }
   window.addEventListener('hashchange', queueRouteRender);
   window.addEventListener('popstate', queueRouteRender);
-  const detector = setInterval(() => {
-    if (state.active) clearInterval(detector);
-    else detectDistributor();
-  }, 300);
+  startDetectorLoop();
   detectDistributor();
 })();

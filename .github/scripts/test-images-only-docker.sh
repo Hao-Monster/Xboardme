@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+trap 'result=$?; if [[ $- == *e* ]]; then printf "IMAGE_ONLY_DOCKER_TEST=FAIL line=%s status=%s\n" "$LINENO" "$result" >&2; fi' ERR
 
 # REAL local-Docker integration. Only this test's uniquely labelled resources
 # are created/removed. Production discovery, GHCR provenance eligibility and

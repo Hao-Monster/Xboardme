@@ -20,7 +20,7 @@ class PlanController extends Controller
     }
     public function fetch(Request $request)
     {
-        $user = User::find($request->user()->id);
+        $user = $request->user();
         if ($request->input('id')) {
             $plan = Plan::where('id', $request->input('id'))->first();
             if (!$plan) {
