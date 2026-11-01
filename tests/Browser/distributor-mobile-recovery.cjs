@@ -531,7 +531,15 @@ for (const entry of ['banner', 'navigation']) {
       const filtered = query.has('search');
       return f.fulfill(route, { data: filtered ? [reviewBrowserOrder()] : [], current_page: Number(query.get('page') || 1), per_page: 20, total: filtered ? 60 : 0, last_page: filtered ? 3 : 1 });
     });
-    f.rules.set('/api/v1/user/order/save', route => route.abort('failed'));
+    const savedBodies = [];
+    f.rules.set('/api/v1/user/order/save', route => {
+      savedBodies.push(new URLSearchParams(route.request().postData() || ''));
+      if (savedBodies.length === 1) return route.abort('failed');
+      return f.fulfill(route, { data: 'QA-RECOVERED-SINGLE-ORDER' });
+    });
+    f.rules.set('/api/v1/user/distributor/delivery', route => f.fulfill(route, {
+      data: { trade_no: 'QA-RECOVERED-SINGLE-ORDER', delivery_status: 1, config_issued_at: 1700000000 },
+    }));
     await f.open(); await f.ready();
     await f.page.locator('[data-nav="/order"]').click();
     await f.page.locator('#dist-order-search').fill('OLD-CUSTOMER');
@@ -551,7 +559,8 @@ for (const entry of ['banner', 'navigation']) {
     await expect(f.page.locator('.dist-purchase-recovery')).toContainText('未能确认下单结果');
     const before = f.count('/user/order/fetch');
     await f.page.locator(entry === 'banner' ? '[data-action="check-purchase-orders"]' : '[data-nav="/order"]').click();
-    await expect(f.page.locator('[data-action="acknowledge-order-check"]')).toBeVisible();
+    await expect(f.page.locator('[data-action="resume-purchase"]')).toBeVisible();
+    await expect(f.page.locator('[data-action="acknowledge-order-check"]')).toHaveCount(0);
     assert.equal(f.count('/user/order/fetch') - before, 1);
     const query = new URLSearchParams(f.requests.filter(item => item.path.endsWith('/order/fetch')).at(-1).query);
     assert.equal(query.get('page'), '1');
@@ -561,6 +570,11 @@ for (const entry of ['banner', 'navigation']) {
     await f.page.locator('[data-buy="1"]').dispatchEvent('click');
     assert.equal(f.count('/user/order/save', 'POST'), 1, 'empty orders do not release the purchase lock');
     await expect(f.page.locator('.dist-purchase-recovery')).toBeVisible();
+    await f.page.locator('[data-action="resume-purchase"]').click();
+    await expect(f.page.locator('.dist-delivery-result')).toBeVisible();
+    assert.equal(savedBodies.length, 2);
+    assert.ok(savedBodies[0].get('idempotency_key'));
+    assert.equal(savedBodies[1].get('idempotency_key'), savedBodies[0].get('idempotency_key'));
     assert.deepEqual(f.pageErrors, []);
   });
 }

@@ -49,6 +49,14 @@ class Kernel extends ConsoleKernel
         // cleanup stale online_count (GC for Redis TTL expiration)
         $schedule->command('cleanup:online-status')->everyFiveMinutes()->onOneServer();
         $schedule->command('server-report-receipts:prune')->dailyAt('1:30')->onOneServer();
+        $schedule->command('subscription:hwid-queue-status', ['--log'])
+            ->everyMinute()
+            ->onOneServer()
+            ->when(static fn (): bool => (bool) config('subscription.hwid_async_metadata', false)
+                || (bool) config('subscription.hwid_observation_worker_enabled', false));
+        $schedule->command('subscription:hwid-failures-prune', ['--execute'])
+            ->dailyAt('2:15')
+            ->onOneServer();
         // cleanup expired knowledge attachment drafts and trash
         $schedule->command('knowledge-attachments:cleanup')->hourly()->onOneServer()->withoutOverlapping(60);
         // backup Timing

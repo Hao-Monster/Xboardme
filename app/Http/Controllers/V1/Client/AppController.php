@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\V1\Client;
 
 use App\Http\Controllers\Controller;
+use App\Models\DistributorOrder;
 use App\Services\ServerService;
 use App\Services\UserService;
 use Illuminate\Http\Request;
@@ -15,6 +16,10 @@ class AppController extends Controller
     {
         $servers = [];
         $user = $request->user();
+        // Internal distributor subscriptions must use the HWID-aware endpoint.
+        if (DistributorOrder::query()->useWritePdo()->where('subscriber_user_id', $user->id)->exists()) {
+            return response('', 403, ['Cache-Control' => 'no-store']);
+        }
         $userService = new UserService();
         if ($userService->isAvailable($user)) {
             $servers = ServerService::getAvailableServers($user);

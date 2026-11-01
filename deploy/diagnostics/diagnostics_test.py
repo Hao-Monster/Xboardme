@@ -10,15 +10,18 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -76,6 +79,145 @@ def sample_connection_event(**overrides: object) -> dict[str, object]:
 
 
 class DiagnosticsConfigAndGuardTest(unittest.TestCase):
+    def test_writer_routing_with_native_vmauth(self) -> None:
+        image = os.environ.get("XBOARD_DIAGNOSTICS_TEST_VMAUTH_IMAGE")
+        if not image:
+            self.skipTest("Set XBOARD_DIAGNOSTICS_TEST_VMAUTH_IMAGE to run native vmauth routing")
+        self.assertEqual(image, configure.AUTH_IMAGE, "Use the project's pinned vmauth image")
+        self.assertEqual(sys.platform, "linux", "Host-network vmauth routing requires Linux")
+        # A separate loopback listener, never the pilot's actual 19438 endpoint.
+        with socket.socket() as reservation:
+            reservation.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            reservation.bind(("127.0.0.1", 19448))
+
+        received: list[dict[str, object]] = []
+
+        class FakeGuardHandler(guard.BaseHTTPRequestHandler):
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+            def do_POST(self) -> None:
+                received.append({
+                    "path": self.path,
+                    "headers": {name: self.headers.get(name) for name in (
+                        "X-Diagnostics-Panel-Scope", "X-Diagnostics-Node-Id", "X-Diagnostics-Collector-Id",
+                    )},
+                    "body": self.rfile.read(int(self.headers.get("Content-Length", "0"))),
+                })
+                self.send_response(200 if urllib.parse.urlsplit(self.path).path == "/insert/jsonline" else 404)
+                self.end_headers()
+
+        fake_guard = guard.ThreadingHTTPServer(("127.0.0.1", 0), FakeGuardHandler)
+        thread = threading.Thread(target=fake_guard.serve_forever, daemon=True)
+        thread.start()
+        owner = os.urandom(16).hex()
+        container_name = "xboard-vmauth-route-" + owner
+        launch_attempted = False
+        try:
+            with tempfile.TemporaryDirectory(prefix="xboard-vmauth-route-") as tmp:
+                directory = Path(tmp)
+                configure.generate_central(directory, PANEL_SCOPE, [101])
+                auth = json.loads((directory / "auth.json").read_text(encoding="utf-8"))
+                secrets_cfg = json.loads((directory / "secrets.json").read_text(encoding="utf-8"))
+                # Preserve generated paths, queries, route restrictions and identity headers.
+                # Only the backend authority changes to the disposable fake guard.
+                for user in auth["users"]:
+                    for route in user["url_map"]:
+                        parsed = urllib.parse.urlsplit(route["url_prefix"])
+                        route["url_prefix"] = urllib.parse.urlunsplit(parsed._replace(
+                            netloc=f"127.0.0.1:{fake_guard.server_port}",
+                        ))
+                auth_path = directory / "route-auth.json"
+                auth_path.write_text(json.dumps(auth), encoding="utf-8")
+                launch_attempted = True
+                result = subprocess.run(
+                    ["docker", "run", "--detach", "--rm", "--pull=never", "--network=host",
+                     "--name=" + container_name, "--label=xboard.diagnostics.route-test=" + owner,
+                     "--memory=64m", "--cpus=0.25", "--pids-limit=32", "--read-only", "--cap-drop=ALL",
+                     "--security-opt=no-new-privileges", "--user=0:0",
+                     "--mount", f"type=bind,source={auth_path},target=/route-auth.json,readonly", image,
+                     "-auth.config=/route-auth.json", "-httpListenAddr=127.0.0.1:19448",
+                     "-httpInternalListenAddr=127.0.0.1:0"],
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, "Could not start isolated vmauth container")
+                container_id = result.stdout.strip()
+                self.assertRegex(container_id, r"^[a-f0-9]{64}$")
+                for _ in range(50):
+                    try:
+                        with socket.create_connection(("127.0.0.1", 19448), timeout=0.1):
+                            break
+                    except OSError:
+                        time.sleep(0.1)
+                else:
+                    self.fail("Isolated vmauth listener was not ready")
+
+                body = b'{"synthetic":true}\n'
+                writer_token = secrets_cfg["writers"]["101"]["bearer_token"]
+
+                def post(path: str, token: str) -> int:
+                    request = urllib.request.Request(
+                        "http://127.0.0.1:19448" + path, data=body, method="POST",
+                        headers={"Authorization": "Bearer " + token, "Content-Type": "application/x-ndjson",
+                                 "X-Diagnostics-Panel-Scope": "forged", "X-Diagnostics-Node-Id": "999",
+                                 "X-Diagnostics-Collector-Id": "forged"},
+                    )
+                    try:
+                        with urllib.request.urlopen(request, timeout=5) as response:
+                            return response.status
+                    except urllib.error.HTTPError as error:
+                        error.close()
+                        return error.code
+
+                status = post("/insert/jsonline", writer_token)
+                paths = [str(item["path"]) for item in received]
+                print("VMAUTH_ROUTE_CAPTURE=" + json.dumps({"status": status, "upstream_paths": paths}), flush=True)
+                self.assertEqual(status, 200, f"Generated writer route reached fake guard at {paths}")
+                self.assertEqual(len(received), 1)
+                parsed = urllib.parse.urlsplit(paths[0])
+                self.assertEqual(parsed.path, "/insert/jsonline")
+                self.assertEqual(urllib.parse.parse_qs(parsed.query), {
+                    "_time_field": ["event_time"], "_msg_field": ["safe_message"],
+                    "_stream_fields": ["panel_scope,node_id,service,event_family"],
+                    "extra_fields": [f"panel_scope={PANEL_SCOPE},node_id=101,collector_id=collector-node-101,service=xboard-node"],
+                })
+                self.assertEqual(received[0]["headers"], {
+                    "X-Diagnostics-Panel-Scope": PANEL_SCOPE, "X-Diagnostics-Node-Id": "101",
+                    "X-Diagnostics-Collector-Id": "collector-node-101",
+                })
+                self.assertEqual(received[0]["body"], body)
+                for path, token in (
+                    ("/insert/jsonline/extra", writer_token), ("/select/logsql/query", writer_token),
+                    ("/diagnostics/health", writer_token), ("/insert/jsonline", "invalid-test-token"),
+                    ("/insert/jsonline", secrets_cfg["viewer"]["bearer_token"]),
+                ):
+                    self.assertIn(post(path, token), (400, 401, 403, 404))
+                    self.assertEqual(len(received), 1, "Denied request must not reach the guard")
+        finally:
+            try:
+                if launch_attempted:
+                    inspected = subprocess.run(
+                        ["docker", "container", "inspect", "--format",
+                         '{{.Id}} {{ index .Config.Labels "xboard.diagnostics.route-test" }}', container_name],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if inspected.returncode == 0:
+                        identity = inspected.stdout.strip().split()
+                        self.assertEqual(len(identity), 2, "Could not identify isolated vmauth container")
+                        self.assertRegex(identity[0], r"^[a-f0-9]{64}$")
+                        self.assertEqual(identity[1], owner, "Refusing to remove an unowned container")
+                        removed = subprocess.run(["docker", "rm", "--force", identity[0]],
+                                                 capture_output=True, text=True, timeout=15)
+                        self.assertTrue(removed.returncode == 0 or "No such container" in removed.stderr,
+                                        "Could not clean up isolated vmauth container")
+                    else:
+                        self.assertIn("No such container", inspected.stderr,
+                                      "Could not confirm isolated vmauth container cleanup")
+            finally:
+                fake_guard.shutdown()
+                fake_guard.server_close()
+                thread.join(timeout=2)
+
     def test_storage_format_preserves_physical_reservation(self) -> None:
         if not all(shutil.which(tool) for tool in ("fallocate", "mkfs.ext4")):
             self.skipTest("Native fallocate and mkfs.ext4 are required")
@@ -213,6 +355,12 @@ class DiagnosticsConfigAndGuardTest(unittest.TestCase):
             self.assertEqual(
                 viewer_entry["url_map"][0]["url_prefix"], "http://victoria-logs:9428"
             )
+            for writer in auth_cfg["users"][2:]:
+                self.assertEqual(len(writer["url_map"]), 1)
+                route = writer["url_map"][0]
+                self.assertEqual(route["src_paths"], ["/insert/jsonline"])
+                self.assertEqual(urllib.parse.urlsplit(route["url_prefix"]).path, "/",
+                                 "vmauth appends the original request path to url_prefix")
 
             # Verify collector generation creates isolated 2 GiB disk buffer & VRL whitelist
             token_file = Path(tmp) / "writer-101.token"

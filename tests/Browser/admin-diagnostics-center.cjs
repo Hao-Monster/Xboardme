@@ -515,6 +515,60 @@ async function createDiagnosticsFixture(t, width = 1440) {
 }
 
 for (const width of [1440, 390]) {
+  test(`floating distributor entry cannot intercept an overlapping diagnostics detail click at ${width}px`, async (t) => {
+    const f = await createDiagnosticsFixture(t, width);
+    await f.page.locator('.xboard-diagnostics-center-nav').click();
+    await f.page.locator('#diag-trade-no-input').fill('TRD-20261018-001');
+    await f.page.locator('[data-diag-action="lookup-trade-no"]').click();
+    const detailButton = f.page.locator('[data-diag-open-connection="0"]');
+    await expect(detailButton).toBeVisible();
+
+    // Give the real list enough scroll range to overlap the entry's unchanged
+    // fixed position. Do not alter either element's stacking or pointer events.
+    await f.page.addStyleTag({ content: '.diag-center-page { padding-bottom:1200px; } .diag-list-card { margin-top:1200px; }' });
+    await f.page.evaluate(() => {
+      const button = document.querySelector('[data-diag-open-connection="0"]');
+      const entry = document.getElementById('admin-dist-entry');
+      const root = document.getElementById('admin-diagnostics-root');
+      const wrap = button.closest('.diag-table-wrap');
+      wrap.scrollLeft = wrap.scrollWidth;
+      const buttonRect = button.getBoundingClientRect();
+      const entryRect = entry.getBoundingClientRect();
+      root.scrollTop += buttonRect.y + buttonRect.height / 2 - entryRect.y - entryRect.height / 2;
+    });
+    const buttonBox = await detailButton.boundingBox();
+    const entryBox = await f.page.locator('#admin-dist-entry').boundingBox();
+    const overlap = {
+      left: Math.max(buttonBox.x, entryBox.x), right: Math.min(buttonBox.x + buttonBox.width, entryBox.x + entryBox.width),
+      top: Math.max(buttonBox.y, entryBox.y), bottom: Math.min(buttonBox.y + buttonBox.height, entryBox.y + entryBox.height),
+    };
+    assert.ok(overlap.right > overlap.left && overlap.bottom > overlap.top, 'Fixture must physically overlap the real entry and detail button');
+    const point = { x: (overlap.left + overlap.right) / 2, y: (overlap.top + overlap.bottom) / 2 };
+    const hit = await f.page.evaluate(({ x, y }) => {
+      const element = document.elementFromPoint(x, y);
+      return element?.closest('[data-diag-open-connection]')?.getAttribute('data-diag-open-connection')
+        ?? element?.closest('#admin-dist-entry')?.id ?? element?.tagName;
+    }, point);
+    t.diagnostic(JSON.stringify({ width, point, hit, buttonBox, entryBox }));
+    if (process.env.QA_ARTIFACT_DIR) {
+      fs.mkdirSync(process.env.QA_ARTIFACT_DIR, { recursive: true });
+      await f.page.screenshot({ path: path.join(process.env.QA_ARTIFACT_DIR, `diagnostics-overlap-${width}.png`) });
+    }
+
+    // Raw mouse input performs the same hit test as a customer click. A forced
+    // locator or DOM click would hide the original interception defect.
+    await f.page.mouse.click(point.x, point.y);
+    await expect.poll(() => f.state.connectionCalls.length).toBe(1);
+    assert.equal(hit, '0', 'The physical overlap point must hit the connection button');
+    assert.equal(f.state.connectionCalls[0].connection_id, f.data.connItem101.connection_id);
+    await expect(f.page.locator('[data-diag-detail-panel]')).toBeVisible();
+    await expect(f.page.locator('#admin-dist-root.open')).toHaveCount(0);
+
+    await f.page.locator('[data-diag-action="close-center"]').click();
+    await f.page.mouse.click(point.x, point.y);
+    await expect(f.page.locator('#admin-dist-root.open')).toBeVisible();
+  });
+
   test(`diagnostics center layout, idempotent menu, dark/light theme, call chain, DNS and stacktrace at ${width}px`, async (t) => {
     const f = await createDiagnosticsFixture(t, width);
 

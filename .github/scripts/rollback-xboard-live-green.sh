@@ -148,8 +148,58 @@ if [[ "$ROLE_STATE" == green ]]; then
 
   role_handoff_started=1
   docker exec "$current_horizon" php /www/artisan horizon:pause >/dev/null
+  quiet_checks=0
+  for attempt in {1..30}; do
+    reserved_hwid=$(docker exec "$current_horizon" php -r '
+    require "/www/vendor/autoload.php";
+    $app = require "/www/bootstrap/app.php";
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+    $queues = [];
+    foreach ((array) config("horizon.environments.production", []) as $supervisor) {
+        foreach ((array) ($supervisor["queue"] ?? []) as $queue) {
+            $queues[] = (string) $queue;
+        }
+    }
+    $queues = array_values(array_unique(array_filter($queues, static fn (string $q): bool => $q !== "")));
+    $hwidQueue = trim((string) config("subscription.hwid_observation_queue", "hwid_observation")) ?: "hwid_observation";
+    $hwidConn = (string) config("subscription.hwid_observation_worker_connection", "hwid_observation_worker");
+    $reserved = 0;
+    foreach ($queues as $queue) {
+        if ($queue === $hwidQueue) {
+            continue;
+        }
+        $reserved += (int) app("queue")->connection("redis")->reservedSize($queue);
+    }
+    if (is_array(config("queue.connections." . $hwidConn))) {
+        $reserved += (int) app("queue")->connection($hwidConn)->reservedSize($hwidQueue);
+    } else {
+        $reserved += (int) app("queue")->connection("redis")->reservedSize($hwidQueue);
+    }
+    echo $reserved;
+    ' 2>/dev/null || printf '%s\n' unknown)
+    [[ "$reserved_hwid" =~ ^[0-9]+$ ]] || break
+    if ((reserved_hwid == 0)); then
+      quiet_checks=$((quiet_checks + 1))
+      ((quiet_checks >= 3)) && break
+    else
+      quiet_checks=0
+    fi
+    sleep 2
+  done
+  hwid_backlog=$(docker exec "$current_horizon" php -r '
+  require "/www/vendor/autoload.php";
+  $app = require "/www/bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  $hwidQueue = trim((string) config("subscription.hwid_observation_queue", "hwid_observation")) ?: "hwid_observation";
+  $hwidConn = (string) config("subscription.hwid_observation_worker_connection", "hwid_observation_worker");
+  $connName = is_array(config("queue.connections." . $hwidConn)) ? $hwidConn : "redis";
+  echo (int) app("queue")->connection($connName)->size($hwidQueue);
+  ' 2>/dev/null || printf '%s\n' unknown)
+  if [[ "$hwid_backlog" != 0 ]]; then
+    echo "RELEASE_ROLLBACK_WARN=hwid_observation_backlog_isolated count=$hwid_backlog"
+  fi
   docker stop --time 20 "$current_scheduler" >/dev/null
-  docker stop --time 20 "$current_horizon" >/dev/null
+  docker stop --time 60 "$current_horizon" >/dev/null
 
   previous_horizon_owner=$blue
   if [[ "${ROLE_MODE:-compose}" == release ]]; then

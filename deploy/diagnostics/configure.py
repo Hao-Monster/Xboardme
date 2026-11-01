@@ -500,7 +500,7 @@ def generate_central(
                 "url_map": [
                     {
                         "src_paths": ["/insert/jsonline"],
-                        "url_prefix": f"http://diagnostics-guard:9430/insert/jsonline?{fixed_query}",
+                        "url_prefix": f"http://diagnostics-guard:9430/?{fixed_query}",
                         "headers": [
                             f"X-Diagnostics-Panel-Scope: {panel_scope}",
                             f"X-Diagnostics-Node-Id: {nid}",

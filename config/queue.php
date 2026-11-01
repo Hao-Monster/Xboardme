@@ -66,6 +66,22 @@ return [
             'block_for' => null,
         ],
 
+        'hwid_observation_publish' => [
+            'driver' => 'hwid-observation-redis',
+            'connection' => 'hwid_observation_publish',
+            'queue' => 'hwid_observation',
+            'retry_after' => 90,
+            'block_for' => null,
+        ],
+
+        'hwid_observation_worker' => [
+            'driver' => 'hwid-observation-redis',
+            'connection' => 'default',
+            'queue' => 'hwid_observation',
+            'retry_after' => 90,
+            'block_for' => null,
+        ],
+
     ],
 
     /*

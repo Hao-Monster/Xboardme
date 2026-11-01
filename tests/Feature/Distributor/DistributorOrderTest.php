@@ -15,11 +15,15 @@ use App\Models\User;
 use App\Services\DistributorConnectionService;
 use App\Services\DistributorHwidService;
 use App\Services\DistributorOrderService;
+use App\Services\OrderService;
+use App\Services\PlanService;
+use App\Jobs\NodeUserSyncJob;
 use App\Utils\Helper;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Route;
 use Laravel\Sanctum\Sanctum;
 use OpenSpout\Reader\XLSX\Reader;
@@ -2169,6 +2173,455 @@ class DistributorOrderTest extends TestCase
 
         $this->assertNotNull($route, 'Admin user route not found: ' . $method);
         return $route->uri();
+    }
+
+    public function test_distributor_batch_checkout_creates_independent_subscriptions_and_supports_idempotent_retry(): void
+    {
+        $distributor = $this->makeUser('batch-dealer@example.com', true);
+        $plan = $this->makePlan();
+        $plan->update(['reset_traffic_method' => Plan::RESET_TRAFFIC_MONTHLY]);
+        Sanctum::actingAs($distributor);
+
+        $payload = [
+            'plan_id' => $plan->id,
+            'period' => 'quarter_price',
+            'quantity' => 5,
+            'idempotency_key' => 'batch-idem-key-0001',
+        ];
+
+        $response = $this->postJson('/api/v1/user/order/save', $payload)
+            ->assertOk()
+            ->assertJsonPath('data.quantity', 5);
+
+        $tradeNos = $response->json('data.trade_nos');
+        $this->assertIsArray($tradeNos);
+        $this->assertCount(5, $tradeNos);
+        $this->assertCount(5, array_unique($tradeNos));
+
+        $orders = Order::whereIn('trade_no', $tradeNos)->with('distributorOrder.subscriber')->orderBy('id')->get();
+        $this->assertCount(5, $orders);
+        $this->assertCount(5, $orders->pluck('distributorOrder.subscriber_user_id')->unique());
+        $this->assertCount(5, $orders->pluck('distributorOrder.subscriber.token')->unique());
+        $this->assertCount(5, $orders->pluck('distributorOrder.subscription_name')->filter()->unique());
+        foreach ($orders as $order) {
+            $this->assertSame(Order::STATUS_COMPLETED, $order->status);
+            $this->assertNull($order->paid_at);
+            $this->assertSame(3000, $order->total_amount);
+            $this->assertSame(DistributorOrder::DELIVERY_PENDING, $order->distributorOrder->delivery_status);
+        }
+
+        // Exact idempotent retry returns the same 5 trade_nos without creating duplicate orders.
+        $retry = $this->postJson('/api/v1/user/order/save', $payload)
+            ->assertOk()
+            ->assertJsonPath('data.quantity', 5);
+        $this->assertSame($tradeNos, $retry->json('data.trade_nos'));
+        $this->assertSame(5, Order::where('user_id', $distributor->id)->count());
+
+        foreach ($orders as $order) {
+            $this->assertNotNull($order->distributorOrder->subscriber->next_reset_at);
+        }
+
+        // Reusing the same idempotency_key with a different quantity must fail with 409.
+        $this->postJson('/api/v1/user/order/save', array_merge($payload, ['quantity' => 10]))
+            ->assertStatus(409);
+
+        // Large tight-loop batch with whitespace idempotency_key produces collision-free trade_nos.
+        $largeBatch = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 40,
+            'idempotency_key' => '   ',
+        ])->assertOk();
+        $largeTradeNos = $largeBatch->json('data.trade_nos');
+        $this->assertCount(40, $largeTradeNos);
+        $this->assertCount(40, array_unique($largeTradeNos));
+    }
+
+    public function test_distributor_batch_checkout_rejects_insufficient_capacity_atomically(): void
+    {
+        $distributor = $this->makeUser('capacity-dealer@example.com', true);
+        $plan = $this->makePlan();
+        $plan->update(['capacity_limit' => 3]);
+        $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY);
+        Sanctum::actingAs($distributor);
+
+        $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 5,
+        ])->assertStatus(422)
+            ->assertJsonFragment(['message' => '当前套餐剩余可售容量仅剩 2 个，请调小下单数量']);
+
+        $this->assertSame(1, Order::where('user_id', $distributor->id)->count());
+
+        $ok = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 2,
+        ])->assertOk();
+        $this->assertCount(2, $ok->json('data.trade_nos'));
+        $this->assertSame(3, Order::where('user_id', $distributor->id)->count());
+    }
+
+    public function test_distributor_batch_delivery_endpoint_preserves_order_and_tracks_individual_scan_transitions(): void
+    {
+        $distributor = $this->makeUser('batch-delivery-dealer@example.com', true);
+        $plan = $this->makePlan();
+        $server = $this->makeServer();
+        Sanctum::actingAs($distributor);
+
+        $tradeNos = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 3,
+        ])->assertOk()->json('data.trade_nos');
+
+        $initial = $this->postJson('/api/v1/user/distributor/delivery/batch', [
+            'trade_nos' => implode(',', $tradeNos),
+            'include_qr' => 1,
+        ])->assertOk()->json('data');
+
+        $this->assertCount(3, $initial);
+        $this->assertSame($tradeNos, array_column($initial, 'trade_no'));
+        foreach ($initial as $item) {
+            $this->assertSame(DistributorOrder::DELIVERY_PENDING, $item['delivery_status']);
+            $this->assertStringStartsWith('data:image/svg+xml;base64,', $item['qr_code']);
+        }
+
+        // Simulate scanning and connecting only the second QR code (#2).
+        $secondOrder = Order::where('trade_no', $tradeNos[1])->firstOrFail();
+        $secondDelivery = $secondOrder->distributorOrder()->with('subscriber')->firstOrFail();
+        $secondDelivery->update([
+            'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
+            'claimed_at' => time(),
+            'config_issued_at' => time(),
+            'claim_token' => null,
+        ]);
+        app(DistributorConnectionService::class)->recordFirstTraffic($server->toArray(), [$secondDelivery->subscriber_user_id => [1024, 2048]]);
+
+        $polled = $this->postJson('/api/v1/user/distributor/delivery/batch', [
+            'trade_nos' => $tradeNos,
+            'include_qr' => 0,
+        ])->assertOk()->json('data');
+
+        $this->assertSame(DistributorOrder::DELIVERY_PENDING, $polled[0]['delivery_status']);
+        $this->assertArrayNotHasKey('qr_code', $polled[0]);
+        $this->assertSame(DistributorOrder::DELIVERY_CLAIMED, $polled[1]['delivery_status']);
+        $this->assertSame($server->name, $polled[1]['connected_node_name']);
+        $this->assertSame(DistributorOrder::DELIVERY_PENDING, $polled[2]['delivery_status']);
+    }
+
+    public function test_regular_user_cannot_submit_batch_quantity(): void
+    {
+        $regularUser = $this->makeUser('regular-buyer@example.com', false);
+        $plan = $this->makePlan();
+        Sanctum::actingAs($regularUser);
+
+        $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 2,
+        ])->assertStatus(422)
+            ->assertJsonFragment(['message' => '仅分销商账号支持批量选择下单数量']);
+    }
+
+    public function test_same_key_retry_returns_committed_batch_even_after_plan_becomes_sold_out_or_unpublished(): void
+    {
+        $distributor = $this->makeUser('soldout-retry-dealer@example.com', true);
+        $plan = $this->makePlan();
+        $plan->update(['capacity_limit' => 2]);
+        Sanctum::actingAs($distributor);
+
+        $first = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 2,
+            'idempotency_key' => 'batch-soldout-idemp-key-01',
+        ])->assertOk();
+
+        $expectedTradeNos = $first->json('data.trade_nos');
+        $this->assertCount(2, $expectedTradeNos);
+        $this->assertSame(0, app(PlanService::class)->remainingCapacity($plan->fresh(), true));
+
+        // 1. Retrying with exact same idempotency_key when remaining capacity == 0 MUST return the committed batch
+        $retrySoldOut = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 2,
+            'idempotency_key' => 'batch-soldout-idemp-key-01',
+        ])->assertOk();
+        $this->assertSame($expectedTradeNos, $retrySoldOut->json('data.trade_nos'));
+
+        // 2. Retrying after plan is unpublished, hidden from distributors, and repriced MUST still return the committed batch
+        $plan->update([
+            'sell' => false,
+            'show' => false,
+            'distributor_visible' => false,
+            'prices' => [],
+        ]);
+        $retryUnpublished = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 2,
+            'idempotency_key' => 'batch-soldout-idemp-key-01',
+        ])->assertOk();
+        $this->assertSame($expectedTradeNos, $retryUnpublished->json('data.trade_nos'));
+        $this->assertSame(2, Order::where('user_id', $distributor->id)->count());
+        $this->assertSame(2, DistributorOrder::where('distributor_user_id', $distributor->id)->count());
+
+        // 3. A brand-new idempotency_key on the sold-out/unpublished plan is rejected cleanly
+        $plan->update([
+            'sell' => true,
+            'show' => true,
+            'distributor_visible' => true,
+            'prices' => [Plan::PERIOD_MONTHLY => 30],
+        ]);
+        $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 1,
+            'idempotency_key' => 'batch-soldout-idemp-key-02',
+        ])->assertStatus(400);
+    }
+
+    public function test_order_fetch_filters_by_idempotency_key_for_uncertain_write_reconciliation(): void
+    {
+        $distributor = $this->makeUser('fetch-idemp-dealer@example.com', true);
+        $plan = $this->makePlan();
+        Sanctum::actingAs($distributor);
+
+        $first = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 2,
+            'idempotency_key' => 'reconcile-batch-key-alpha',
+        ])->assertOk();
+        $alphaTradeNos = $first->json('data.trade_nos');
+
+        $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 1,
+            'idempotency_key' => 'reconcile-single-key-beta',
+        ])->assertOk();
+
+        $matchedAlpha = $this->getJson('/api/v1/user/order/fetch?idempotency_key=reconcile-batch-key-alpha')
+            ->assertOk()
+            ->json('data');
+        $this->assertCount(2, $matchedAlpha);
+        $this->assertEqualsCanonicalizing($alphaTradeNos, array_column($matchedAlpha, 'trade_no'));
+
+        $uncommitted = $this->getJson('/api/v1/user/order/fetch?idempotency_key=reconcile-never-committed')
+            ->assertOk()
+            ->json('data');
+        $this->assertSame([], $uncommitted);
+    }
+
+    public function test_locked_plan_capacity_blocks_cross_distributor_and_regular_order_activation_oversell(): void
+    {
+        $dealerA = $this->makeUser('cap-dealer-a@example.com', true);
+        $dealerB = $this->makeUser('cap-dealer-b@example.com', true);
+        $regularUser = $this->makeUser('cap-regular-user@example.com', false);
+        $plan = $this->makePlan();
+        $plan->update(['capacity_limit' => 2]);
+
+        $batchA = app(DistributorOrderService::class)->createBatch(
+            $dealerA,
+            $plan,
+            Plan::PERIOD_MONTHLY,
+            1,
+            '',
+            'cross-dealer-cap-a'
+        );
+        $this->assertCount(1, $batchA);
+        $this->assertSame(1, app(PlanService::class)->remainingCapacity($plan->fresh(), true));
+
+        // Second distributor requesting 2 when only 1 capacity remains is rejected under Plan lock
+        try {
+            app(DistributorOrderService::class)->createBatch(
+                $dealerB,
+                $plan,
+                Plan::PERIOD_MONTHLY,
+                2,
+                '',
+                'cross-dealer-cap-b-too-large'
+            );
+            $this->fail('Expected oversell batch by second distributor to fail.');
+        } catch (\App\Exceptions\ApiException $e) {
+            $this->assertSame(422, $e->getCode());
+        }
+
+        // Regular user creates a pending order while 1 capacity remains -> immediately reserves the last slot
+        $pendingOrder = OrderService::createFromRequest($regularUser, $plan->fresh(), Plan::PERIOD_MONTHLY);
+        $this->assertSame(0, app(PlanService::class)->remainingCapacity($plan->fresh(), true));
+
+        // Second distributor is immediately blocked from overselling the reserved slot
+        try {
+            app(DistributorOrderService::class)->createBatch(
+                $dealerB,
+                $plan->fresh(),
+                Plan::PERIOD_MONTHLY,
+                1,
+                '',
+                'cross-dealer-cap-b-blocked-by-reserved'
+            );
+            $this->fail('Expected distributor batch to be blocked while regular pending order holds last slot.');
+        } catch (\App\Exceptions\ApiException $e) {
+            $this->assertSame(__('Current product is sold out'), $e->getMessage());
+        }
+
+        // Paying the regular user's pending order succeeds cleanly without stranding in STATUS_PROCESSING
+        $this->assertTrue((new OrderService($pendingOrder->fresh()))->paid('cb-reserved-slot-001'));
+        $this->assertSame(Order::STATUS_COMPLETED, $pendingOrder->fresh()->status);
+        $this->assertSame($plan->id, $regularUser->fresh()->plan_id);
+        $this->assertSame(0, app(PlanService::class)->remainingCapacity($plan->fresh(), true));
+    }
+
+    public function test_order_fetch_idempotency_reconciliation_accepts_arbitrary_batch_sizes_with_existing_history(): void
+    {
+        $distributor = $this->makeUser('reconcile-history-dealer@example.com', true);
+        $plan = $this->makePlan();
+        $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '历史老客户');
+
+        Sanctum::actingAs($distributor);
+
+        // Normal order list fetch still strictly enforces per_page in [20, 50, 100]
+        $this->getJson('/api/v1/user/order/fetch?page=1&per_page=2')
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['per_page']);
+
+        // Batch of 2 with idempotency key reconciles cleanly with per_page=2 despite non-empty order history
+        $batchKey = 'reconcile-qty2-550e8400-e29b-41d4-a716';
+        $saveResp = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 2,
+            'idempotency_key' => $batchKey,
+        ])->assertOk();
+        $expectedTradeNos = $saveResp->json('data.trade_nos');
+        $this->assertCount(2, $expectedTradeNos);
+
+        $reconcileTwo = $this->getJson('/api/v1/user/order/fetch?page=1&per_page=2&idempotency_key=' . $batchKey)
+            ->assertOk();
+        $this->assertSame(2, $reconcileTwo->json('total'));
+        $reconciledTradeNos = collect($reconcileTwo->json('data'))
+            ->sortBy('id')
+            ->pluck('trade_no')
+            ->values()
+            ->all();
+        $this->assertSame($expectedTradeNos, $reconciledTradeNos);
+
+        // Single-order idempotency reconciliation with per_page=1 and omitted per_page (defaults to 500) also succeed
+        $singleKey = 'reconcile-qty1-550e8400-e29b-41d4-a717';
+        $singleTradeNo = $this->postJson('/api/v1/user/order/save', [
+            'plan_id' => $plan->id,
+            'period' => 'month_price',
+            'quantity' => 1,
+            'idempotency_key' => $singleKey,
+        ])->assertOk()->json('data');
+
+        $this->getJson('/api/v1/user/order/fetch?page=1&per_page=1&idempotency_key=' . $singleKey)
+            ->assertOk()
+            ->assertJsonPath('total', 1)
+            ->assertJsonPath('data.0.trade_no', $singleTradeNo);
+
+        $this->getJson('/api/v1/user/order/fetch?page=1&idempotency_key=' . $batchKey)
+            ->assertOk()
+            ->assertJsonPath('per_page', DistributorOrderService::MAX_BATCH_QUANTITY)
+            ->assertJsonPath('total', 2);
+    }
+
+    public function test_expired_users_and_cancelled_pending_orders_strictly_respect_plan_capacity(): void
+    {
+        Carbon::setTestNow(Carbon::create(2026, 10, 31, 12, 0, 0, config('app.timezone')));
+        try {
+            $plan = $this->makePlan();
+            $plan->update(['capacity_limit' => 1]);
+
+            $distributor = $this->makeUser('expired-cap-dealer@example.com', true);
+            $expiredRegular = $this->makeUser('expired-regular@example.com', false, [
+                'plan_id' => $plan->id,
+                'expired_at' => Carbon::now()->subDays(3)->timestamp,
+            ]);
+            $freshRegular = $this->makeUser('fresh-regular@example.com', false);
+
+            // Create distributor order and expire its subscriber so capacity becomes 1 free slot
+            $expiredDistOrder = $this->createDistributorOrder($distributor, $plan, Plan::PERIOD_MONTHLY, '已过期客户');
+            $expiredSubscriber = $expiredDistOrder->distributorOrder()->with('subscriber')->firstOrFail()->subscriber;
+            $expiredSubscriber->update(['expired_at' => Carbon::now()->subDays(2)->timestamp]);
+            $this->assertSame(1, app(PlanService::class)->remainingCapacity($plan->fresh()));
+
+            // Fresh regular user creates a pending order reserving the single slot; cancelling releases it
+            $pending = OrderService::createFromRequest($freshRegular, $plan->fresh(), Plan::PERIOD_MONTHLY);
+            $this->assertSame(0, app(PlanService::class)->remainingCapacity($plan->fresh()));
+            $this->assertTrue((new OrderService($pending->fresh()))->cancel());
+            $this->assertSame(1, app(PlanService::class)->remainingCapacity($plan->fresh()));
+
+            // Now occupy the 1 slot with an active distributor subscription
+            $activeDistOrder = $this->createDistributorOrder($distributor, $plan->fresh(), Plan::PERIOD_MONTHLY, '在用客户');
+            $this->assertSame(0, app(PlanService::class)->remainingCapacity($plan->fresh()));
+
+            // Expired regular user on the same plan MUST NOT bypass capacity_limit=1
+            try {
+                OrderService::createFromRequest($expiredRegular, $plan->fresh(), Plan::PERIOD_MONTHLY);
+                $this->fail('Expired regular user must not bypass sold-out capacity.');
+            } catch (\App\Exceptions\ApiException $e) {
+                $this->assertSame(__('Current product is sold out'), $e->getMessage());
+            }
+
+            // Expired distributor subscriber MUST NOT bypass capacity_limit=1 on renewal
+            Sanctum::actingAs($distributor);
+            $this->postJson('/api/v1/user/order/renew', [
+                'trade_no' => $expiredDistOrder->trade_no,
+                'period' => 'month_price',
+                'idempotency_key' => '123e4567-e89b-42d3-a456-426614174091',
+            ])->assertStatus(400)
+                ->assertJsonPath('message', __('Current product is sold out'));
+
+            // Active distributor subscriber ALREADY holds the slot, so renewal succeeds cleanly
+            $this->postJson('/api/v1/user/order/renew', [
+                'trade_no' => $activeDistOrder->trade_no,
+                'period' => 'month_price',
+                'idempotency_key' => '123e4567-e89b-42d3-a456-426614174092',
+            ])->assertOk();
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_batch_order_creation_bounds_sql_queries_and_dispatches_node_sync_without_observer_n_plus_one(): void
+    {
+        $distributor = $this->makeUser('perf-batch-dealer@example.com', true);
+        $plan = $this->makePlan();
+        $plan->update(['distributor_hwid_limit' => 3]);
+        Queue::fake([NodeUserSyncJob::class]);
+
+        DB::flushQueryLog();
+        DB::enableQueryLog();
+        try {
+            $orders = app(DistributorOrderService::class)->createBatch(
+                $distributor,
+                $plan,
+                Plan::PERIOD_MONTHLY,
+                10,
+                '',
+                'perf-batch-10-key'
+            );
+        } finally {
+            $queries = DB::getQueryLog();
+            DB::disableQueryLog();
+        }
+
+        $this->assertCount(10, $orders);
+        Queue::assertPushed(NodeUserSyncJob::class, 10);
+
+        // UserObserver::created post-commit `update v2_user` must NOT fire at all
+        $userUpdates = array_filter(
+            $queries,
+            static fn (array $entry): bool => preg_match('/^\s*update\s+[`"]?v2_user\b/i', (string) ($entry['query'] ?? '')) === 1
+        );
+        $this->assertCount(0, $userUpdates, 'Batch creation must not trigger redundant post-commit UPDATE v2_user per subscriber.');
+        $this->assertLessThanOrEqual(60, count($queries), 'SQL query count for 10-item batch must stay bounded (~4 queries/item + constant setup).');
     }
 
     private function makePlan(): Plan

@@ -80,7 +80,7 @@
 .dark .admin-dist-visibility,.dark .admin-dist-visibility section { color:#e5e7eb; border-color:#343b46; background:#181b20; }
 .dark .admin-dist-visibility>p,.dark .admin-dist-visibility section>label,.dark .admin-dist-visibility-user small { color:#9aa4b2; }
 .dark .admin-dist-visibility select,.dark .admin-dist-visibility-search input,.dark .admin-dist-visibility-user { color:#e5e7eb; border-color:#343b46; background:#20242b; }
-#admin-diagnostics-root { display:none; position:fixed; z-index:1000; inset:0 0 0 var(--diag-sidebar-right,240px); overflow-x:hidden; overflow-y:auto; background:#f7f9fc; color:#111827; font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif; box-sizing:border-box; }
+#admin-diagnostics-root { display:none; position:fixed; z-index:9001; inset:0 0 0 var(--diag-sidebar-right,240px); overflow-x:hidden; overflow-y:auto; background:#f7f9fc; color:#111827; font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif; box-sizing:border-box; }
 #admin-diagnostics-root.open { display:block; }
 .xboard-diagnostics-nav-active { background:#e9f7f7!important; color:#08777d!important; }
 .diag-center-page { max-width:1500px; margin:0 auto; padding:28px 32px 48px; box-sizing:border-box; display:grid; gap:16px; }

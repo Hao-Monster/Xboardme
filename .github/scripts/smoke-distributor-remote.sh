@@ -376,7 +376,49 @@ if [ "$SMOKE_VALIDATION_MODE" = 'release' ]; then
   grep -q 'xboard-node-schedule-dialog' admin-node-activation-schedule.css
 fi
 
-bash .github/scripts/smoke-admin-assets.sh
+expected_admin_dir=''
+if [ "$SMOKE_VALIDATION_MODE" = 'release' ]; then
+  admin_sub_sha=$(git ls-tree "$EXPECTED_ASSET_VERSION" public/assets/admin | awk '$2 == "commit" {print $3}')
+  if [[ ! "$admin_sub_sha" =~ ^[a-f0-9]{40}$ ]]; then
+    echo "Missing public/assets/admin submodule gitlink on commit $EXPECTED_ASSET_VERSION" >&2
+    exit 1
+  fi
+  admin_git_dir=''
+  if [[ -d public/assets/admin ]] && [[ "$(cd public/assets/admin && pwd -P)" == "$(git -C public/assets/admin rev-parse --show-toplevel 2>/dev/null || true)" ]]; then
+    admin_git_dir='public/assets/admin'
+    if ! git -C "$admin_git_dir" cat-file -e "${admin_sub_sha}^{commit}" 2>/dev/null; then
+      git -C "$admin_git_dir" fetch --depth=1 origin "$admin_sub_sha" >/dev/null
+    fi
+  else
+    sub_url=$(git show "$EXPECTED_ASSET_VERSION:.gitmodules" | git config --file - --get submodule.public/assets/admin.url)
+    [[ -n "$sub_url" ]]
+    admin_git_dir="$asset_work_dir/admin-sub-repo"
+    git init --quiet "$admin_git_dir"
+    auth_header_cfg=$(git config --local --get http.https://github.com/.extraheader 2>/dev/null || true)
+    if [[ -n "$auth_header_cfg" ]]; then
+      git -C "$admin_git_dir" config --local http.https://github.com/.extraheader "$auth_header_cfg"
+    fi
+    git -C "$admin_git_dir" fetch --depth=1 "$sub_url" "$admin_sub_sha" >/dev/null
+  fi
+  git -C "$admin_git_dir" cat-file -e "${admin_sub_sha}^{commit}"
+  expected_admin_dir="$asset_work_dir/expected-admin"
+  mkdir -p "$expected_admin_dir/locales"
+  git -C "$admin_git_dir" show "${admin_sub_sha}:manifest.json" > "$expected_admin_dir/manifest.json"
+  expected_entry=$(jq -er '."index.html".file | strings | select(length > 0)' "$expected_admin_dir/manifest.json")
+  mkdir -p "$expected_admin_dir/$(dirname -- "$expected_entry")"
+  git -C "$admin_git_dir" show "${admin_sub_sha}:${expected_entry}" > "$expected_admin_dir/$expected_entry"
+  mapfile -t expected_styles < <(jq -er '."index.html".css[] | strings | select(length > 0)' "$expected_admin_dir/manifest.json")
+  for expected_style in "${expected_styles[@]}"; do
+    mkdir -p "$expected_admin_dir/$(dirname -- "$expected_style")"
+    git -C "$admin_git_dir" show "${admin_sub_sha}:${expected_style}" > "$expected_admin_dir/$expected_style"
+  done
+  for locale in en-US zh-CN; do
+    git -C "$admin_git_dir" show "${admin_sub_sha}:locales/${locale}.js" > "$expected_admin_dir/locales/${locale}.js"
+  done
+fi
+
+ADMIN_ASSET_EXPECTED_DIR="$expected_admin_dir" \
+  bash .github/scripts/smoke-admin-assets.sh
 
 asset_version_query=''
 if [[ "$SMOKE_VALIDATION_MODE" == release ]]; then

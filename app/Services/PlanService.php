@@ -2,9 +2,11 @@
 
 namespace App\Services;
 
+use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
 use App\Exceptions\ApiException;
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
 
 class PlanService
@@ -14,6 +16,17 @@ class PlanService
     public function __construct(Plan $plan)
     {
         $this->plan = $plan;
+    }
+
+    public static function userHoldsActiveSlot(?User $user, Plan $plan, ?int $now = null): bool
+    {
+        if (!$user || (int) $user->plan_id !== (int) $plan->id) {
+            return false;
+        }
+
+        $timestamp = $now ?? Carbon::now()->timestamp;
+
+        return $user->expired_at === null || (int) $user->expired_at >= $timestamp;
     }
 
     /**
@@ -45,7 +58,7 @@ class PlanService
             return $plans;
         }
 
-        $now = time();
+        $now = Carbon::now()->timestamp;
         $activeCounts = User::query()
             ->whereIn('plan_id', $limitedPlanIds)
             ->where(function ($query) use ($now) {
@@ -56,14 +69,23 @@ class PlanService
             ->groupBy('plan_id')
             ->pluck('aggregate', 'plan_id');
 
-        return $plans->filter(function (Plan $plan) use ($activeCounts): bool {
+        $reservedOrderCounts = Order::query()
+            ->whereIn('plan_id', $limitedPlanIds)
+            ->whereIn('status', [Order::STATUS_PENDING, Order::STATUS_PROCESSING])
+            ->whereIn('type', [Order::TYPE_NEW_PURCHASE, Order::TYPE_UPGRADE])
+            ->selectRaw('plan_id, COUNT(*) as aggregate')
+            ->groupBy('plan_id')
+            ->pluck('aggregate', 'plan_id');
+
+        return $plans->filter(function (Plan $plan) use ($activeCounts, $reservedOrderCounts): bool {
             if ($plan->capacity_limit === null || $plan->capacity_limit <= 0) {
                 return true;
             }
 
             $activeUserCount = (int) ($activeCounts[$plan->id] ?? 0);
+            $reservedOrderCount = (int) ($reservedOrderCounts[$plan->id] ?? 0);
 
-            return ($plan->capacity_limit - $activeUserCount) > 0;
+            return ((int) $plan->capacity_limit - $activeUserCount - $reservedOrderCount) > 0;
         });
     }
 
@@ -97,17 +119,21 @@ class PlanService
                 && $plan->show && $plan->sell && $this->hasCapacity($plan);
         }
 
-        // 如果是续费
-        if ($user->plan_id === $plan->id) {
-            return $plan->renew;
+        // 如果是同套餐续费或过期重购
+        if ((int) $user->plan_id === (int) $plan->id) {
+            if (self::userHoldsActiveSlot($user, $plan)) {
+                return (bool) $plan->renew;
+            }
+
+            return (bool) $plan->renew && (bool) $plan->show && $this->hasCapacity($plan);
         }
 
-        // 如果是新购
+        // 如果是新购或换套餐
         return $visibility->allows($plan, $user)
             && $plan->show && $plan->sell && $this->hasCapacity($plan);
     }
 
-    public function validatePurchase(User $user, string $period): void
+    public function validatePurchase(User $user, string $period, bool $forUpdate = false): void
     {
         if (!$this->plan) {
             throw new ApiException(__('Subscription plan does not exist'));
@@ -131,15 +157,19 @@ class PlanService
             throw new ApiException(__('Subscription plan does not exist'));
         }
 
-        if ($user->plan_id !== $this->plan->id && !$this->hasCapacity($this->plan)) {
+        $this->validatePlanAvailability($user);
+
+        if (!self::userHoldsActiveSlot($user, $this->plan) && !$this->hasCapacity($this->plan, $forUpdate)) {
             throw new ApiException(__('Current product is sold out'));
         }
-
-        $this->validatePlanAvailability($user);
     }
 
-    public function validateDistributorPurchase(User $distributor, string $period): void
+    public function validateDistributorPurchase(User $distributor, string $period, int $quantity = 1, bool $forUpdate = false): void
     {
+        if ($quantity < 1) {
+            throw new ApiException('下单数量至少为1个', 422);
+        }
+
         $periodKey = self::getPeriodKey($period);
         if ($periodKey === Plan::PERIOD_RESET_TRAFFIC) {
             throw new ApiException('分销商只能为终端客户购买新订阅');
@@ -155,12 +185,18 @@ class PlanService
             throw new ApiException(__('Subscription plan does not exist'));
         }
 
-        if (!$this->hasCapacity($this->plan)) {
-            throw new ApiException(__('Current product is sold out'));
+        $remainingCapacity = $this->remainingCapacity($this->plan, $forUpdate);
+        if ($remainingCapacity !== null) {
+            if ($remainingCapacity <= 0) {
+                throw new ApiException(__('Current product is sold out'));
+            }
+            if ($remainingCapacity < $quantity) {
+                throw new ApiException("当前套餐剩余可售容量仅剩 {$remainingCapacity} 个，请调小下单数量", 422);
+            }
         }
     }
 
-    public function validateDistributorRenewal(User $subscriber, string $period): void
+    public function validateDistributorRenewal(User $subscriber, string $period, ?int $now = null): void
     {
         $periodKey = self::getPeriodKey($period);
         if (in_array($periodKey, [Plan::PERIOD_ONETIME, Plan::PERIOD_RESET_TRAFFIC], true)) {
@@ -184,7 +220,8 @@ class PlanService
             throw new ApiException(__('This subscription cannot be renewed, please change to another subscription'));
         }
 
-        if (!$this->plan->show && $subscriber->expired_at <= time()) {
+        $timestamp = $now ?? Carbon::now()->timestamp;
+        if (!$this->plan->show && (int) $subscriber->expired_at <= $timestamp) {
             throw new ApiException(__('This subscription has expired, please change to another subscription'));
         }
     }
@@ -259,21 +296,40 @@ class PlanService
         }
     }
 
-    public function hasCapacity(Plan $plan): bool
+    public function remainingCapacity(Plan $plan, bool $forUpdate = false): ?int
     {
         // The plan schema defines both NULL and 0 as unlimited capacity.
         if ($plan->capacity_limit === null || $plan->capacity_limit <= 0) {
-            return true;
+            return null;
         }
 
-        $activeUserCount = User::where('plan_id', $plan->id)
-            ->where(function ($query) {
-                $query->where('expired_at', '>=', time())
+        // Callers serializing writes hold an X-lock on v2_plan with no prior non-locking
+        // SELECT in the transaction; never range-lock v2_user to avoid table locks/deadlocks.
+        unset($forUpdate);
+
+        $now = Carbon::now()->timestamp;
+        $activeUserCount = User::query()
+            ->where('plan_id', $plan->id)
+            ->where(function ($query) use ($now) {
+                $query->where('expired_at', '>=', $now)
                     ->orWhereNull('expired_at');
             })
             ->count();
 
-        return ($plan->capacity_limit - $activeUserCount) > 0;
+        $reservedOrderCount = Order::query()
+            ->where('plan_id', $plan->id)
+            ->whereIn('status', [Order::STATUS_PENDING, Order::STATUS_PROCESSING])
+            ->whereIn('type', [Order::TYPE_NEW_PURCHASE, Order::TYPE_UPGRADE])
+            ->count();
+
+        return max(0, (int) $plan->capacity_limit - $activeUserCount - $reservedOrderCount);
+    }
+
+    public function hasCapacity(Plan $plan, bool $forUpdate = false): bool
+    {
+        $remaining = $this->remainingCapacity($plan, $forUpdate);
+
+        return $remaining === null || $remaining > 0;
     }
 
     public function getAvailablePeriods(Plan $plan): array

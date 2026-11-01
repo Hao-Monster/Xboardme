@@ -194,6 +194,7 @@ return [
         App\Providers\OctaneServiceProvider::class,
         App\Providers\PluginServiceProvider::class,
         App\Providers\ProtocolServiceProvider::class,
+        App\Providers\SubscriptionServiceProvider::class,
 
     ],
 

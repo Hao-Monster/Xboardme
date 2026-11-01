@@ -31,7 +31,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->values();
 
         $this->assertSame(
-            '9e81e556527b34c3fc4ef8ea9b20f2393e935ca38aa27456142b3fe8a4b0b6a4',
+            '9ba5cb25d19e38314a47a29c872d5f3adc7123eb7ef595e9a8fca558743d6ec8',
             hash('sha256', $routes->implode("\n")),
             sprintf('The normalized public route contract contains %d routes.', $routes->count())
         );
@@ -68,9 +68,9 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->sort()
             ->values();
 
-        $this->assertSame(60, $migrations->count());
+        $this->assertSame(62, $migrations->count());
         $this->assertSame(
-            '04dc5eaaeecc5b54ed436df1c8c49c82c18b46b30ff6f3348f733fb3212c89bf',
+            '62a3aac9db30e790a08b3b36b3253d16f89411bee5345ee7b5e1281751441353',
             hash('sha256', $migrations->implode("\n"))
         );
     }
@@ -257,6 +257,8 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             '2026_09_24_000002_add_distributor_hwid_limit_to_v2_plan',
             '2026_10_06_000001_add_distributor_subscription_names',
             '2026_10_10_000001_add_distributor_revision_to_v2_user',
+            '2026_10_30_000001_create_distributor_subscription_resets',
+            '2026_10_31_000001_add_plan_capacity_indexes',
         ], $approved);
 
         $preflight = file_get_contents(base_path('.github/scripts/preflight-xboard-compose.sh'));
@@ -351,7 +353,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
         $script = file_get_contents(base_path('.github/scripts/activate-xboard-green-roles.sh'));
 
         $this->assertIsString($script);
-        $stopPrevious = 'docker stop --time 20 "$previous_horizon" >/dev/null';
+        $stopPrevious = 'docker stop --time 60 "$previous_horizon" >/dev/null';
         $startCandidate = 'docker run -d \\' . "\n" . '  --name "$horizon_name"';
         $stopPosition = strpos($script, $stopPrevious);
         $startPosition = strpos($script, $startCandidate);

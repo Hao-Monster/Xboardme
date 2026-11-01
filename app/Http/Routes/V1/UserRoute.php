@@ -52,8 +52,10 @@ class UserRoute
             $router->post('/order/cancel', [OrderController::class, 'cancel']);
             // Distributor delivery
             $router->get('/distributor/delivery', [DistributorController::class, 'delivery']);
+            $router->post('/distributor/delivery/batch', [DistributorController::class, 'deliveryBatch']);
             $router->post('/distributor/delivery/close', [DistributorController::class, 'close']);
             $router->get('/distributor/subscription-qr', [DistributorController::class, 'subscriptionQr']);
+            $router->post('/distributor/subscription-reset', [DistributorController::class, 'resetSubscription']);
             // Plan
             $router->get('/plan/fetch', [PlanController::class, 'fetch']);
             // Invite

@@ -34,6 +34,101 @@ final class DiagnosticLeaseService
     public const MAX_CONCURRENT_SESSIONS = DiagnosticContract::MAX_ACTIVE_LEASES_PER_PANEL;
     public const CLOCK_ROLLBACK_TOLERANCE_MS = 1_000;
 
+    private const KEY_HELPERS_SCRIPT = <<<'LUA'
+-- EVAL KEYS already contain the Redis client's prefix; literal Lua keys do not.
+local controlSuffix = 'diag:v1:control'
+if string.sub(KEYS[1], -string.len(controlSuffix)) ~= controlSuffix then
+    return redis.error_reply('invalid_diagnostics_control_key')
+end
+local physicalPrefix = string.sub(KEYS[1], 1, string.len(KEYS[1]) - string.len(controlSuffix))
+local diagnosticPrefix = physicalPrefix .. 'diag:v1:'
+
+local function decodeRecord(raw)
+    if not raw then return nil end
+    local ok, record = pcall(cjson.decode, raw)
+    if ok and type(record) == 'table' then return record end
+    return nil
+end
+
+local function legacySessionMatches(s, sid, nowMs, diagnosticId, subscriberId, orderId)
+    local control = decodeRecord(redis.call('GET', KEYS[1]))
+    if not s or not control or type(control.epoch) ~= 'string' or control.epoch == ''
+        or not tonumber(control.control_version) or s.session_id ~= sid
+        or type(s.diagnostic_id) ~= 'string' or string.len(s.diagnostic_id) ~= 24
+        or not string.match(s.diagnostic_id, '^[0-9a-f]+$')
+        or s.created_control_epoch ~= control.epoch
+        or not tonumber(s.subscriber_user_id) or tonumber(s.subscriber_user_id) <= 0
+        or not tonumber(s.order_id) or tonumber(s.order_id) <= 0
+        or not tonumber(s.expires_at_ms)
+        or redis.call('GET', diagnosticPrefix .. 'subject:' .. s.diagnostic_id) ~= sid
+    then return false end
+    if diagnosticId and diagnosticId ~= '' and s.diagnostic_id ~= diagnosticId then return false end
+    if subscriberId and subscriberId > 0 and tonumber(s.subscriber_user_id) ~= subscriberId then return false end
+    if orderId and orderId > 0 and tonumber(s.order_id) ~= orderId then return false end
+    if s.enabled == true and tonumber(s.expires_at_ms) > nowMs
+        and not redis.call('ZSCORE', diagnosticPrefix .. 'active', sid)
+    then return false end
+    return true
+end
+
+local function readSession(sid, nowMs, diagnosticId, subscriberId, orderId)
+    local key = diagnosticPrefix .. 'session:' .. sid
+    local raw = redis.call('GET', key)
+    -- An existing canonical value, including a tombstone or malformed record,
+    -- always wins. Never resurrect an old raw record over it.
+    if raw or physicalPrefix == '' then return raw end
+    if string.len(sid) ~= 32 or not string.match(sid, '^[0-9a-f]+$') then return nil end
+    local legacyKey = 'diag:v1:session:' .. sid
+    local legacyRaw = redis.call('GET', legacyKey)
+    if redis.call('PTTL', legacyKey) > 0
+        and legacySessionMatches(decodeRecord(legacyRaw), sid, nowMs, diagnosticId, subscriberId, orderId)
+    then return legacyRaw end
+    return nil
+end
+
+local function readAck(sid, nodeId, nowMs)
+    local key = diagnosticPrefix .. 'ack:' .. sid .. ':' .. tostring(nodeId)
+    local raw = redis.call('GET', key)
+    if raw or physicalPrefix == '' then return raw end
+    local legacyKey = 'diag:v1:ack:' .. sid .. ':' .. tostring(nodeId)
+    local legacyRaw = redis.call('GET', legacyKey)
+    local ack = decodeRecord(legacyRaw)
+    local session = decodeRecord(readSession(sid, nowMs))
+    local control = decodeRecord(redis.call('GET', KEYS[1]))
+    local runtime = decodeRecord(redis.call('GET', diagnosticPrefix .. 'node_runtime:' .. tostring(nodeId)))
+    if not ack or not control or not runtime or redis.call('PTTL', legacyKey) <= 0
+        or not legacySessionMatches(session, sid, nowMs)
+        or redis.call('SISMEMBER', diagnosticPrefix .. 'node_acks:' .. tostring(nodeId), sid) ~= 1
+        or ack.session_id ~= sid or tonumber(ack.node_id) ~= tonumber(nodeId)
+        or ack.control_epoch ~= control.epoch or not tonumber(ack.control_version)
+        or tonumber(ack.control_version) < 0
+        or tonumber(ack.control_version or -1) > tonumber(control.control_version)
+        or not tonumber(ack.revision) or tonumber(ack.revision) < 1
+        or tonumber(ack.revision or 0) > tonumber(session.revision or 1)
+        or type(runtime.runtime_id) ~= 'string' or string.len(runtime.runtime_id) ~= 32
+        or not string.match(runtime.runtime_id, '^[0-9a-f]+$')
+        or (runtime.transport ~= 'rest' and runtime.transport ~= 'rest_v1' and runtime.transport ~= 'rest_v2' and runtime.transport ~= 'ws')
+        or type(runtime.auth_principal) ~= 'string' or runtime.auth_principal == ''
+        or ack.runtime_id ~= runtime.runtime_id or ack.transport ~= runtime.transport
+        or ack.owner ~= runtime.auth_principal
+    then return nil end
+    local owner = redis.call('GET', physicalPrefix .. 'node:connection-owner:' .. tostring(nodeId))
+    if (ack.transport == 'ws' or owner) and (not owner or owner ~= runtime.ws_connection_id) then return nil end
+    return legacyRaw
+end
+LUA;
+
+    private const READ_LEGACY_SCRIPT = <<<'LUA'
+-- diagnostics_legacy_read: bounded read-only compatibility, never refresh TTL.
+local raw
+if ARGV[6] ~= '' then
+    raw = readAck(ARGV[1], tonumber(ARGV[6]), tonumber(ARGV[2]))
+else
+    raw = readSession(ARGV[1], tonumber(ARGV[2]), ARGV[3], tonumber(ARGV[4]), tonumber(ARGV[5]))
+end
+return raw
+LUA;
+
     private const START_SCRIPT = <<<'LUA'
 local controlKey = KEYS[1]
 local activeKey = KEYS[2]
@@ -94,8 +189,7 @@ if existingIdempRaw then
     if existingIdemp.fingerprint ~= idempFingerprint then
         return cjson.encode({ err = 'idempotency_conflict' })
     end
-    local boundSessionKey = 'diag:v1:session:' .. existingIdemp.session_id
-    local boundSessionRaw = redis.call('GET', boundSessionKey)
+    local boundSessionRaw = readSession(existingIdemp.session_id, nowMs, diagnosticId, subscriberUserId, orderId)
     if boundSessionRaw then
         local boundSession = cjson.decode(boundSessionRaw)
         local inActive = redis.call('ZSCORE', activeKey, existingIdemp.session_id)
@@ -121,8 +215,7 @@ end
 -- 2. Check existing active session for subject (do not extend expiration)
 local existingSessionId = redis.call('GET', subjectKey)
 if existingSessionId then
-    local existingSessionKey = 'diag:v1:session:' .. existingSessionId
-    local existingSessionRaw = redis.call('GET', existingSessionKey)
+    local existingSessionRaw = readSession(existingSessionId, nowMs, diagnosticId, subscriberUserId, orderId)
     if existingSessionRaw then
         local existingSession = cjson.decode(existingSessionRaw)
         local inActive = redis.call('ZSCORE', activeKey, existingSessionId)
@@ -181,7 +274,7 @@ local sessionRecord = {
 }
 
 local sessionTtlSec = math.ceil(leaseDurationMs / 1000) + retentionTtlSec
-local sessionKey = 'diag:v1:session:' .. newSessionId
+local sessionKey = diagnosticPrefix .. 'session:' .. newSessionId
 redis.call('SET', sessionKey, cjson.encode(sessionRecord), 'EX', sessionTtlSec)
 redis.call('SET', subjectKey, newSessionId, 'EX', sessionTtlSec)
 redis.call('ZADD', activeKey, expiresAtMs, newSessionId)
@@ -215,6 +308,8 @@ local expectedDiagnosticId = ARGV[3]
 local idempFingerprint = ARGV[4]
 local retentionTtlSec = tonumber(ARGV[5])
 local forcedNowMs = tonumber(ARGV[6])
+local expectedSubscriberUserId = tonumber(ARGV[7])
+local expectedOrderId = tonumber(ARGV[8])
 
 local nowMs = forcedNowMs
 if not nowMs or nowMs <= 0 then
@@ -248,7 +343,7 @@ if existingIdempRaw then
     end
 end
 
-local sessionRaw = redis.call('GET', sessionKey)
+local sessionRaw = readSession(sessionId, nowMs, expectedDiagnosticId, expectedSubscriberUserId, expectedOrderId)
 if not sessionRaw then
     return cjson.encode({ err = 'session_not_found' })
 end
@@ -318,7 +413,7 @@ if not controlRaw then
 end
 local control = cjson.decode(controlRaw)
 
-local sessionRaw = redis.call('GET', sessionKey)
+local sessionRaw = readSession(sessionId, nowMs)
 if not sessionRaw then
     return cjson.encode({ changed = false })
 end
@@ -407,7 +502,7 @@ local sessions = {}
 local sessionIdList = {}
 
 for _, sessionId in ipairs(activeSessionIds) do
-    local sRaw = redis.call('GET', 'diag:v1:session:' .. sessionId)
+    local sRaw = readSession(sessionId, nowMs)
     if sRaw then
         local s = cjson.decode(sRaw)
         if s.created_control_epoch == control.epoch and s.enabled == true and tonumber(s.expires_at_ms) > nowMs then
@@ -536,8 +631,8 @@ for _, item in ipairs(ackSessions) do
     local sid = item.session_id
     if sid and allowedSet[sid] then
         ackedInPayload[sid] = true
-        local ackKey = 'diag:v1:ack:' .. sid .. ':' .. tostring(nodeId)
-        local prevRaw = redis.call('GET', ackKey)
+        local ackKey = diagnosticPrefix .. 'ack:' .. sid .. ':' .. tostring(nodeId)
+        local prevRaw = readAck(sid, nodeId, nowMs)
         local shouldWrite = true
         if prevRaw then
             local prev = cjson.decode(prevRaw)
@@ -573,8 +668,8 @@ end
 local prevTracked = redis.call('SMEMBERS', nodeAcksKey)
 for _, sid in ipairs(prevTracked) do
     if not allowedSet[sid] then
-        local ackKey = 'diag:v1:ack:' .. sid .. ':' .. tostring(nodeId)
-        local prevRaw = redis.call('GET', ackKey)
+        local ackKey = diagnosticPrefix .. 'ack:' .. sid .. ':' .. tostring(nodeId)
+        local prevRaw = readAck(sid, nodeId, nowMs)
         if prevRaw then
             local prev = cjson.decode(prevRaw)
             local canRevoke = (prev.control_epoch ~= controlEpoch)
@@ -674,7 +769,7 @@ LUA;
 
         // Pre-check whether an idempotent or already-active session exists before calling storage health guard.
         // Existing sessions return without extending expiration and do not require creating a new lease.
-        $needsNewLease = $this->checkNeedsNewLease($idempRedisKey, $subjectRedisKey, $fingerprint);
+        $needsNewLease = $this->checkNeedsNewLease($idempRedisKey, $subjectRedisKey, $fingerprint, $diagnosticId, $subscriberUserId, $orderId);
         if ($needsNewLease) {
             $this->healthClient->assertReadyForNewLease($panelScope);
         }
@@ -684,7 +779,7 @@ LUA;
 
         try {
             $rawResult = Redis::command('eval', [
-                self::START_SCRIPT,
+                self::KEY_HELPERS_SCRIPT . "\n" . self::START_SCRIPT,
                 [
                     self::KEY_CONTROL,
                     self::KEY_ACTIVE,
@@ -781,7 +876,7 @@ LUA;
 
         try {
             $rawResult = Redis::command('eval', [
-                self::STOP_SCRIPT,
+                self::KEY_HELPERS_SCRIPT . "\n" . self::STOP_SCRIPT,
                 [
                     self::KEY_CONTROL,
                     self::KEY_ACTIVE,
@@ -794,6 +889,8 @@ LUA;
                     $fingerprint,
                     (string) self::RETENTION_TTL_SECONDS,
                     (string) ($this->forcedNowMs ?? 0),
+                    (string) $resolved['subscriber_user_id'],
+                    (string) $orderId,
                 ],
                 5,
             ]);
@@ -871,7 +968,7 @@ LUA;
         try {
             $sessionId = Redis::get($subjectKey);
             if (is_string($sessionId) && $sessionId !== '') {
-                $sessionRaw = Redis::get(self::PREFIX_SESSION . $sessionId);
+                $sessionRaw = $this->readSessionOrAck($sessionId, $nowMs, $diagnosticId, (int) $resolved['subscriber_user_id'], $orderId);
                 if (is_string($sessionRaw) && $sessionRaw !== '') {
                     $decoded = json_decode($sessionRaw, true);
                     if (is_array($decoded) && ($decoded['created_control_epoch'] ?? '') === $controlEpoch) {
@@ -980,7 +1077,7 @@ LUA;
 
         try {
             $rawResult = Redis::command('eval', [
-                self::SNAPSHOT_SCRIPT,
+                self::KEY_HELPERS_SCRIPT . "\n" . self::SNAPSHOT_SCRIPT,
                 [
                     self::KEY_CONTROL,
                     self::KEY_ACTIVE,
@@ -1124,7 +1221,7 @@ LUA;
 
         try {
             $rawResult = Redis::command('eval', [
-                self::ACK_SCRIPT,
+                self::KEY_HELPERS_SCRIPT . "\n" . self::ACK_SCRIPT,
                 [
                     self::KEY_CONTROL,
                     self::PREFIX_ACK_BIND . $nodeId,
@@ -1383,7 +1480,30 @@ LUA;
         }
     }
 
-    private function checkNeedsNewLease(string $idempRedisKey, string $subjectRedisKey, string $expectedFingerprint): bool
+    private function readSessionOrAck(
+        string $sessionId,
+        int $nowMs,
+        string $diagnosticId = '',
+        int $subscriberUserId = 0,
+        int $orderId = 0,
+        ?int $nodeId = null
+    ): ?string {
+        $key = $nodeId === null ? self::PREFIX_SESSION . $sessionId : self::PREFIX_ACK . $sessionId . ':' . $nodeId;
+        $raw = Redis::get($key);
+        if (is_string($raw) && $raw !== '') {
+            return $raw;
+        }
+        $raw = Redis::command('eval', [
+            self::KEY_HELPERS_SCRIPT . "\n" . self::READ_LEGACY_SCRIPT,
+            [self::KEY_CONTROL, $sessionId, (string) $nowMs, $diagnosticId, (string) $subscriberUserId,
+                (string) $orderId, $nodeId === null ? '' : (string) $nodeId],
+            1,
+        ]);
+
+        return is_string($raw) && $raw !== '' ? $raw : null;
+    }
+
+    private function checkNeedsNewLease(string $idempRedisKey, string $subjectRedisKey, string $expectedFingerprint, string $diagnosticId, int $subscriberUserId, int $orderId): bool
     {
         try {
             $nowMs = $this->readRedisTimeMs();
@@ -1406,7 +1526,7 @@ LUA;
                     }
                     $boundSid = (string) ($idemp['session_id'] ?? '');
                     if ($boundSid !== '' && $controlEpoch !== '' && isset($activeSet[$boundSid])) {
-                        $boundRaw = Redis::get(self::PREFIX_SESSION . $boundSid);
+                        $boundRaw = $this->readSessionOrAck($boundSid, $nowMs, $diagnosticId, $subscriberUserId, $orderId);
                         if (is_string($boundRaw) && $boundRaw !== '') {
                             $boundSession = json_decode($boundRaw, true);
                             if (
@@ -1424,7 +1544,7 @@ LUA;
 
             $existingSid = Redis::get($subjectRedisKey);
             if (is_string($existingSid) && $existingSid !== '' && $controlEpoch !== '' && isset($activeSet[$existingSid])) {
-                $sRaw = Redis::get(self::PREFIX_SESSION . $existingSid);
+                $sRaw = $this->readSessionOrAck($existingSid, $nowMs, $diagnosticId, $subscriberUserId, $orderId);
                 if (is_string($sRaw) && $sRaw !== '') {
                     $s = json_decode($sRaw, true);
                     if (
@@ -1471,7 +1591,7 @@ LUA;
                 if ($sessionId === '') {
                     continue;
                 }
-                $sessionRaw = Redis::get(self::PREFIX_SESSION . $sessionId);
+                $sessionRaw = $this->readSessionOrAck($sessionId, $effectiveNowMs);
                 if (!is_string($sessionRaw) || $sessionRaw === '') {
                     continue;
                 }
@@ -1527,7 +1647,7 @@ LUA;
     ): ?array {
         try {
             $raw = Redis::command('eval', [
-                self::RECONCILE_ELIGIBLE_NODES_SCRIPT,
+                self::KEY_HELPERS_SCRIPT . "\n" . self::RECONCILE_ELIGIBLE_NODES_SCRIPT,
                 [
                     self::KEY_CONTROL,
                     self::KEY_ACTIVE,
@@ -1633,7 +1753,7 @@ LUA;
 
             $ack = null;
             try {
-                $ackRaw = Redis::get(self::PREFIX_ACK . $sessionId . ':' . $nid);
+                $ackRaw = $this->readSessionOrAck($sessionId, $nowMs, nodeId: $nid);
                 if (is_string($ackRaw) && $ackRaw !== '') {
                     $decodedAck = json_decode($ackRaw, true);
                     if (is_array($decodedAck)) {

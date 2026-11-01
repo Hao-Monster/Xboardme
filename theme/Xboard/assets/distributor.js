@@ -21,6 +21,15 @@
     half_year_price: ['半年', '185天'],
     year_price: ['1年', '366天'],
   };
+  const MAX_ORDER_QUANTITY = 500;
+  const QUICK_ORDER_QUANTITIES = [5, 10];
+  const PURCHASE_RECOVERY_STORAGE_KEY = 'xboard_distributor_purchase_recovery';
+  const PURCHASE_RECOVERY_SCHEMA = 2;
+  // An empty order check only proves an uncertain write failed after the original request can no
+  // longer be executing server-side (Octane max execution 60s plus queueing and lock waits).
+  const PURCHASE_ABANDON_SAFE_DELAY_MS = 180000;
+  const BATCH_DELIVERY_TIMEOUT_MS = 30000;
+  const BATCH_QR_INLINE_THRESHOLD = 25;
   const COPY = {
     'zh-CN': {
       buy: '购买订阅', overview: '经营概览', orders: '我的订单', invite: '我的邀请', knowledge: '使用文档', clients: '客户端下载', logout: '退出登录',
@@ -30,12 +39,22 @@
       featured: '精选套餐', traffic: '套餐流量', speed: '速度限制', devices: '同时在线', resetMethod: '流量重置',
       followSystem: '跟随系统', firstDayMonth: '每月1日', monthlyReset: '按月重置', neverReset: '不重置', firstDayYear: '每年1月1日', yearlyReset: '按年重置',
       perMonth: '折合 {price}/月', save: '省 {percent}%', oneTimeHint: '一次性交付',
-      saved: '已省', orderAction: '已确认，直接下单', soldOut: '已售罄',
+      saved: '已省', orderAction: '已确认，直接下单', orderActionBatch: '已确认，直接下单（{count}个）', soldOut: '已售罄',
+      quantity: '下单数量', quickQuantity: '一次{count}个', decreaseQuantity: '减少下单数量', increaseQuantity: '增加下单数量',
+      orderQuantityInput: '下单数量输入', totalPrice: '合计', totalSaved: '共省', quantityMaxHint: '单次最多支持 500 个订阅',
+      batchQrTitle: '客户订阅二维码（共 {total} 个 · 待领取 {pending} / 已领取 {claimed}）',
+      batchQrHint: '点击右侧下载按钮可批量保存全部二维码图片，每张二维码仅限一位客户扫描领取一次。',
+      batchQrPreparing: '正在生成二维码图片（{done}/{total}）…',
+      downloadBatchQrs: '下载全部二维码 ({count}张)',
+      downloadingBatchQrs: '正在下载 ({count}张)…',
+      batchOrderUnconfirmed: '未能确认本次（{count}个）下单结果，请先查看我的订单',
       showPrices: '显示价格', hidePrices: '隐藏价格', retry: '重试',
       networkUnavailable: '网络暂时不可用，请检查网络后重试', serviceUnavailable: '服务暂时不可用，请稍后重试',
       orderUnconfirmed: '未能确认下单结果，请先查看我的订单', checkPurchaseOrders: '查看我的订单',
       writeUnconfirmed: '未能确认操作结果，请先核对记录，勿重复提交',
-      purchaseChecked: '我已核对，继续下单', retryDelivery: '重新获取交付信息',
+      purchaseChecked: '我已核对，继续下单', retryDelivery: '重新获取交付信息', resumePurchase: '恢复本次下单',
+      abandonPurchase: '核对无订单，放弃本次下单', abandonPurchaseConfirmText: '确认已核对订单列表中没有本次订单，放弃后可重新下单。', confirmAbandonPurchase: '确认放弃', cancelAbandonPurchase: '暂不放弃',
+      abandonPurchaseTooEarly: '暂未查到本次订单，原请求可能仍在处理中，请在 {minutes} 分钟后再次查看我的订单', abandonPurchaseStale: '本次下单状态已在其他页面更新，请重新核对', purchaseAbandoned: '已放弃本次下单',
       deliveryUnavailable: '订单已创建，暂未获取到交付信息，请查看订单或重新获取',
       promoStable: '稳定', promoFast: '高速', promoCompensation: '慢必赔',
       deliveryStepOne: '选择套餐并下单', deliveryStepTwo: '客户扫描二维码', deliveryStepThree: '确认节点可用',
@@ -50,6 +69,12 @@
       remark: '备注', actions: '操作', customerName: '用户名称', subscriptionName: '订阅名称',
       boundDevices: '已绑定设备', unboundDevice: '尚未绑定设备', hwidDisabled: '未启用设备绑定',
       viewSubscriptionQr: '查看订阅二维码', subscriptionQrAction: '二维码', subscriptionPending: '订阅尚未生成',
+      resetSubscription: '重置订阅', resetSubscriptionConfirm: '确认重置全部设备',
+      resetSubscriptionHint: '旧订阅链接和二维码将失效，全部设备绑定将被清除。所有设备需要重新扫码。套餐流量、已用流量和到期时间保持不变。',
+      resetSubscriptionPending: '正在重置，请勿使用旧二维码。', resetSubscriptionUncertain: '尚未确认本次重置结果，旧二维码已隐藏。点击“恢复本次重置”安全重试同一次操作。',
+      resetSubscriptionRetry: '恢复本次重置', resetSubscriptionSuccess: '订阅已重置，请让所有设备重新扫码。旧连接凭据将在节点同步后失效。',
+      resetSubscriptionConflict: '订阅状态已变化，请重新获取二维码后再确认重置。', resetSubscriptionRefresh: '重新获取二维码', resetSubscriptionDevices: '将清除 {count} 个设备绑定',
+      resetInOrdersTag: '我的订单页面也可以重置',
       subscriptionBoundDevice: '订阅已绑定设备', subscriptionUnboundDevice: '订阅尚未绑定设备',
       subscriptionHwidDisabled: '该订阅未启用设备绑定', copyImage: '复制图片', downloadImage: '下载图片',
       copyImageUnsupported: '当前浏览器不支持复制图片，请使用下载图片',
@@ -84,12 +109,22 @@
       featured: 'Featured', traffic: 'Traffic', speed: 'Speed', devices: 'Devices', resetMethod: 'Traffic reset',
       followSystem: 'System default', firstDayMonth: '1st of each month', monthlyReset: 'Monthly', neverReset: 'Never', firstDayYear: 'January 1st', yearlyReset: 'Yearly',
       perMonth: 'About {price}/month', save: 'Save {percent}%', oneTimeHint: 'One-time delivery',
-      saved: 'Saved', orderAction: 'Confirmed — place order', soldOut: 'Sold out',
+      saved: 'Saved', orderAction: 'Confirmed — place order', orderActionBatch: 'Confirmed — place {count} orders', soldOut: 'Sold out',
+      quantity: 'Quantity', quickQuantity: '{count} pcs', decreaseQuantity: 'Decrease quantity', increaseQuantity: 'Increase quantity',
+      orderQuantityInput: 'Order quantity', totalPrice: 'Total', totalSaved: 'Total saved', quantityMaxHint: 'Up to 500 subscriptions per order',
+      batchQrTitle: 'Customer subscription QRs ({total} total · {pending} pending / {claimed} claimed)',
+      batchQrHint: 'Click the download button to save all QR images. Each QR can only be claimed once.',
+      batchQrPreparing: 'Generating QR images ({done}/{total})…',
+      downloadBatchQrs: 'Download all QRs ({count})',
+      downloadingBatchQrs: 'Downloading ({count})…',
+      batchOrderUnconfirmed: 'Order result for {count} subscriptions unconfirmed. Please check My Orders first.',
       showPrices: 'Show prices', hidePrices: 'Hide prices', retry: 'Retry',
       networkUnavailable: 'Network unavailable. Check your connection and retry.', serviceUnavailable: 'Service temporarily unavailable. Please try again later.',
       orderUnconfirmed: 'Order result unconfirmed. Please check My Orders first.', checkPurchaseOrders: 'Check My Orders',
       writeUnconfirmed: 'Operation result unconfirmed. Check your records before submitting again.',
-      purchaseChecked: 'I have checked, place a new order', retryDelivery: 'Retrieve delivery again',
+      purchaseChecked: 'I have checked, place a new order', retryDelivery: 'Retrieve delivery again', resumePurchase: 'Recover this order',
+      abandonPurchase: 'No order found, abandon this purchase', abandonPurchaseConfirmText: 'Confirm that My Orders does not contain this purchase. You can place a new order afterwards.', confirmAbandonPurchase: 'Confirm abandon', cancelAbandonPurchase: 'Keep it',
+      abandonPurchaseTooEarly: 'This order was not found yet. The original request may still be processing; check My Orders again in {minutes} minutes.', abandonPurchaseStale: 'This purchase was updated in another tab. Please check again.', purchaseAbandoned: 'This purchase was abandoned',
       deliveryUnavailable: 'Your order was created, but delivery details could not be loaded. Check My Orders or retrieve delivery again.',
       promoStable: 'Stable', promoFast: 'Fast', promoCompensation: 'Performance guaranteed',
       deliveryStepOne: 'Choose and order', deliveryStepTwo: 'Customer scans QR', deliveryStepThree: 'Verify service',
@@ -104,6 +139,12 @@
       remark: 'Remark', actions: 'Actions', customerName: 'Customer name', subscriptionName: 'Subscription name',
       boundDevices: 'Bound devices', unboundDevice: 'No device bound', hwidDisabled: 'Device binding disabled',
       viewSubscriptionQr: 'View subscription QR', subscriptionQrAction: 'QR', subscriptionPending: 'Subscription not generated',
+      resetSubscription: 'Reset subscription', resetSubscriptionConfirm: 'Confirm reset for all devices',
+      resetSubscriptionHint: 'The old subscription link and QR will expire, and all device bindings will be cleared. Every device must scan the new QR. Total and used traffic and the expiry date stay unchanged.',
+      resetSubscriptionPending: 'Resetting. Do not use the old QR.', resetSubscriptionUncertain: 'This reset is not confirmed yet. The old QR is hidden. Recover this reset to safely retry the same operation.',
+      resetSubscriptionRetry: 'Recover this reset', resetSubscriptionSuccess: 'Subscription reset. All devices must scan again. Old connection credentials expire after nodes synchronize.',
+      resetSubscriptionConflict: 'The subscription has changed. Fetch its current QR before confirming another reset.', resetSubscriptionRefresh: 'Fetch current QR', resetSubscriptionDevices: '{count} device bindings will be cleared',
+      resetInOrdersTag: 'Also available in My Orders',
       subscriptionBoundDevice: 'Subscription bound to device', subscriptionUnboundDevice: 'Subscription has no bound device',
       subscriptionHwidDisabled: 'Device binding is disabled for this subscription', copyImage: 'Copy image', downloadImage: 'Download image',
       copyImageUnsupported: 'This browser cannot copy images. Use Download image instead.',
@@ -145,6 +186,9 @@
     loading: false,
     modal: null,
     modalTrigger: null,
+    resetModal: null,
+    resetModalTrigger: null,
+    resetModalTarget: null,
     poller: null,
     orderSettlementStatus: '',
     orderSearch: '',
@@ -165,9 +209,12 @@
     plans: [],
     planFilter: 'all',
     selectedPeriods: {},
+    selectedQuantities: {},
     purchasingPlanId: null,
     purchaseRecovery: null,
+    inFlightPurchaseKey: null,
     renewalOperations: new Map(),
+    subscriptionResetOperations: new Map(),
     purchaseOperationId: 0,
     modalOperationId: 0,
     planPricesVisible: false,
@@ -260,7 +307,7 @@
     if (current) lines.push(current);
     return lines.length ? lines : ['-'];
   }
-  async function composeSubscriptionQrPng(payload) {
+  async function composeSubscriptionQrPng(payload, options = {}) {
     const qrImage = await loadImage(payload.qr_code);
     const width = 760;
     const padding = 52;
@@ -269,6 +316,30 @@
     const detailLineHeight = 31;
     const canvas = document.createElement('canvas');
     const measure = canvas.getContext('2d');
+    const hasBatchHeader = Number.isInteger(options.batchIndex) && options.batchIndex > 0;
+    const topPadding = hasBatchHeader ? 38 : padding;
+    let badgeText = '';
+    let badgeWidth = 0;
+    const badgeHeight = 34;
+    let identityX = padding;
+    let batchPrimaryLines = [];
+    let batchSecondaryLines = [];
+    let batchHeaderBlockHeight = 0;
+    if (hasBatchHeader) {
+      badgeText = `#${options.batchIndex}`;
+      measure.font = '800 20px "Microsoft YaHei", "PingFang SC", sans-serif';
+      badgeWidth = Math.max(50, Math.ceil(measure.measureText(badgeText).width) + 26);
+      identityX = padding + badgeWidth + 14;
+      const identityMaxWidth = width - padding - identityX;
+      measure.font = '700 22px "Microsoft YaHei", "PingFang SC", sans-serif';
+      batchPrimaryLines = wrapCanvasText(measure, subscriptionLabel(payload), identityMaxWidth);
+      if (payload.subscription_name && payload.trade_no) {
+        measure.font = '500 18px "Microsoft YaHei", "PingFang SC", sans-serif';
+        batchSecondaryLines = wrapCanvasText(measure, `${t('orderNo')}：${payload.trade_no}`, identityMaxWidth);
+      }
+      const identityHeight = batchPrimaryLines.length * 28 + (batchSecondaryLines.length ? 4 + batchSecondaryLines.length * 24 : 0);
+      batchHeaderBlockHeight = Math.max(badgeHeight, identityHeight) + 34;
+    }
     const customerName = String(payload.customer_name || '').trim();
     const title = customerName
       ? t('premiumCustomerQrTitle').replace('{customer}', customerName)
@@ -285,15 +356,53 @@
       .flatMap((line) => wrapCanvasText(measure, line, width - padding * 2));
     const headerHeight = titleLines.length * titleLineHeight + 10 + detailLines.length * detailLineHeight + 20;
     canvas.width = width;
-    canvas.height = padding + headerHeight + qrSize + padding;
+    canvas.height = topPadding + batchHeaderBlockHeight + headerHeight + qrSize + padding;
     const context = canvas.getContext('2d');
     context.fillStyle = '#ffffff';
     context.fillRect(0, 0, canvas.width, canvas.height);
+    if (hasBatchHeader) {
+      context.fillStyle = '#e7f4f4';
+      const radius = badgeHeight / 2;
+      if (typeof context.beginPath === 'function' && typeof context.arc === 'function') {
+        context.beginPath();
+        context.arc(padding + radius, topPadding + radius, radius, Math.PI / 2, Math.PI * 1.5);
+        context.arc(padding + badgeWidth - radius, topPadding + radius, radius, Math.PI * 1.5, Math.PI / 2);
+        context.closePath?.();
+        context.fill?.();
+      } else {
+        context.fillRect(padding, topPadding, badgeWidth, badgeHeight);
+      }
+      context.fillStyle = '#287c83';
+      context.font = '800 20px "Microsoft YaHei", "PingFang SC", sans-serif';
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(badgeText, padding + badgeWidth / 2, topPadding + badgeHeight / 2);
+      context.textAlign = 'left';
+      context.textBaseline = 'top';
+      context.fillStyle = '#17212b';
+      context.font = '700 22px "Microsoft YaHei", "PingFang SC", sans-serif';
+      let iy = topPadding + 1;
+      batchPrimaryLines.forEach((line) => {
+        context.fillText(line, identityX, iy);
+        iy += 28;
+      });
+      if (batchSecondaryLines.length) {
+        iy += 4;
+        context.fillStyle = '#667789';
+        context.font = '500 18px "Microsoft YaHei", "PingFang SC", sans-serif';
+        batchSecondaryLines.forEach((line) => {
+          context.fillText(line, identityX, iy);
+          iy += 24;
+        });
+      }
+      context.fillStyle = '#e4e9ef';
+      context.fillRect(padding, topPadding + batchHeaderBlockHeight - 18, width - padding * 2, 1);
+    }
     context.textAlign = 'center';
     context.textBaseline = 'top';
     context.fillStyle = '#111827';
     context.font = '800 32px "Microsoft YaHei", "PingFang SC", sans-serif';
-    let y = padding;
+    let y = topPadding + batchHeaderBlockHeight;
     titleLines.forEach((line) => {
       context.fillText(line, width / 2, y);
       y += titleLineHeight;
@@ -304,8 +413,105 @@
       context.fillText(line, width / 2, y);
       y += detailLineHeight;
     });
-    context.drawImage(qrImage, (width - qrSize) / 2, padding + headerHeight, qrSize, qrSize);
-    return { imageUrl: canvas.toDataURL('image/png'), blob: await canvasBlob(canvas) };
+    context.drawImage(qrImage, (width - qrSize) / 2, topPadding + batchHeaderBlockHeight + headerHeight, qrSize, qrSize);
+    const blob = await canvasBlob(canvas);
+    if (options.preferObjectUrl && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+      const objectUrl = URL.createObjectURL(blob);
+      options.objectUrls?.add?.(objectUrl);
+      return { imageUrl: objectUrl, blob, isObjectUrl: true };
+    }
+    return { imageUrl: canvas.toDataURL('image/png'), blob };
+  }
+  function revokeBatchModalUrls(modal) {
+    if (!modal || modal.type !== 'batchDelivery' || !modal.objectUrls) return;
+    modal.objectUrls.forEach((url) => {
+      try { URL.revokeObjectURL(url); } catch (_) { /* ignore */ }
+    });
+    modal.objectUrls.clear();
+  }
+  function revokeTrackedObjectUrl(objectUrls, url) {
+    if (!url || typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return;
+    if (objectUrls && typeof objectUrls.delete === 'function') {
+      objectUrls.delete(url);
+    }
+    try { URL.revokeObjectURL(url); } catch (_) { /* ignore */ }
+  }
+  function sanitizeFilenamePart(value) {
+    return String(value || '')
+      .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-')
+      .replace(/\s+/g, ' ')
+      .trim() || 'subscription';
+  }
+  function buildBatchDeliveryDownloads(items) {
+    const usedNames = new Set();
+    const padWidth = Math.max(2, String(items.length).length);
+    const entries = [];
+    items.forEach((item, index) => {
+      if (!item?.blob) return;
+      const prefix = String(index + 1).padStart(padWidth, '0');
+      const baseLabel = sanitizeFilenamePart(subscriptionLabel(item.delivery));
+      let filename = `订阅二维码-#${prefix}-${baseLabel}.png`;
+      if (usedNames.has(filename)) {
+        filename = `订阅二维码-#${prefix}-${baseLabel}-${sanitizeFilenamePart(String(item.delivery?.trade_no || '').slice(-6))}.png`;
+      }
+      usedNames.add(filename);
+      entries.push({ name: filename, blob: item.blob, index });
+    });
+    return entries;
+  }
+  function syncBatchDownloadState(batchModal) {
+    if (!batchModal || batchModal.type !== 'batchDelivery') return;
+    batchModal.downloadableCount = batchModal.items.filter((entry) => Boolean(entry.blob)).length;
+    batchModal.imagesReady = batchModal.renderedCount >= batchModal.items.length
+      && batchModal.items.every((entry) => !entry.needsQrRefresh
+        && (entry.delivery.delivery_status !== 0 || Boolean(entry.blob))
+        && !state.subscriptionResetOperations?.has?.(entry.delivery.trade_no));
+  }
+  async function downloadBatchDeliveryImages(batchModal) {
+    if (!batchModal || batchModal.type !== 'batchDelivery' || !batchModal.imagesReady || batchModal.downloadingAll) return;
+    const entries = buildBatchDeliveryDownloads(batchModal.items);
+    if (!entries.length) return;
+    const startGeneration = batchModal.assetGeneration;
+    const isStillValidBatchDownload = () => state.active
+      && state.modal === batchModal
+      && !state.resetModal
+      && batchModal.imagesReady
+      && batchModal.assetGeneration === startGeneration;
+    batchModal.downloadingAll = true;
+    if (state.modal === batchModal) renderModal();
+    try {
+      const delayMs = entries.length > 1
+        ? Math.min(80, Math.max(8, Math.floor(3200 / (entries.length - 1))))
+        : 0;
+      triggerBlobDownload(entries[0].blob, entries[0].name);
+      for (let i = 1; i < entries.length; i += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        if (!isStillValidBatchDownload()) break;
+        triggerBlobDownload(entries[i].blob, entries[i].name);
+      }
+    } finally {
+      batchModal.downloadingAll = false;
+      if (state.modal === batchModal) renderModal();
+    }
+  }
+  function triggerBlobDownload(blob, filename) {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+  function normalizeOrderQuantity(value) {
+    const parsed = Number.parseInt(String(value ?? '').replace(/[^\d]/g, ''), 10);
+    if (!Number.isInteger(parsed) || parsed < 1) return 1;
+    return Math.min(MAX_ORDER_QUANTITY, parsed);
+  }
+  function selectedPlanQuantity(planId) {
+    return normalizeOrderQuantity(state.selectedQuantities[planId] ?? 1);
   }
   const money = (cents) => `¥${((Number(cents) || 0) / 100).toFixed(2)}`;
   const formatTime = (seconds) => seconds ? new Date(Number(seconds) * 1000).toLocaleString() : '-';
@@ -390,6 +596,9 @@
   function classifyApiRequest(path, method = 'GET') {
     const cleanPath = String(path || '').split('?')[0];
     const upperMethod = String(method || 'GET').toUpperCase();
+    if (cleanPath === '/user/distributor/delivery/batch') {
+      return { readOnly: true, scope: 'modal', timeoutMs: BATCH_DELIVERY_TIMEOUT_MS };
+    }
     if (upperMethod !== 'GET') {
       return { readOnly: false, scope: 'none', timeoutMs: 0 };
     }
@@ -493,6 +702,7 @@
     state.plans = [];
     state.planFilter = 'all';
     state.selectedPeriods = {};
+    state.selectedQuantities = {};
     state.orders = [];
     state.orderSettlementStatus = '';
     state.orderSearch = '';
@@ -515,7 +725,12 @@
     state.noticeError = false;
     state.purchasingPlanId = null;
     state.purchaseRecovery = null;
+    state.inFlightPurchaseKey = null;
     state.renewalOperations.clear();
+    state.subscriptionResetOperations.clear();
+    state.resetModal = null;
+    state.resetModalTrigger = null;
+    state.resetModalTarget = null;
     state.needsRouteRecovery = false;
     state.routeRenderHash = null;
     state.contentRouteHash = null;
@@ -682,7 +897,7 @@
 
     try {
       const task = runAttempts();
-      if (abortPromise) task.catch(() => {});
+      if (abortPromise) task.catch(() => { });
       const { response, payload, parseFailed } = abortPromise
         ? await Promise.race([task, abortPromise])
         : await task;
@@ -701,6 +916,7 @@
         error.isTransientRead = [502, 503, 504].includes(Number(response.status));
         error.isUncertainWrite = !policy.readOnly && (response.status >= 500 || parseFailed || !payload || typeof payload !== 'object');
         if (isCurrentSession(requestSession) && isConfirmedAuthFailure(response.status, rawMessage)) {
+          error.isConfirmedAuthFailure = true;
           state.decidedToken = requestSession.token;
           const wasActive = state.active;
           if (window.__xboardAuthSession?.invalidateSession) {
@@ -719,13 +935,18 @@
       return payload;
     } catch (error) {
       if (record?.abortReason === 'cancelled' || error?.isCancelled) {
-        throw makeCancelledError();
+        const cancelled = makeCancelledError();
+        if (error?.isConfirmedAuthFailure) cancelled.isConfirmedAuthFailure = true;
+        throw cancelled;
       }
       if (policy.readOnly && (record?.abortReason === 'timeout' || error?.isTimeout || error?.name === 'AbortError')) {
         throw makeTimeoutError();
       }
       if (!isCurrentSession(requestSession)) {
-        throw makeCancelledError();
+        const cancelled = makeCancelledError();
+        // The server rejected this request before any write; callers may release write-ahead intents.
+        if (error?.isConfirmedAuthFailure) cancelled.isConfirmedAuthFailure = true;
+        throw cancelled;
       }
       if (!policy.readOnly && (!error?.status || error.status >= 500)) error.isUncertainWrite = true;
       if (error.isUncertainWrite) error.message = t('writeUnconfirmed');
@@ -996,25 +1217,306 @@
     setContent(`<div class="dist-error" role="alert"><h2>${escapeHtml(displayError(error))}</h2><button data-action="retry">${t('retry')}</button></div>`);
   }
 
+  function stableDistributorAccountId(user) {
+    if (!user || typeof user !== 'object') return '';
+    if (user.id !== undefined && user.id !== null && String(user.id).trim() !== '') {
+      return `id:${String(user.id).trim()}`;
+    }
+    if (typeof user.uuid === 'string' && user.uuid.trim() !== '') {
+      return `uuid:${user.uuid.trim()}`;
+    }
+    if (typeof user.email === 'string' && user.email.trim() !== '') {
+      return `email:${user.email.trim().toLowerCase()}`;
+    }
+    return '';
+  }
+
+  function purchaseRecoveryStorageKey(user = state.user) {
+    const accountId = stableDistributorAccountId(user);
+    return accountId ? `${PURCHASE_RECOVERY_STORAGE_KEY}:${accountId}` : '';
+  }
+
+  function purchaseRecoveryRecordId(recovery) {
+    if (!recovery) return '';
+    if (typeof recovery.idempotencyKey === 'string' && recovery.idempotencyKey.trim() !== '') {
+      return `key:${recovery.idempotencyKey.trim()}`;
+    }
+    if (typeof recovery.tradeNo === 'string' && recovery.tradeNo.trim() !== '') {
+      return `trade:${recovery.tradeNo.trim()}`;
+    }
+    return '';
+  }
+
+  function normalizeStoredPurchaseRecovery(rec) {
+    if (!rec || typeof rec !== 'object') return null;
+    const hasConfirmedOrder = typeof rec.tradeNo === 'string' && rec.tradeNo.trim() !== '';
+    const hasResumableWrite = typeof rec.idempotencyKey === 'string' && rec.idempotencyKey.trim() !== ''
+      && rec.planId !== null && rec.planId !== undefined && typeof rec.period === 'string' && rec.period !== '';
+    if (!hasConfirmedOrder && !hasResumableWrite) return null;
+    const tradeNos = Array.isArray(rec.tradeNos)
+      ? rec.tradeNos.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+    const requestedAt = Number(rec.requestedAt);
+    const absenceConfirmedAt = Number(rec.absenceConfirmedAt);
+    const lastEmptyCheckAt = Number(rec.lastEmptyCheckAt);
+    return {
+      idempotencyKey: typeof rec.idempotencyKey === 'string' && rec.idempotencyKey.trim() !== '' ? rec.idempotencyKey.trim() : null,
+      planId: rec.planId ?? null,
+      planName: typeof rec.planName === 'string' ? rec.planName : '',
+      period: typeof rec.period === 'string' ? rec.period : '',
+      count: Math.max(1, Number(rec.count || tradeNos.length || 1) || 1),
+      tradeNo: hasConfirmedOrder ? rec.tradeNo.trim() : null,
+      tradeNos: tradeNos.length ? tradeNos : null,
+      checked: hasConfirmedOrder && Boolean(rec.checked),
+      // Legacy records without a request time are older than the safe window by definition.
+      requestedAt: Number.isFinite(requestedAt) && requestedAt > 0 ? requestedAt : 0,
+      absenceConfirmedAt: !hasConfirmedOrder && Number.isFinite(absenceConfirmedAt) && absenceConfirmedAt > 0 ? absenceConfirmedAt : null,
+      lastEmptyCheckAt: !hasConfirmedOrder && Number.isFinite(lastEmptyCheckAt) && lastEmptyCheckAt > 0 ? lastEmptyCheckAt : null,
+      checking: false,
+      resuming: false,
+      abandonArmed: false,
+    };
+  }
+
+  function serializePurchaseRecovery(recovery) {
+    return {
+      idempotencyKey: recovery.idempotencyKey || null,
+      planId: recovery.planId ?? null,
+      planName: recovery.planName || '',
+      period: recovery.period || '',
+      count: Number(recovery.count || recovery.tradeNos?.length || 1),
+      tradeNo: recovery.tradeNo || null,
+      tradeNos: Array.isArray(recovery.tradeNos) ? recovery.tradeNos : null,
+      checked: Boolean(recovery.checked),
+      requestedAt: Number(recovery.requestedAt || 0),
+      absenceConfirmedAt: recovery.absenceConfirmedAt ? Number(recovery.absenceConfirmedAt) : null,
+      lastEmptyCheckAt: recovery.lastEmptyCheckAt ? Number(recovery.lastEmptyCheckAt) : null,
+    };
+  }
+
+  // Uncertain purchases are stored per account in localStorage so that closing the tab, opening
+  // another tab, logging out, or re-authenticating can never discard the original idempotency key.
+  function readStoredPurchaseRecoveries(user = state.user) {
+    const key = purchaseRecoveryStorageKey(user);
+    if (!key) return [];
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      const records = parsed && typeof parsed === 'object' && Array.isArray(parsed.records) ? parsed.records : [];
+      const seen = new Set();
+      const normalized = [];
+      records.forEach((record) => {
+        const recovery = normalizeStoredPurchaseRecovery(record);
+        const recordId = purchaseRecoveryRecordId(recovery);
+        if (!recovery || !recordId || seen.has(recordId)) return;
+        seen.add(recordId);
+        normalized.push(recovery);
+      });
+      return normalized.sort((left, right) => left.requestedAt - right.requestedAt);
+    } catch (_) {
+      return [];
+    }
+  }
+
+  function writeStoredPurchaseRecoveries(records, user = state.user) {
+    const key = purchaseRecoveryStorageKey(user);
+    if (!key) return;
+    try {
+      if (!records.length) {
+        localStorage.removeItem(key);
+        return;
+      }
+      localStorage.setItem(key, JSON.stringify({
+        schema: PURCHASE_RECOVERY_SCHEMA,
+        records: records.map(serializePurchaseRecovery),
+      }));
+    } catch (_) { /* ignore storage errors */ }
+  }
+
+  function upsertStoredPurchaseRecovery(recovery, user = state.user) {
+    const recordId = purchaseRecoveryRecordId(recovery);
+    if (!recordId) return;
+    const stored = readStoredPurchaseRecoveries(user);
+    const existing = stored.find((item) => purchaseRecoveryRecordId(item) === recordId);
+    if (existing) {
+      // Never let a stale tab erase facts learned by another tab of the same account.
+      if (existing.requestedAt > Number(recovery.requestedAt || 0)) {
+        recovery.requestedAt = existing.requestedAt;
+        recovery.absenceConfirmedAt = null;
+        recovery.lastEmptyCheckAt = null;
+        recovery.abandonArmed = false;
+      }
+      if (existing.tradeNo && !recovery.tradeNo) {
+        recovery.tradeNo = existing.tradeNo;
+        recovery.tradeNos = existing.tradeNos;
+        recovery.absenceConfirmedAt = null;
+        recovery.lastEmptyCheckAt = null;
+        recovery.abandonArmed = false;
+      }
+    }
+    const records = stored.filter((item) => purchaseRecoveryRecordId(item) !== recordId);
+    records.push(recovery);
+    writeStoredPurchaseRecoveries(records, user);
+  }
+
+  function deleteStoredPurchaseRecovery(recordId, user = state.user) {
+    if (!recordId) return;
+    const records = readStoredPurchaseRecoveries(user);
+    const remaining = records.filter((item) => purchaseRecoveryRecordId(item) !== recordId);
+    if (remaining.length !== records.length) writeStoredPurchaseRecoveries(remaining, user);
+  }
+
+  function findStoredPurchaseRecovery(recordId, user = state.user) {
+    if (!recordId) return null;
+    return readStoredPurchaseRecoveries(user).find((item) => purchaseRecoveryRecordId(item) === recordId) || null;
+  }
+
+  function nextStoredPurchaseRecovery(user = state.user) {
+    return readStoredPurchaseRecoveries(user).find((item) => !(
+      state.inFlightPurchaseKey
+      && !item.tradeNo
+      && item.idempotencyKey === state.inFlightPurchaseKey
+    )) || null;
+  }
+
+  function surfacePurchaseRecovery(recovery) {
+    state.purchaseRecovery = recovery || null;
+    if (state.purchaseRecovery) {
+      state.purchasingPlanId = state.purchaseRecovery.planId ?? '__recovery__';
+    } else if (!state.inFlightPurchaseKey) {
+      state.purchasingPlanId = null;
+    }
+  }
+
+  function persistPurchaseRecovery(recovery) {
+    if (!recovery) {
+      clearCurrentPurchaseRecovery();
+      return;
+    }
+    state.purchaseRecovery = recovery;
+    upsertStoredPurchaseRecovery(recovery);
+  }
+
+  // Resolve only the visible recovery; any other uncertain purchase of the same account surfaces next.
+  function clearCurrentPurchaseRecovery() {
+    const current = state.purchaseRecovery;
+    if (current) deleteStoredPurchaseRecovery(purchaseRecoveryRecordId(current));
+    surfacePurchaseRecovery(nextStoredPurchaseRecovery());
+  }
+
+  function recordPurchaseIntent(snapshot) {
+    upsertStoredPurchaseRecovery({
+      ...snapshot,
+      tradeNo: null,
+      tradeNos: null,
+      checked: false,
+      absenceConfirmedAt: null,
+      lastEmptyCheckAt: null,
+    });
+  }
+
+  function releasePurchaseIntent(idempotencyKey, user = state.user) {
+    if (!idempotencyKey) return;
+    const recordId = `key:${idempotencyKey}`;
+    const stored = findStoredPurchaseRecovery(recordId, user);
+    if (stored && !stored.tradeNo) deleteStoredPurchaseRecovery(recordId, user);
+    const sameVisibleAccount = Boolean(state.user)
+      && stableDistributorAccountId(user) === stableDistributorAccountId(state.user);
+    if (sameVisibleAccount && state.purchaseRecovery && !state.purchaseRecovery.tradeNo && state.purchaseRecovery.idempotencyKey === idempotencyKey) {
+      surfacePurchaseRecovery(nextStoredPurchaseRecovery());
+      refreshPurchaseRecoveryView();
+    }
+  }
+
+  function restorePurchaseRecovery(userKey, user = state.user) {
+    if (!userKey || state.purchaseRecovery) return;
+    const recovery = nextStoredPurchaseRecovery(user);
+    if (recovery) surfacePurchaseRecovery(recovery);
+  }
+
+  function refreshPurchaseRecoveryView() {
+    if (!state.active) return;
+    if (currentPage() === '/plan') {
+      renderPlanCatalog();
+      return;
+    }
+    const banner = document.querySelector('#distributor-app .dist-purchase-recovery');
+    if (state.purchaseRecovery && banner) banner.outerHTML = renderPurchaseRecovery();
+    else if (!state.purchaseRecovery && banner) banner.remove();
+    else if (state.purchaseRecovery && !banner) renderPage();
+  }
+
+  // Another tab of the same account recorded, updated, or resolved an uncertain purchase.
+  function syncPurchaseRecoveryFromStorage() {
+    if (!state.active || !state.user) return;
+    const current = state.purchaseRecovery;
+    if (current?.resuming || current?.checking) return;
+    const currentRecordId = purchaseRecoveryRecordId(current);
+    const stored = currentRecordId ? findStoredPurchaseRecovery(currentRecordId) : null;
+    if (current && stored) {
+      Object.assign(current, {
+        tradeNo: stored.tradeNo,
+        tradeNos: stored.tradeNos,
+        count: stored.count,
+        checked: stored.checked,
+        requestedAt: stored.requestedAt,
+        absenceConfirmedAt: stored.absenceConfirmedAt,
+        lastEmptyCheckAt: stored.lastEmptyCheckAt,
+      });
+      if (!current.absenceConfirmedAt) current.abandonArmed = false;
+      surfacePurchaseRecovery(current);
+    } else {
+      surfacePurchaseRecovery(nextStoredPurchaseRecovery());
+    }
+    refreshPurchaseRecoveryView();
+  }
+
   function renderPurchaseRecovery() {
     const recovery = state.purchaseRecovery;
     if (!recovery) return '';
-    return `<section class="dist-panel dist-purchase-recovery" role="alert"><p>${escapeHtml(t(recovery.tradeNo ? 'deliveryUnavailable' : 'orderUnconfirmed'))}</p>
-      ${recovery.tradeNo ? `<p>${t('orderNo')}：${escapeHtml(recovery.tradeNo)}</p>` : ''}<div class="dist-modal-actions">
+    const batchCount = Number(recovery.count || recovery.tradeNos?.length || 1);
+    const recoveryMessage = recovery.tradeNo
+      ? t('deliveryUnavailable')
+      : batchCount > 1
+        ? t('batchOrderUnconfirmed').replace('{count}', batchCount)
+        : t('orderUnconfirmed');
+    const orderDisplay = Array.isArray(recovery.tradeNos) && recovery.tradeNos.length > 1
+      ? `${escapeHtml(recovery.tradeNos[0])} (+${recovery.tradeNos.length - 1})`
+      : recovery.tradeNo
+        ? escapeHtml(recovery.tradeNo)
+        : '';
+    const canResume = !recovery.tradeNo && Boolean(recovery.idempotencyKey && recovery.planId && recovery.period);
+    const canAcknowledge = Boolean(recovery.tradeNo && recovery.checked);
+    const canAbandon = !recovery.tradeNo && !recovery.resuming && Boolean(recovery.absenceConfirmedAt);
+    const waitMinutes = Math.max(1, Math.ceil((Number(recovery.requestedAt || 0) + PURCHASE_ABANDON_SAFE_DELAY_MS - Date.now()) / 60000));
+    const abandonHint = !recovery.tradeNo && !recovery.absenceConfirmedAt && recovery.lastEmptyCheckAt
+      ? `<p class="dist-purchase-recovery-hint">${escapeHtml(t('abandonPurchaseTooEarly').replace('{minutes}', waitMinutes))}</p>`
+      : '';
+    const abandonControls = canAbandon
+      ? recovery.abandonArmed
+        ? `<p class="dist-purchase-recovery-confirm">${escapeHtml(t('abandonPurchaseConfirmText'))}</p><button class="danger" data-action="confirm-abandon-purchase">${t('confirmAbandonPurchase')}</button><button data-action="cancel-abandon-purchase">${t('cancelAbandonPurchase')}</button>`
+        : `<button data-action="abandon-purchase">${t('abandonPurchase')}</button>`
+      : '';
+    return `<section class="dist-panel dist-purchase-recovery" role="alert"><p>${escapeHtml(recoveryMessage)}</p>
+      ${orderDisplay ? `<p>${t('orderNo')}：${orderDisplay}</p>` : ''}${abandonHint}<div class="dist-modal-actions">
       ${recovery.tradeNo ? `<button data-action="retry-purchase-delivery">${t('retryDelivery')}</button>` : ''}
-      <button data-action="check-purchase-orders">${t('checkPurchaseOrders')}</button>
-      ${recovery.checked ? `<button data-action="acknowledge-order-check">${t('purchaseChecked')}</button>` : ''}</div></section>`;
+      ${canResume ? `<button class="primary" data-action="resume-purchase" ${recovery.resuming ? 'disabled' : ''}>${t(recovery.resuming ? 'loading' : 'resumePurchase')}</button>` : ''}
+      <button data-action="check-purchase-orders" ${recovery.resuming ? 'disabled' : ''}>${t('checkPurchaseOrders')}</button>
+      ${canAcknowledge ? `<button data-action="acknowledge-order-check">${t('purchaseChecked')}</button>` : ''}${abandonControls}</div></section>`;
   }
 
   async function checkPurchaseOrders() {
     const recovery = state.purchaseRecovery;
-    if (!recovery) return;
-    state.orderSearch = recovery.tradeNo || '';
+    if (!recovery || recovery.resuming) return;
+    const isBatchRecovery = Array.isArray(recovery.tradeNos) && recovery.tradeNos.length > 1;
+    state.orderSearch = isBatchRecovery ? '' : (recovery.tradeNo || '');
     state.orderSettlementStatus = '';
     state.orderFilters = { startDate: '', endDate: '', periods: [], minAmount: '', maxAmount: '' };
     state.orderPage = 1;
     recovery.checked = false;
     recovery.checking = true;
+    persistPurchaseRecovery(recovery);
     if (currentPage() === '/order') await renderPage();
     else navigate('/order');
   }
@@ -1031,6 +1533,9 @@
     state.plans.forEach((plan) => {
       if (!availablePeriods(plan).some(([key]) => key === state.selectedPeriods[plan.id])) {
         state.selectedPeriods[plan.id] = availablePeriods(plan)[0][0];
+      }
+      if (!state.selectedQuantities[plan.id]) {
+        state.selectedQuantities[plan.id] = 1;
       }
     });
     if (!state.plans.some((plan) => planMatchesFilter(plan, state.planFilter))) state.planFilter = 'all';
@@ -1136,6 +1641,7 @@
     const cards = visiblePlans.map((plan) => {
       const prices = availablePeriods(plan);
       const selectedPeriod = state.selectedPeriods[plan.id] || prices[0][0];
+      const selectedQuantity = selectedPlanQuantity(plan.id);
       const selectedPrice = Number(plan[selectedPeriod]) || 0;
       const selectedSaving = periodSavings(plan, selectedPeriod);
       const isFeatured = plan.id === state.plans[0]?.id;
@@ -1161,7 +1667,19 @@
       const actionPriceDetails = state.planPricesVisible
         ? `<span>${t('original')} ${money(selectedPrice)}</span><span>${t('saved')} ${money(selectedSaving)}</span>`
         : '';
-      return `<article class="dist-plan-card ${isFeatured ? 'is-featured' : ''}">
+      const batchPriceDetails = state.planPricesVisible
+        ? `<span>${t('totalPrice')} ${money(selectedPrice * selectedQuantity)}</span><span>${t('totalSaved')} ${money(selectedSaving * selectedQuantity)}</span>`
+        : '';
+      const buyButtonLabel = soldOut
+        ? t('soldOut')
+        : selectedQuantity > 1
+          ? `${batchPriceDetails}<strong>${t('orderActionBatch').replace('{count}', selectedQuantity)}</strong>`
+          : `${actionPriceDetails}<strong>${t('orderAction')}</strong>`;
+      const quickQuantityButtons = QUICK_ORDER_QUANTITIES.map((preset) => {
+        const isPresetActive = selectedQuantity === preset;
+        return `<button type="button" class="dist-qty-preset ${isPresetActive ? 'active' : ''}" data-plan-qty-preset="${preset}" data-plan-id="${plan.id}" aria-pressed="${isPresetActive}" ${soldOut || purchaseInFlight ? 'disabled' : ''}>${t('quickQuantity').replace('{count}', preset)}</button>`;
+      }).join('');
+      return `<article class="dist-plan-card ${isFeatured ? 'is-featured' : ''}" data-plan-card="${plan.id}">
         <div class="dist-plan-body">
           <div class="dist-plan-tags">${tags}</div>
           <div class="dist-plan-heading">
@@ -1176,9 +1694,20 @@
           </div>
           <div class="dist-plan-period-label"><span>${t('period')}</span></div>
           <div class="dist-period-options" role="radiogroup" aria-label="${t('period')}">${periodButtons}</div>
+          <div class="dist-plan-quantity-row">
+            <span class="dist-plan-quantity-label">${t('quantity')}</span>
+            <div class="dist-plan-quantity-controls">
+              <div class="dist-qty-presets" role="group" aria-label="${t('quantity')}">${quickQuantityButtons}</div>
+              <div class="dist-qty-stepper">
+                <button type="button" class="dist-qty-step" data-plan-qty-step="-1" data-plan-id="${plan.id}" aria-label="${t('decreaseQuantity')}" ${soldOut || purchaseInFlight || selectedQuantity <= 1 ? 'disabled' : ''}>−</button>
+                <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" class="dist-qty-input" data-plan-qty-input="${plan.id}" value="${selectedQuantity}" aria-label="${t('orderQuantityInput')}" ${soldOut || purchaseInFlight ? 'disabled' : ''}>
+                <button type="button" class="dist-qty-step" data-plan-qty-step="1" data-plan-id="${plan.id}" aria-label="${t('increaseQuantity')}" ${soldOut || purchaseInFlight || selectedQuantity >= MAX_ORDER_QUANTITY ? 'disabled' : ''}>+</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="dist-plan-actions">
-          <button type="button" data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}" ${soldOut || purchaseInFlight ? 'disabled' : ''} ${isPurchasing ? 'aria-busy="true"' : ''}>${soldOut ? t('soldOut') : `${actionPriceDetails}<strong>${t('orderAction')}</strong>`}</button>
+          <button type="button" data-buy="${plan.id}" data-name="${escapeHtml(plan.name)}" ${soldOut || purchaseInFlight ? 'disabled' : ''} ${isPurchasing ? 'aria-busy="true"' : ''}>${buyButtonLabel}</button>
         </div>
       </article>`;
     }).join('');
@@ -1203,6 +1732,60 @@
     if (render && state.active && currentPage() === '/plan') renderPlanCatalog();
   }
 
+  function extendPlanPriceTimerIfVisible() {
+    if (!state.planPricesVisible) return;
+    clearPlanPriceTimer();
+    state.planPricesTimer = window.setTimeout(() => closePlanPrices(), 10000);
+  }
+
+  function syncPlanCardQuantityDom(planId, effectiveQuantity) {
+    const plan = state.plans.find((item) => String(item.id) === String(planId));
+    if (!plan) return;
+    const prices = availablePeriods(plan);
+    if (!prices.length) return;
+    const selectedPeriod = state.selectedPeriods[plan.id] || prices[0][0];
+    const selectedPrice = Number(plan[selectedPeriod]) || 0;
+    const selectedSaving = periodSavings(plan, selectedPeriod);
+    const soldOut = typeof plan.capacity_limit === 'string';
+    const purchaseInFlight = state.purchasingPlanId !== null;
+    document.querySelectorAll('[data-plan-qty-preset]').forEach((presetButton) => {
+      if (presetButton.dataset.planId !== String(planId)) return;
+      const active = Number(presetButton.dataset.planQtyPreset) === effectiveQuantity;
+      presetButton.classList.toggle('active', active);
+      presetButton.setAttribute('aria-pressed', String(active));
+    });
+    document.querySelectorAll('[data-plan-qty-step]').forEach((stepButton) => {
+      if (stepButton.dataset.planId !== String(planId)) return;
+      const step = Number(stepButton.dataset.planQtyStep);
+      stepButton.disabled = Boolean(
+        soldOut
+        || purchaseInFlight
+        || (step < 0 && effectiveQuantity <= 1)
+        || (step > 0 && effectiveQuantity >= MAX_ORDER_QUANTITY)
+      );
+    });
+    const buyButton = Array.from(document.querySelectorAll('[data-buy]'))
+      .find((btn) => btn.dataset.buy === String(planId));
+    if (!buyButton) return;
+    if (soldOut) {
+      buyButton.textContent = t('soldOut');
+      return;
+    }
+    if (effectiveQuantity > 1) {
+      const batchPriceDetails = state.planPricesVisible
+        ? `<span>${t('totalPrice')} ${money(selectedPrice * effectiveQuantity)}</span><span>${t('totalSaved')} ${money(selectedSaving * effectiveQuantity)}</span>`
+        : '';
+      const nextBatchHtml = `${batchPriceDetails}<strong>${t('orderActionBatch').replace('{count}', effectiveQuantity)}</strong>`;
+      if (buyButton.innerHTML !== nextBatchHtml) buyButton.innerHTML = nextBatchHtml;
+    } else {
+      const singlePriceDetails = state.planPricesVisible
+        ? `<span>${t('original')} ${money(selectedPrice)}</span><span>${t('saved')} ${money(selectedSaving)}</span>`
+        : '';
+      const nextSingleHtml = `${singlePriceDetails}<strong>${t('orderAction')}</strong>`;
+      if (buyButton.innerHTML !== nextSingleHtml) buyButton.innerHTML = nextSingleHtml;
+    }
+  }
+
   function togglePlanPrices() {
     if (state.planPricesVisible) {
       closePlanPrices();
@@ -1220,51 +1803,263 @@
       return;
     }
     if (state.purchasingPlanId !== null) return;
+    if (state.purchaseRecovery) return;
+    // Another tab of this account may already hold an uncertain purchase that this tab has not rendered.
+    const pendingRecovery = nextStoredPurchaseRecovery();
+    if (pendingRecovery) {
+      surfacePurchaseRecovery(pendingRecovery);
+      refreshPurchaseRecoveryView();
+      return;
+    }
+    const quantity = selectedPlanQuantity(plan.id);
+    const idempotencyKey = makeIdempotencyKey();
+    const requestSnapshot = {
+      idempotencyKey,
+      planId: plan.id,
+      planName: String(plan.name || ''),
+      period,
+      count: quantity,
+      requestedAt: Date.now(),
+    };
     const purchaseSession = syncSession();
     const operationId = ++state.purchaseOperationId;
     const isCurrentPurchase = () => state.active
       && state.purchaseOperationId === operationId
       && isCurrentSession(purchaseSession);
     state.selectedPeriods[plan.id] = period;
+    state.selectedQuantities[plan.id] = quantity;
     state.purchasingPlanId = plan.id;
+    // Write-ahead intent: a closed tab, crash, logout or lost response still leaves the original key recoverable.
+    const purchaseUser = state.user;
+    state.inFlightPurchaseKey = idempotencyKey;
+    recordPurchaseIntent(requestSnapshot);
     if (button) button.disabled = true;
     let createdTradeNo = null;
+    let createdTradeNos = null;
     try {
-      const tradeNo = dataOf(await api('/user/order/save', {
-        method: 'POST', data: { plan_id: plan.id, period },
-      }));
-      if (!isCurrentPurchase()) return;
-      if (typeof tradeNo !== 'string' || !tradeNo.trim()) {
-        const error = new Error(t('orderUnconfirmed'));
-        error.isUncertainWrite = true;
-        throw error;
-      }
-      createdTradeNo = tradeNo;
-      invalidateOrderAnalytics();
-      const opened = await openDelivery(tradeNo);
-      if (!opened && isCurrentPurchase()) {
-        state.purchaseRecovery = { tradeNo, checked: false, checking: false };
+      if (quantity > 1) {
+        const batchResult = dataOf(await api('/user/order/save', {
+          method: 'POST',
+          data: { plan_id: plan.id, period, quantity, idempotency_key: idempotencyKey },
+        }));
+        if (!isCurrentPurchase()) return;
+        const tradeNos = Array.isArray(batchResult?.trade_nos)
+          ? batchResult.trade_nos.map((item) => String(item || '').trim()).filter(Boolean)
+          : [];
+        if (tradeNos.length !== quantity) {
+          const error = new Error(t('batchOrderUnconfirmed').replace('{count}', quantity));
+          error.isUncertainWrite = true;
+          throw error;
+        }
+        createdTradeNos = tradeNos;
+        createdTradeNo = tradeNos[0];
+        state.selectedQuantities[plan.id] = 1;
+        invalidateOrderAnalytics();
+        const opened = await openBatchDelivery(tradeNos, plan, period);
+        if (opened) {
+          releasePurchaseIntent(idempotencyKey, purchaseUser);
+        } else if (isCurrentPurchase()) {
+          persistPurchaseRecovery({ ...requestSnapshot, tradeNo: tradeNos[0], tradeNos, checked: false, checking: false, resuming: false });
+        }
+      } else {
+        const tradeNo = dataOf(await api('/user/order/save', {
+          method: 'POST', data: { plan_id: plan.id, idempotency_key: idempotencyKey, period },
+        }));
+        if (!isCurrentPurchase()) return;
+        if (typeof tradeNo !== 'string' || !tradeNo.trim()) {
+          const error = new Error(t('orderUnconfirmed'));
+          error.isUncertainWrite = true;
+          throw error;
+        }
+        createdTradeNo = tradeNo;
+        state.selectedQuantities[plan.id] = 1;
+        invalidateOrderAnalytics();
+        const opened = await openDelivery(tradeNo);
+        if (opened) {
+          releasePurchaseIntent(idempotencyKey, purchaseUser);
+        } else if (isCurrentPurchase()) {
+          persistPurchaseRecovery({ ...requestSnapshot, tradeNo, tradeNos: null, checked: false, checking: false, resuming: false });
+        }
       }
     } catch (error) {
+      const definiteRejection = !createdTradeNo && !error?.isUncertainWrite
+        && (!error?.isCancelled || Boolean(error?.isConfirmedAuthFailure));
+      // A definite rejection (including a 401 that just ended this session) proves nothing was written.
+      if (definiteRejection) releasePurchaseIntent(idempotencyKey, purchaseUser);
       if (!isCurrentPurchase()) return;
       if (createdTradeNo || error?.isUncertainWrite) {
-        state.purchaseRecovery = { tradeNo: createdTradeNo, checked: false, checking: false };
+        persistPurchaseRecovery(createdTradeNos
+          ? { ...requestSnapshot, tradeNo: createdTradeNo, tradeNos: createdTradeNos, checked: false, checking: false, resuming: false }
+          : { ...requestSnapshot, tradeNo: createdTradeNo, tradeNos: null, checked: false, checking: false, resuming: false });
         if (!document.hidden && currentPage() !== '/plan') renderPage();
-      } else if (!error?.isCancelled) {
+      } else if (error?.isCancelled) {
+        // A cancelled write may still have reached the server; keep the stored intent visible.
+        const storedIntent = findStoredPurchaseRecovery(`key:${idempotencyKey}`);
+        if (storedIntent) surfacePurchaseRecovery(storedIntent);
+      } else {
+        const capacityMatch = String(error?.rawMessage || error?.message || '').match(/剩余可售容量仅剩\s*(\d+)\s*个/);
+        if (capacityMatch) {
+          state.selectedQuantities[plan.id] = normalizeOrderQuantity(capacityMatch[1]);
+        }
         toast(displayError(error), 'error');
       }
     } finally {
+      if (state.inFlightPurchaseKey === idempotencyKey) state.inFlightPurchaseKey = null;
       if (isCurrentPurchase()) {
         if (!state.purchaseRecovery) state.purchasingPlanId = null;
         if (currentPage() === '/plan') renderPlanCatalog();
-        else if (button && !state.purchaseRecovery) button.disabled = false;
+        if (button && button.isConnected && !state.purchaseRecovery) button.disabled = false;
+      }
+    }
+  }
+
+  async function resumeUncertainPurchase() {
+    const recovery = state.purchaseRecovery;
+    if (!recovery || recovery.tradeNo || recovery.resuming || !recovery.idempotencyKey || !recovery.planId || !recovery.period) return;
+    const resumeSession = syncSession();
+    const operationId = ++state.purchaseOperationId;
+    const isCurrentResume = () => state.active
+      && state.purchaseOperationId === operationId
+      && isCurrentSession(resumeSession)
+      && state.purchaseRecovery === recovery;
+    const quantity = normalizeOrderQuantity(recovery.count || 1);
+    recovery.resuming = true;
+    // The replayed request can itself be lost; restart the safe window before it is sent.
+    recovery.requestedAt = Date.now();
+    recovery.absenceConfirmedAt = null;
+    recovery.lastEmptyCheckAt = null;
+    recovery.abandonArmed = false;
+    persistPurchaseRecovery(recovery);
+    const existingBanner = document.querySelector('#distributor-app .dist-purchase-recovery');
+    if (existingBanner) existingBanner.outerHTML = renderPurchaseRecovery();
+    let createdTradeNo = null;
+    let createdTradeNos = null;
+    try {
+      if (quantity > 1) {
+        const batchResult = dataOf(await api('/user/order/save', {
+          method: 'POST',
+          data: {
+            plan_id: recovery.planId,
+            period: recovery.period,
+            quantity,
+            idempotency_key: recovery.idempotencyKey,
+          },
+        }));
+        if (!isCurrentResume()) return;
+        const tradeNos = Array.isArray(batchResult?.trade_nos)
+          ? batchResult.trade_nos.map((item) => String(item || '').trim()).filter(Boolean)
+          : [];
+        if (tradeNos.length !== quantity) {
+          const error = new Error(t('batchOrderUnconfirmed').replace('{count}', quantity));
+          error.isUncertainWrite = true;
+          throw error;
+        }
+        createdTradeNos = tradeNos;
+        createdTradeNo = tradeNos[0];
+        state.selectedQuantities[recovery.planId] = 1;
+        invalidateOrderAnalytics();
+        const planObj = state.plans.find((item) => String(item.id) === String(recovery.planId))
+          || { id: recovery.planId, name: recovery.planName };
+        const opened = await openBatchDelivery(tradeNos, planObj, recovery.period);
+        if (!isCurrentResume()) return;
+        if (opened) {
+          persistPurchaseRecovery(null);
+        } else {
+          recovery.tradeNo = createdTradeNo;
+          recovery.tradeNos = createdTradeNos;
+          recovery.checked = false;
+          recovery.resuming = false;
+          persistPurchaseRecovery(recovery);
+        }
+      } else {
+        const tradeNo = dataOf(await api('/user/order/save', {
+          method: 'POST',
+          data: {
+            plan_id: recovery.planId,
+            idempotency_key: recovery.idempotencyKey,
+            period: recovery.period,
+          },
+        }));
+        if (!isCurrentResume()) return;
+        if (typeof tradeNo !== 'string' || !tradeNo.trim()) {
+          const error = new Error(t('orderUnconfirmed'));
+          error.isUncertainWrite = true;
+          throw error;
+        }
+        createdTradeNo = tradeNo;
+        state.selectedQuantities[recovery.planId] = 1;
+        invalidateOrderAnalytics();
+        const opened = await openDelivery(tradeNo);
+        if (!isCurrentResume()) return;
+        if (opened) {
+          persistPurchaseRecovery(null);
+        } else {
+          recovery.tradeNo = createdTradeNo;
+          recovery.tradeNos = null;
+          recovery.checked = false;
+          recovery.resuming = false;
+          persistPurchaseRecovery(recovery);
+        }
+      }
+    } catch (error) {
+      if (!isCurrentResume()) return;
+      if (createdTradeNo) {
+        recovery.tradeNo = createdTradeNo;
+        recovery.tradeNos = createdTradeNos;
+        recovery.checked = false;
+        recovery.resuming = false;
+        persistPurchaseRecovery(recovery);
+      } else {
+        const status = Number(error?.status || 0);
+        const hasStructuredPayload = Boolean(
+          error?.payload && typeof error.payload === 'object' && !Array.isArray(error.payload)
+        );
+        const deterministicRejection = !error?.isUncertainWrite
+          && !error?.isNetworkError
+          && !error?.isTimeout
+          && !error?.isCancelled
+          && hasStructuredPayload
+          && !isConfirmedAuthFailure(status, error?.rawMessage || error?.message)
+          && [400, 404, 422].includes(status);
+        if (deterministicRejection) {
+          const capacityMatch = String(error?.rawMessage || error?.message || '').match(/剩余可售容量仅剩\s*(\d+)\s*个/);
+          if (capacityMatch && recovery.planId !== null) {
+            state.selectedQuantities[recovery.planId] = normalizeOrderQuantity(capacityMatch[1]);
+          }
+          persistPurchaseRecovery(null);
+          toast(displayError(error), 'error');
+        } else if (!error?.isCancelled) {
+          recovery.resuming = false;
+          persistPurchaseRecovery(recovery);
+          toastErrorIfCurrent(error, resumeSession);
+        }
+      }
+    } finally {
+      if (isCurrentResume()) {
+        recovery.resuming = false;
+      }
+      if (state.active && isCurrentSession(resumeSession)) {
+        if (currentPage() === '/plan') renderPlanCatalog();
+        else if (currentPage() === '/order' && !state.purchaseRecovery) {
+          try { await renderOrders(); } catch (_) { /* ignore */ }
+        } else {
+          const banner = document.querySelector('#distributor-app .dist-purchase-recovery');
+          if (state.purchaseRecovery && banner) banner.outerHTML = renderPurchaseRecovery();
+          else if (!state.purchaseRecovery && banner) banner.remove();
+        }
       }
     }
   }
 
   async function repurchaseDelivery() {
     const repurchaseSession = syncSession();
-    const delivery = state.modal?.type === 'delivery' ? state.modal.delivery : null;
+    const originModal = state.modal;
+    const isBatchOrigin = originModal?.type === 'batchDelivery';
+    const delivery = originModal?.type === 'delivery'
+      ? originModal.delivery
+      : isBatchOrigin
+        ? originModal.items?.[0]?.delivery
+        : null;
     if (!delivery) return;
     if (!state.plans.length) {
       const plans = await fetchAvailablePlans();
@@ -1276,7 +2071,26 @@
       toast(t('planUnavailable'), 'error');
       return;
     }
+    const previousQuantity = state.selectedQuantities[plan.id] ?? 1;
+    if (isBatchOrigin) {
+      state.selectedQuantities[plan.id] = normalizeOrderQuantity(originModal.totalCount);
+    }
     await purchasePlan(plan, delivery.period, document.querySelector('[data-modal-action="buy-again"]'));
+    if (state.purchaseRecovery && state.modal === originModal) {
+      closeModal();
+      const recoveryCount = Number(state.purchaseRecovery.count || state.purchaseRecovery.tradeNos?.length || 1);
+      const recoveryMessage = state.purchaseRecovery.tradeNo
+        ? t('deliveryUnavailable')
+        : recoveryCount > 1
+          ? t('batchOrderUnconfirmed').replace('{count}', recoveryCount)
+          : t('orderUnconfirmed');
+      toast(recoveryMessage, 'error');
+      return;
+    }
+    if (isBatchOrigin && state.modal === originModal) {
+      state.selectedQuantities[plan.id] = previousQuantity;
+      if (currentPage() === '/plan') renderPlanCatalog();
+    }
   }
 
   function toggleEntitlement(entitlementToggle, entitlementRow) {
@@ -1452,12 +2266,14 @@
     if (state.orderSearch) params.set('search', state.orderSearch);
     appendOrderFilters(params);
     const recovery = state.purchaseRecovery;
+    const isBatchRecovery = Array.isArray(recovery?.tradeNos) && recovery.tradeNos.length > 1;
+    const expectedRecoverySearch = isBatchRecovery ? '' : (recovery?.tradeNo || '');
     const checkingRecovery = recovery?.checking && !append && requestedPage === 1
-      && (params.get('search') || '') === (recovery.tradeNo || '')
+      && (params.get('search') || '') === expectedRecoverySearch
       && Array.from(params.keys()).every((key) => ['page', 'per_page', 'search'].includes(key));
     const oldScrollY = window.scrollY;
     let payload;
-    if (checkingRecovery && recovery.tradeNo) {
+    if (checkingRecovery && recovery.tradeNo && !isBatchRecovery) {
       const order = dataOf(await api(`/user/order/detail?${new URLSearchParams({ trade_no: recovery.tradeNo })}`));
       if (order?.trade_no !== recovery.tradeNo) throw new Error(t('deliveryUnavailable'));
       payload = { data: [order], current_page: 1, per_page: state.orderPerPage, total: 1, last_page: 1 };
@@ -1466,8 +2282,60 @@
     if (!Array.isArray(payload?.data)) throw new Error(t('serviceUnavailable'));
     const fetchedOrders = Array.isArray(payload?.data) ? payload.data : [];
     if (checkingRecovery && state.purchaseRecovery === recovery) {
-      recovery.checked = true;
       recovery.checking = false;
+      if (recovery.tradeNo) {
+        recovery.checked = true;
+      } else if (recovery.idempotencyKey) {
+        const expectedCount = Math.min(MAX_ORDER_QUANTITY, Math.max(1, Number(recovery.count || 1)));
+        let reconcilePayload = null;
+        let reconcileSucceeded = false;
+        if (fetchedOrders.length === 0) {
+          // The unfiltered first page is empty, so this account has no orders at all.
+          reconcilePayload = { data: [] };
+          reconcileSucceeded = true;
+        } else {
+          const reconcileParams = new URLSearchParams({
+            page: '1',
+            per_page: String(expectedCount),
+            idempotency_key: recovery.idempotencyKey,
+          });
+          try {
+            reconcilePayload = await api(`/user/order/fetch?${reconcileParams}`);
+            reconcileSucceeded = Array.isArray(reconcilePayload?.data);
+          } catch (reconcileError) {
+            if (reconcileError?.isCancelled || !isCurrentRouteRender(renderContext)) return;
+            toastErrorIfCurrent(reconcileError);
+          }
+        }
+        if (!isCurrentRouteRender(renderContext)) return;
+        const matchedOrders = Array.isArray(reconcilePayload?.data)
+          ? reconcilePayload.data
+            .filter((item) => typeof item?.trade_no === 'string' && item.trade_no.trim() !== '')
+            .sort((a, b) => Number(a.id || 0) - Number(b.id || 0))
+          : [];
+        if (matchedOrders.length === expectedCount && state.purchaseRecovery === recovery) {
+          const matchedTradeNos = matchedOrders.map((item) => item.trade_no.trim());
+          recovery.tradeNo = matchedTradeNos[0];
+          recovery.tradeNos = matchedTradeNos.length > 1 ? matchedTradeNos : null;
+          recovery.checked = true;
+          recovery.absenceConfirmedAt = null;
+          recovery.lastEmptyCheckAt = null;
+          state.selectedQuantities[recovery.planId] = 1;
+          invalidateOrderAnalytics();
+        } else if (reconcileSucceeded && matchedOrders.length === 0 && state.purchaseRecovery === recovery && !recovery.tradeNo) {
+          // Another tab may have replayed this key after this check started; its newer request time wins.
+          const storedRecovery = findStoredPurchaseRecovery(purchaseRecoveryRecordId(recovery));
+          if (storedRecovery && storedRecovery.requestedAt > Number(recovery.requestedAt || 0)) {
+            recovery.requestedAt = storedRecovery.requestedAt;
+          }
+          const checkedAt = Date.now();
+          recovery.lastEmptyCheckAt = checkedAt;
+          recovery.absenceConfirmedAt = checkedAt - Number(recovery.requestedAt || 0) >= PURCHASE_ABANDON_SAFE_DELAY_MS
+            ? checkedAt
+            : null;
+        }
+      }
+      if (state.purchaseRecovery === recovery) persistPurchaseRecovery(recovery);
     }
     state.orders = append ? [...state.orders, ...fetchedOrders] : fetchedOrders;
     state.orderPage = Number(payload?.current_page || requestedPage);
@@ -1618,6 +2486,10 @@
   }
 
   async function openDelivery(tradeNo) {
+    if (state.subscriptionResetOperations.has(tradeNo)) {
+      await openSubscriptionQr(tradeNo);
+      return true;
+    }
     const modalSession = syncSession();
     const modalOpId = ++state.modalOperationId;
     const delivery = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(tradeNo)}`));
@@ -1631,16 +2503,581 @@
     return true;
   }
 
+  function renderBatchDeliveryCardInner(item, index) {
+    const delivery = item.delivery;
+    const claimed = delivery.delivery_status === 1;
+    const pending = delivery.delivery_status === 0;
+    const issued = Boolean(delivery.config_issued_at);
+    const connected = Boolean(delivery.connected_at);
+    const connectionText = connected
+      ? t('connectedThrough').replace('{node}', delivery.connected_node_name || '-')
+      : issued ? t('waitingConnection') : '';
+    const resetOp = state.subscriptionResetOperations?.get?.(delivery.trade_no);
+    const canReset = Boolean(delivery.can_reset_subscription || resetOp);
+    const goldTag = canReset ? `<span class="dist-reset-gold-tag">${escapeHtml(t('resetInOrdersTag'))}</span>` : '';
+    let cardBody;
+    if (resetOp) {
+      cardBody = `<p ${state.resetModal === resetOp ? '' : 'role="status" '}class="dist-reset-hint dist-batch-reset-status">${t(resetOp.submitting ? 'resetSubscriptionPending' : resetOp.conflict ? 'resetSubscriptionConflict' : 'resetSubscriptionUncertain')}</p>
+        <div class="dist-qr-actions-bar has-gold-tag is-reset-only"><div class="dist-modal-actions dist-image-actions dist-qr-action-row cols-1"><button type="button" class="dist-reset-trigger-btn" data-modal-action="reset-subscription" data-batch-index="${index}">${t(resetOp.conflict ? 'resetSubscriptionRefresh' : 'resetSubscriptionRetry')}</button></div>${goldTag}</div>`;
+    } else if ((pending || item.resetComplete || item.qrExpanded) && item.imageUrl) {
+      cardBody = `${item.resetComplete ? `<p role="status" class="dist-reset-hint dist-batch-reset-status">${t('resetSubscriptionSuccess')}</p>` : ''}
+        <img class="dist-subscription-qr-preview" src="${item.imageUrl}" alt="${escapeHtml(subscriptionLabel(delivery))}">
+        <div class="dist-qr-actions-bar ${canReset ? 'has-gold-tag' : ''}"><div class="dist-modal-actions dist-image-actions dist-qr-action-row ${canReset ? 'cols-3' : 'cols-2'}"><button type="button" data-modal-action="copy-batch-item-qr" data-batch-index="${index}">${item.copied ? t('copySuccess') : t('copyImage')}</button><button type="button" class="primary" data-modal-action="download-batch-item-qr" data-batch-index="${index}">${t('downloadImage')}</button>${canReset ? `<button type="button" class="dist-reset-trigger-btn" data-modal-action="reset-subscription" data-batch-index="${index}">${t('resetSubscription')}</button>` : ''}</div>${goldTag}</div>`;
+    } else if (pending) {
+      cardBody = `<div class="dist-loading"><span></span>${t('loading')}</div>`;
+    } else {
+      cardBody = `<p class="dist-batch-item-hint">${claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p><div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong>${claimed && issued ? `<small class="dist-network-status">${escapeHtml(connectionText)}</small>` : ''}</div>
+        ${canReset ? `<div class="dist-qr-actions-bar has-gold-tag"><div class="dist-modal-actions dist-image-actions dist-qr-action-row cols-2"><button type="button" data-modal-action="open-batch-subscription" data-batch-index="${index}">${t('viewSubscriptionQr')}</button><button type="button" class="dist-reset-trigger-btn" data-modal-action="reset-subscription" data-batch-index="${index}">${t('resetSubscription')}</button></div>${goldTag}</div>` : ''}`;
+    }
+    return `<div class="dist-batch-qr-card-head">
+        <span class="dist-batch-qr-index">#${index + 1}</span>
+        <div class="dist-delivery-identity"><strong>${escapeHtml(subscriptionLabel(delivery))}</strong>${delivery.subscription_name ? `<small>${t('orderNo')}：${escapeHtml(delivery.trade_no)}</small>` : ''}</div>
+      </div>
+      ${cardBody}`;
+  }
+
+  function syncBatchDeliveryProgressDom(batchModal, updatedIndices = []) {
+    const root = document.getElementById('dist-modal-root');
+    if (!root || state.modal !== batchModal) return false;
+    const grid = root.querySelector('.dist-batch-qr-grid');
+    if (!grid) return false;
+    const cards = grid.children;
+    if (!cards || !cards.length) return false;
+    updatedIndices.forEach((idx) => {
+      const item = batchModal.items[idx];
+      const cardEl = cards[idx];
+      if (!item || !cardEl) return;
+      cardEl.classList.toggle('is-claimed', item.delivery.delivery_status === 1);
+      cardEl.innerHTML = renderBatchDeliveryCardInner(item, idx);
+    });
+    const subtitleEl = root.querySelector('.dist-batch-qr-header p');
+    if (subtitleEl) {
+      const total = batchModal.items.length;
+      subtitleEl.textContent = batchModal.imagesReady
+        ? t('batchQrHint')
+        : t('batchQrPreparing').replace('{done}', batchModal.renderedCount).replace('{total}', total);
+    }
+    const downloadBtn = root.querySelector('[data-modal-action="download-batch-qr-images"]');
+    if (downloadBtn) {
+      const downloadCount = batchModal.downloadableCount ?? 0;
+      const displayCount = batchModal.imagesReady ? downloadCount : batchModal.items.length;
+      const canDownloadAll = Boolean(batchModal.imagesReady && downloadCount > 0 && !batchModal.downloadingAll);
+      downloadBtn.hidden = Boolean(batchModal.imagesReady && !downloadCount);
+      downloadBtn.disabled = !canDownloadAll;
+      downloadBtn.textContent = batchModal.downloadingAll
+        ? t('downloadingBatchQrs').replace('{count}', displayCount)
+        : t('downloadBatchQrs').replace('{count}', displayCount);
+    }
+    return true;
+  }
+
+  async function openBatchDelivery(tradeNos, plan = null, period = null) {
+    const modalSession = syncSession();
+    const modalOpId = ++state.modalOperationId;
+    const initialCount = Math.min(tradeNos.length, 10);
+    let deliveries;
+    if (tradeNos.length > BATCH_QR_INLINE_THRESHOLD) {
+      const [metaDeliveries, initialQrDeliveries] = await Promise.all([
+        api('/user/distributor/delivery/batch', {
+          method: 'POST',
+          data: { trade_nos: tradeNos.join(','), include_qr: 0 },
+        }).then(dataOf),
+        api('/user/distributor/delivery/batch', {
+          method: 'POST',
+          data: { trade_nos: tradeNos.slice(0, initialCount).join(','), include_qr: 1 },
+        }).then(dataOf),
+      ]);
+      if (Array.isArray(metaDeliveries)) {
+        const qrByTradeNo = new Map((Array.isArray(initialQrDeliveries) ? initialQrDeliveries : []).map((d) => [d.trade_no, d.qr_code]));
+        deliveries = metaDeliveries.map((d) => (qrByTradeNo.has(d.trade_no) ? { ...d, qr_code: qrByTradeNo.get(d.trade_no) } : d));
+      }
+    } else {
+      deliveries = dataOf(await api('/user/distributor/delivery/batch', {
+        method: 'POST',
+        data: { trade_nos: tradeNos.join(','), include_qr: 1 },
+      }));
+    }
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) return false;
+    if (!Array.isArray(deliveries) || !deliveries.length) {
+      throw new Error(t('deliveryUnavailable'));
+    }
+    const items = deliveries.map((delivery) => ({
+      delivery,
+      imageUrl: null,
+      blob: null,
+      copied: false,
+    }));
+    const resolvedPlanName = plan?.name || deliveries[0]?.plan_name || '批量订阅';
+    const objectUrls = new Set();
+    const batchModal = {
+      type: 'batchDelivery',
+      items,
+      objectUrls,
+      planId: plan?.id ?? deliveries[0]?.plan_id ?? null,
+      planName: resolvedPlanName,
+      period: period || deliveries[0]?.period || '',
+      imagesReady: false,
+      downloadableCount: 0,
+      downloadingAll: false,
+      renderedCount: 0,
+      totalCount: items.length,
+      assetGeneration: 0,
+    };
+    try {
+      await Promise.all(items.slice(0, initialCount).map(async (item, index) => {
+        if (state.subscriptionResetOperations.has(item.delivery.trade_no)) {
+          item.delivery.qr_code = null;
+        } else if (item.delivery.qr_code) {
+          const png = await composeSubscriptionQrPng(item.delivery, { batchIndex: index + 1, preferObjectUrl: true, objectUrls });
+          if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) {
+            if (png?.isObjectUrl) revokeTrackedObjectUrl(objectUrls, png.imageUrl);
+            return;
+          }
+          item.imageUrl = png.imageUrl;
+          item.blob = png.blob;
+          item.delivery.qr_code = null;
+        }
+        batchModal.renderedCount += 1;
+      }));
+    } catch (error) {
+      revokeBatchModalUrls(batchModal);
+      throw error;
+    }
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) {
+      revokeBatchModalUrls(batchModal);
+      return false;
+    }
+    if (items.length <= initialCount) {
+      syncBatchDownloadState(batchModal);
+      revokeBatchModalUrls(state.modal);
+      state.modal = batchModal;
+      renderModal();
+      startPolling();
+      return true;
+    }
+    syncBatchDownloadState(batchModal);
+    revokeBatchModalUrls(state.modal);
+    state.modal = batchModal;
+    renderModal();
+    startPolling();
+    const isStillActiveBatch = () => state.active
+      && isCurrentSession(modalSession)
+      && state.modalOperationId === modalOpId
+      && state.modal === batchModal;
+    (async () => {
+      try {
+        for (let fetchStart = initialCount; fetchStart < items.length; fetchStart += BATCH_QR_INLINE_THRESHOLD) {
+          if (!isStillActiveBatch()) return;
+          const fetchEnd = Math.min(items.length, fetchStart + BATCH_QR_INLINE_THRESHOLD);
+          const missingQrTradeNos = [];
+          for (let idx = fetchStart; idx < fetchEnd; idx += 1) {
+            const entry = items[idx];
+            if (
+              entry.delivery.delivery_status === 0
+              && !entry.delivery.qr_code
+              && !entry.blob
+              && !state.subscriptionResetOperations.has(entry.delivery.trade_no)
+            ) {
+              missingQrTradeNos.push(entry.delivery.trade_no);
+            }
+          }
+          if (missingQrTradeNos.length) {
+            const fetchedChunk = dataOf(await api('/user/distributor/delivery/batch', {
+              method: 'POST',
+              data: { trade_nos: missingQrTradeNos.join(','), include_qr: 1 },
+            }));
+            if (!isStillActiveBatch()) return;
+            if (Array.isArray(fetchedChunk)) {
+              const fetchedByTradeNo = new Map(fetchedChunk.map((d) => [d.trade_no, d]));
+              for (let idx = fetchStart; idx < fetchEnd; idx += 1) {
+                const target = items[idx];
+                if (state.subscriptionResetOperations.has(target.delivery.trade_no)) continue;
+                const fresh = fetchedByTradeNo.get(target.delivery.trade_no);
+                if (!fresh) continue;
+                if (fresh.credential_version && target.delivery.credential_version && fresh.credential_version !== target.delivery.credential_version) {
+                  target.delivery = { ...target.delivery, ...fresh };
+                  if (fresh.qr_code) target.needsQrRefresh = false;
+                } else if (fresh.qr_code && !target.blob) {
+                  target.delivery.qr_code = fresh.qr_code;
+                }
+              }
+            }
+          }
+          for (let start = fetchStart; start < fetchEnd; start += 6) {
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+            if (!isStillActiveBatch()) return;
+            const end = Math.min(fetchEnd, start + 6);
+            const updatedIndices = [];
+            await Promise.all(items.slice(start, end).map(async (item, offset) => {
+              const itemIndex = start + offset;
+              if (
+                item.delivery.qr_code
+                && !item.blob
+                && !state.subscriptionResetOperations.has(item.delivery.trade_no)
+              ) {
+                const sourceDelivery = item.delivery;
+                const startVersion = sourceDelivery.credential_version;
+                const png = await composeSubscriptionQrPng(sourceDelivery, { batchIndex: itemIndex + 1, preferObjectUrl: true, objectUrls });
+                if (!isStillActiveBatch()) {
+                  if (png?.isObjectUrl) revokeTrackedObjectUrl(objectUrls, png.imageUrl);
+                  if (state.modal !== batchModal) revokeBatchModalUrls(batchModal);
+                  return;
+                }
+                if (
+                  item.delivery !== sourceDelivery
+                  || item.delivery.credential_version !== startVersion
+                  || state.subscriptionResetOperations.has(item.delivery.trade_no)
+                  || item.blob
+                ) {
+                  if (png?.isObjectUrl) revokeTrackedObjectUrl(objectUrls, png.imageUrl);
+                } else {
+                  item.imageUrl = png.imageUrl;
+                  item.blob = png.blob;
+                  item.delivery.qr_code = null;
+                }
+              }
+              batchModal.renderedCount += 1;
+              updatedIndices.push(itemIndex);
+            }));
+            if (!isStillActiveBatch()) {
+              if (state.modal !== batchModal) revokeBatchModalUrls(batchModal);
+              return;
+            }
+            syncBatchDownloadState(batchModal);
+            if (!syncBatchDeliveryProgressDom(batchModal, updatedIndices)) renderModal();
+          }
+        }
+        if (!isStillActiveBatch()) return;
+        syncBatchDownloadState(batchModal);
+        renderModal();
+      } catch (error) {
+        if (!isStillActiveBatch()) return;
+        syncBatchDownloadState(batchModal);
+        if (state.modal === batchModal) renderModal();
+        toastErrorIfCurrent(error, modalSession);
+      }
+    })();
+    return true;
+  }
+
   async function openSubscriptionQr(tradeNo) {
     const modalSession = syncSession();
     const modalOpId = ++state.modalOperationId;
+    stopPolling();
+    const resetOperation = state.subscriptionResetOperations.get(tradeNo);
+    if (resetOperation) {
+      state.modal = {
+        type: 'subscriptionQr',
+        payload: { ...resetOperation.payload, qr_code: null },
+        imageUrl: null,
+        blob: null,
+        copied: false,
+      };
+      state.resetModal = resetOperation;
+      renderModal();
+      focusActiveResetModalControl();
+      return;
+    }
     const payload = dataOf(await api(`/user/distributor/subscription-qr?trade_no=${encodeURIComponent(tradeNo)}`));
     if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) return;
     const png = await composeSubscriptionQrPng(payload);
     if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId) return;
     state.modal = { type: 'subscriptionQr', payload, ...png, copied: false };
     renderModal();
+    startPolling();
     focusOrderActionModal();
+  }
+
+  function resolveResetTargetPayload(triggerEl = null) {
+    const source = state.modal;
+    if (!source) return null;
+    if (source.type === 'batchDelivery') {
+      const batchIndexAttr = triggerEl?.closest?.('[data-batch-index]')?.dataset?.batchIndex;
+      const index = Number(batchIndexAttr);
+      return Number.isInteger(index) ? (source.items?.[index]?.delivery || null) : null;
+    }
+    if (['subscriptionQr', 'delivery'].includes(source.type)) {
+      return source.payload || source.delivery || null;
+    }
+    return null;
+  }
+
+  function beginSubscriptionReset(triggerEl = null) {
+    const payload = resolveResetTargetPayload(triggerEl);
+    if (!payload?.trade_no) return;
+    const existingOperation = state.subscriptionResetOperations.get(payload.trade_no);
+    if (!existingOperation && (!payload.can_reset_subscription || !/^[a-f0-9]{64}$/.test(payload.credential_version || ''))) return;
+    const batchIndexAttr = triggerEl?.closest?.('[data-batch-index]')?.dataset?.batchIndex;
+    state.resetModalTrigger = triggerEl || document.activeElement;
+    state.resetModalTarget = {
+      tradeNo: payload.trade_no,
+      batchIndex: batchIndexAttr !== undefined ? Number(batchIndexAttr) : null,
+    };
+    const operation = existingOperation || {
+      type: 'subscriptionReset', payload: { ...payload }, resetConfirm: true,
+      credentialVersion: payload.credential_version, idempotencyKey: makeIdempotencyKey(),
+      submitting: false, uncertain: false, conflict: false,
+    };
+    state.resetModal = operation;
+    renderResetModal();
+    focusActiveResetModalControl();
+  }
+
+  function focusFirstMatching(selectors) {
+    for (const selector of selectors) {
+      const candidate = document.querySelector(selector);
+      if (candidate && !candidate.disabled) {
+        candidate.focus({ preventScroll: true });
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function focusActiveResetModalControl() {
+    focusFirstMatching([
+      '#dist-reset-modal-root [data-modal-action="confirm-subscription-reset"]:not(:disabled)',
+      '#dist-reset-modal-root [data-modal-action="refresh-subscription-reset"]:not(:disabled)',
+      '#dist-reset-modal-root .dist-modal-x:not(:disabled)',
+    ]);
+  }
+
+  function closeResetModal({ restoreFocus = true } = {}) {
+    const trigger = state.resetModalTrigger;
+    const targetInfo = state.resetModalTarget;
+    state.resetModal = null;
+    state.resetModalTrigger = null;
+    state.resetModalTarget = null;
+    renderResetModal();
+    if (state.modal && state.subscriptionResetOperations?.size) renderModal();
+    if (!state.modal) {
+      document.documentElement.classList.remove('dist-modal-open');
+      document.body.classList.remove('dist-modal-open');
+    }
+    if (restoreFocus) {
+      window.requestAnimationFrame(() => {
+        if (trigger?.isConnected && !trigger.disabled) {
+          trigger.focus({ preventScroll: true });
+          return;
+        }
+        const selectors = Number.isInteger(targetInfo?.batchIndex)
+          ? [
+            `#dist-modal-root [data-modal-action="reset-subscription"][data-batch-index="${targetInfo.batchIndex}"]:not(:disabled)`,
+            '#dist-modal-root .dist-modal-x:not(:disabled)',
+          ]
+          : [
+            '#dist-modal-root [data-modal-action="reset-subscription"]:not(:disabled)',
+            '#dist-modal-root .dist-modal-x:not(:disabled)',
+          ];
+        focusFirstMatching(selectors);
+      });
+    }
+  }
+
+  function invalidateUnderlyingQrForTradeNo(tradeNo) {
+    if (!state.modal || !tradeNo) return;
+    if (['subscriptionQr', 'delivery'].includes(state.modal.type)) {
+      const target = state.modal.payload || state.modal.delivery;
+      if (target?.trade_no !== tradeNo) return;
+      target.qr_code = null;
+      state.modal.imageUrl = null;
+      state.modal.blob = null;
+      state.modal.copied = false;
+      state.modal.resetComplete = false;
+      renderModal();
+      return;
+    }
+    if (state.modal.type === 'batchDelivery') {
+      const batchModal = state.modal;
+      let matched = false;
+      batchModal.items.forEach((item) => {
+        if (item.delivery.trade_no !== tradeNo) return;
+        if (item.imageUrl && batchModal.objectUrls?.has(item.imageUrl)) {
+          revokeTrackedObjectUrl(batchModal.objectUrls, item.imageUrl);
+        }
+        item.delivery.qr_code = null;
+        item.imageUrl = null;
+        item.blob = null;
+        item.copied = false;
+        item.resetComplete = false;
+        matched = true;
+      });
+      if (matched) {
+        batchModal.assetGeneration += 1;
+        syncBatchDownloadState(batchModal);
+        renderModal();
+      }
+    }
+  }
+
+  async function applyFreshQrToUnderlyingModal(tradeNo, payload, { resetComplete = false, isCurrent = () => true } = {}) {
+    if (!state.modal) return false;
+    if (state.modal.type === 'subscriptionQr' && state.modal.payload?.trade_no === tradeNo) {
+      const png = await composeSubscriptionQrPng(payload);
+      if (!isCurrent() || state.modal?.type !== 'subscriptionQr' || state.modal.payload?.trade_no !== tradeNo) return false;
+      state.modal = { ...state.modal, payload, ...png, copied: false, resetComplete };
+      return true;
+    }
+    if (state.modal.type === 'delivery' && state.modal.delivery?.trade_no === tradeNo) {
+      const png = await composeSubscriptionQrPng(payload);
+      if (!isCurrent() || state.modal?.type !== 'delivery' || state.modal.delivery?.trade_no !== tradeNo) return false;
+      state.modal = {
+        ...state.modal,
+        delivery: { ...state.modal.delivery, ...payload },
+        ...png,
+        copied: false,
+        resetComplete,
+      };
+      return true;
+    }
+    if (state.modal.type === 'batchDelivery') {
+      const batchModal = state.modal;
+      const itemIndex = batchModal.items.findIndex((entry) => entry.delivery.trade_no === tradeNo);
+      if (itemIndex === -1) return false;
+      const png = await composeSubscriptionQrPng(payload, { batchIndex: itemIndex + 1, preferObjectUrl: true, objectUrls: batchModal.objectUrls });
+      if (!isCurrent() || state.modal !== batchModal) {
+        if (png?.isObjectUrl) revokeTrackedObjectUrl(batchModal.objectUrls, png.imageUrl);
+        if (state.modal !== batchModal) revokeBatchModalUrls(batchModal);
+        return false;
+      }
+      const item = batchModal.items[itemIndex];
+      if (item.imageUrl && batchModal.objectUrls?.has(item.imageUrl)) {
+        revokeTrackedObjectUrl(batchModal.objectUrls, item.imageUrl);
+      }
+      item.delivery = { ...item.delivery, ...payload, qr_code: null };
+      item.imageUrl = png.imageUrl;
+      item.blob = png.blob;
+      item.copied = false;
+      item.needsQrRefresh = false;
+      item.resetComplete = resetComplete;
+      item.qrExpanded = true;
+      batchModal.assetGeneration += 1;
+      syncBatchDownloadState(batchModal);
+      return true;
+    }
+    return false;
+  }
+
+  async function submitSubscriptionReset() {
+    const operation = state.resetModal;
+    if (!operation?.resetConfirm || operation.submitting || operation.conflict) return;
+    const resetSession = syncSession();
+    const tradeNo = operation.payload.trade_no;
+    state.subscriptionResetOperations.set(tradeNo, operation);
+    const isCurrentReset = () => state.active && isCurrentSession(resetSession)
+      && state.subscriptionResetOperations.get(tradeNo) === operation;
+    operation.submitting = true;
+    operation.payload.qr_code = null;
+    invalidateUnderlyingQrForTradeNo(tradeNo);
+    renderResetModal();
+    let responseTimer;
+    try {
+      const payload = dataOf(await Promise.race([
+        api('/user/distributor/subscription-reset', {
+          method: 'POST', data: {
+            trade_no: tradeNo, credential_version: operation.credentialVersion,
+            idempotency_key: operation.idempotencyKey, confirm: true,
+          },
+        }),
+        new Promise((_, reject) => {
+          responseTimer = window.setTimeout(() => reject(makeTimeoutError()), 20000);
+        }),
+      ]));
+      window.clearTimeout(responseTimer);
+      if (!isCurrentReset()) return;
+      if (!payload?.qr_code || !/^[a-f0-9]{64}$/.test(payload.credential_version || '')) {
+        const error = new Error(t('writeUnconfirmed'));
+        error.isUncertainWrite = true;
+        throw error;
+      }
+      const updatedUnderlying = await applyFreshQrToUnderlyingModal(tradeNo, payload, { resetComplete: true, isCurrent: isCurrentReset });
+      if (!isCurrentReset()) return;
+      state.subscriptionResetOperations.delete(tradeNo);
+      const shouldRestoreFocus = state.resetModal === operation;
+      if (shouldRestoreFocus) {
+        closeResetModal({ restoreFocus: true });
+      }
+      if (updatedUnderlying) {
+        renderModal();
+        startPolling();
+      }
+      if (currentPage() === '/order') {
+        try { await renderOrders(); } catch (error) { toastErrorIfCurrent(error, resetSession); }
+      }
+    } catch (error) {
+      if (!isCurrentReset() || error?.isCancelled) return;
+      const status = Number(error?.status);
+      // A later rejection cannot disprove an earlier unconfirmed commit.
+      operation.conflict = status === 409 || (!operation.uncertain && status >= 400 && status < 500);
+      operation.uncertain = !operation.conflict;
+      if (state.modal) renderModal();
+      toastErrorIfCurrent(error, resetSession);
+    } finally {
+      window.clearTimeout(responseTimer);
+      if (isCurrentReset()) {
+        operation.submitting = false;
+        if (state.modal) renderModal();
+        if (state.resetModal === operation) {
+          renderResetModal();
+          focusActiveResetModalControl();
+        }
+      }
+    }
+  }
+
+  async function refreshSubscriptionReset() {
+    const operation = state.resetModal;
+    if (!operation?.resetConfirm || operation.submitting) return;
+    const resetSession = syncSession();
+    const tradeNo = operation.payload.trade_no;
+    operation.submitting = true;
+    renderResetModal();
+    try {
+      const payload = dataOf(await api(`/user/distributor/subscription-qr?trade_no=${encodeURIComponent(tradeNo)}`));
+      const isCurrentRefresh = () => state.active && isCurrentSession(resetSession) && state.resetModal === operation;
+      if (!isCurrentRefresh()) return;
+      const updatedUnderlying = await applyFreshQrToUnderlyingModal(tradeNo, payload, { resetComplete: false, isCurrent: isCurrentRefresh });
+      if (!isCurrentRefresh()) return;
+      state.subscriptionResetOperations.delete(tradeNo);
+      closeResetModal({ restoreFocus: true });
+      if (updatedUnderlying) {
+        renderModal();
+        startPolling();
+      }
+    } catch (error) { toastErrorIfCurrent(error, resetSession); }
+    finally {
+      operation.submitting = false;
+      if (state.resetModal === operation) {
+        renderResetModal();
+        focusActiveResetModalControl();
+      }
+    }
+  }
+
+  async function openBatchCardQr(index) {
+    const batchModal = state.modal;
+    if (batchModal?.type !== 'batchDelivery') return;
+    const item = batchModal.items?.[index];
+    if (!item?.delivery?.trade_no) return;
+    const modalSession = syncSession();
+    const modalOpId = state.modalOperationId;
+    const payload = dataOf(await api(`/user/distributor/subscription-qr?trade_no=${encodeURIComponent(item.delivery.trade_no)}`));
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId || state.modal !== batchModal) return;
+    const png = await composeSubscriptionQrPng(payload, { batchIndex: index + 1, preferObjectUrl: true, objectUrls: batchModal.objectUrls });
+    if (!state.active || !isCurrentSession(modalSession) || state.modalOperationId !== modalOpId || state.modal !== batchModal) {
+      if (png?.isObjectUrl) revokeTrackedObjectUrl(batchModal.objectUrls, png.imageUrl);
+      return;
+    }
+    if (item.imageUrl && batchModal.objectUrls?.has(item.imageUrl)) {
+      revokeTrackedObjectUrl(batchModal.objectUrls, item.imageUrl);
+    }
+    item.delivery = { ...item.delivery, ...payload, qr_code: null };
+    item.imageUrl = png.imageUrl;
+    item.blob = png.blob;
+    item.copied = false;
+    item.qrExpanded = true;
+    syncBatchDownloadState(batchModal);
+    renderModal();
   }
 
   function makeIdempotencyKey() {
@@ -1695,6 +3132,37 @@
     document.querySelector('#dist-modal-root .dist-modal-x')?.focus({ preventScroll: true });
   }
 
+  function renderResetModal() {
+    let resetRoot = document.getElementById('dist-reset-modal-root');
+    if (!resetRoot) {
+      resetRoot = document.createElement('div');
+      resetRoot.id = 'dist-reset-modal-root';
+      document.body.appendChild(resetRoot);
+    }
+    if (state.dark) resetRoot.classList.add?.('is-dark');
+    else resetRoot.classList.remove?.('is-dark');
+    if (!state.resetModal) {
+      resetRoot.innerHTML = '';
+      resetRoot.classList.remove('open');
+      if (!state.modal) {
+        document.documentElement.classList.remove('dist-modal-open');
+        document.body.classList.remove('dist-modal-open');
+      }
+      return;
+    }
+    const modal = state.resetModal;
+    resetRoot.classList.add('open');
+    document.documentElement.classList.add('dist-modal-open');
+    document.body.classList.add('dist-modal-open');
+    resetRoot.innerHTML = `<div class="dist-reset-modal-backdrop"><section class="dist-modal dist-subscription-reset-modal" role="dialog" aria-modal="true" aria-labelledby="dist-subscription-reset-title"><button type="button" class="dist-modal-x" data-modal-action="close-reset-confirm" aria-label="${t('closePopup')}" ${modal.submitting ? 'disabled' : ''}>×</button><h2 id="dist-subscription-reset-title">${t('resetSubscription')}</h2>
+      <p class="dist-delivery-identity"><strong>${escapeHtml(subscriptionLabel(modal.payload))}</strong><small>${t('customerName')}：${escapeHtml(modal.payload.customer_name || '-')}</small></p>
+      <p>${escapeHtml(t('resetSubscriptionDevices').replace('{count}', (modal.payload.hwid_devices || []).length))}</p>
+      <p class="dist-reset-hint">${t('resetSubscriptionHint')}</p>
+      ${modal.submitting || modal.uncertain || modal.conflict ? `<p role="status">${t(modal.submitting ? 'resetSubscriptionPending' : modal.conflict ? 'resetSubscriptionConflict' : 'resetSubscriptionUncertain')}</p>` : ''}
+      <div class="dist-modal-actions"><button type="button" data-modal-action="close-reset-confirm" ${modal.submitting ? 'disabled' : ''}>${t('closePopup')}</button><button type="button" class="primary" data-modal-action="${modal.conflict ? 'refresh-subscription-reset' : 'confirm-subscription-reset'}" ${modal.submitting ? 'disabled' : ''}>${t(modal.submitting ? 'loading' : modal.conflict ? 'resetSubscriptionRefresh' : modal.uncertain ? 'resetSubscriptionRetry' : 'resetSubscriptionConfirm')}</button></div>
+    </section></div>`;
+  }
+
   function renderModal() {
     let root = document.getElementById('dist-modal-root');
     if (!root) {
@@ -1702,11 +3170,18 @@
       root.id = 'dist-modal-root';
       document.body.appendChild(root);
     }
+    if (state.dark) root.classList.add?.('is-dark');
+    else root.classList.remove?.('is-dark');
+    if (typeof renderResetModal === 'function' && (state.resetModal || document.getElementById?.('dist-reset-modal-root')?.id === 'dist-reset-modal-root')) {
+      renderResetModal();
+    }
     if (!state.modal) {
       root.innerHTML = '';
       root.classList.remove('open');
-      document.documentElement.classList.remove('dist-modal-open');
-      document.body.classList.remove('dist-modal-open');
+      if (!state.resetModal) {
+        document.documentElement.classList.remove('dist-modal-open');
+        document.body.classList.remove('dist-modal-open');
+      }
       stopPolling();
       return;
     }
@@ -1726,9 +3201,21 @@
     }
     if (state.modal.type === 'subscriptionQr') {
       const modal = state.modal;
+      const resetOp = state.subscriptionResetOperations?.get?.(modal.payload?.trade_no);
+      const canReset = Boolean(modal.payload?.can_reset_subscription || resetOp);
+      let qrBodyHtml;
+      if (resetOp) {
+        qrBodyHtml = `<p ${state.resetModal === resetOp ? '' : 'role="status" '}class="dist-reset-hint">${t(resetOp.submitting ? 'resetSubscriptionPending' : resetOp.conflict ? 'resetSubscriptionConflict' : 'resetSubscriptionUncertain')}</p>
+          <div class="dist-qr-actions-bar is-reset-only"><div class="dist-modal-actions dist-image-actions dist-qr-action-row cols-1"><button type="button" class="dist-reset-trigger-btn" data-modal-action="reset-subscription">${t(resetOp.conflict ? 'resetSubscriptionRefresh' : 'resetSubscriptionRetry')}</button></div></div>`;
+      } else if (modal.imageUrl) {
+        qrBodyHtml = `${modal.resetComplete ? `<p role="status" class="dist-reset-hint">${t('resetSubscriptionSuccess')}</p>` : ''}
+          <img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}">
+          <div class="dist-qr-actions-bar"><div class="dist-modal-actions dist-image-actions dist-qr-action-row ${canReset ? 'cols-3' : 'cols-2'}"><button type="button" data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button type="button" class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button>${canReset ? `<button type="button" class="dist-reset-trigger-btn" data-modal-action="reset-subscription">${t('resetSubscription')}</button>` : ''}</div></div>`;
+      } else {
+        qrBodyHtml = `<p role="status">${t('loading')}</p>`;
+      }
       root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-subscription-qr-modal" role="dialog" aria-modal="true" aria-labelledby="dist-subscription-qr-title"><button class="dist-modal-x" data-modal-action="cancel" aria-label="${t('cancel')}">×</button><h2 id="dist-subscription-qr-title">${t('viewSubscriptionQr')}</h2>
-        <img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}">
-        <div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>
+        ${qrBodyHtml}
       </section></div>`;
       return;
     }
@@ -1763,6 +3250,41 @@
       root.innerHTML = `<div class="dist-modal-backdrop dist-order-action-backdrop"><section class="dist-modal dist-entitlement-modal" role="dialog" aria-modal="true" aria-label="${t('entitlement')}"><button class="dist-modal-x" data-modal-action="cancel" aria-label="${t('closePopup')}">×</button>${state.modal.content}</section></div>`;
       return;
     }
+    if (state.modal.type === 'batchDelivery') {
+      const batchModal = state.modal;
+      const previousScrollTop = root.querySelector('.dist-batch-qr-body')?.scrollTop || 0;
+      const total = batchModal.items.length;
+      const pendingCount = batchModal.items.filter(({ delivery }) => delivery.delivery_status === 0).length;
+      const claimedCount = batchModal.items.filter(({ delivery }) => delivery.delivery_status === 1).length;
+      const cardsHtml = batchModal.items.map((item, index) => {
+        const delivery = item.delivery;
+        const claimed = delivery.delivery_status === 1;
+        return `<article class="dist-batch-qr-card ${claimed ? 'is-claimed' : ''}" data-batch-trade-no="${escapeHtml(delivery.trade_no)}">${renderBatchDeliveryCardInner(item, index)}</article>`;
+      }).join('');
+      if (typeof syncBatchDownloadState === 'function') syncBatchDownloadState(batchModal);
+      const subtitle = batchModal.imagesReady
+        ? t('batchQrHint')
+        : t('batchQrPreparing').replace('{done}', batchModal.renderedCount).replace('{total}', total);
+      const displayCount = batchModal.imagesReady ? batchModal.downloadableCount : total;
+      const batchDownloadButton = batchModal.imagesReady && !batchModal.downloadableCount
+        ? ''
+        : `<button type="button" class="primary dist-batch-download-btn" data-modal-action="download-batch-qr-images" ${batchModal.imagesReady && batchModal.downloadableCount > 0 && !batchModal.downloadingAll ? '' : 'disabled'}>${escapeHtml(t(batchModal.downloadingAll ? 'downloadingBatchQrs' : 'downloadBatchQrs').replace('{count}', displayCount))}</button>`;
+      root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-batch-qr-modal" role="dialog" aria-modal="true" aria-labelledby="dist-batch-qr-heading">
+        <button class="dist-modal-x" data-modal-action="close-delivery" aria-label="${t('closePopup')}">×</button>
+        <header class="dist-batch-qr-header">
+          <div>
+            <h2 id="dist-batch-qr-heading">${escapeHtml(t('batchQrTitle').replace('{total}', total).replace('{pending}', pendingCount).replace('{claimed}', claimedCount))}</h2>
+            <p>${escapeHtml(subtitle)}</p>
+          </div>
+          ${batchDownloadButton}
+        </header>
+        <div class="dist-batch-qr-body"><div class="dist-batch-qr-grid">${cardsHtml}</div></div>
+        <footer class="dist-modal-actions dist-batch-qr-footer"><button type="button" data-modal-action="buy-again">${t('buyAgain')}</button><button type="button" class="primary" data-modal-action="close-delivery">${t('closePopup')}</button></footer>
+      </section></div>`;
+      const nextBody = root.querySelector('.dist-batch-qr-body');
+      if (nextBody && previousScrollTop > 0) nextBody.scrollTop = previousScrollTop;
+      return;
+    }
     const modal = state.modal;
     const delivery = modal.delivery;
     const claimed = delivery.delivery_status === 1;
@@ -1772,10 +3294,26 @@
     const connectionText = connected
       ? t('connectedThrough').replace('{node}', delivery.connected_node_name || '-')
       : issued ? t('waitingConnection') : '';
+    const resetOp = state.subscriptionResetOperations?.get?.(delivery.trade_no);
+    const canReset = Boolean(delivery.can_reset_subscription || resetOp);
+    const goldTag = canReset ? `<span class="dist-reset-gold-tag">${escapeHtml(t('resetInOrdersTag'))}</span>` : '';
+    const showQrImage = !resetOp && ((pending && modal.imageUrl) || (modal.resetComplete && modal.imageUrl));
+    let deliveryBodyHtml;
+    if (resetOp) {
+      deliveryBodyHtml = `<p ${state.resetModal === resetOp ? '' : 'role="status" '}class="dist-reset-hint">${t(resetOp.submitting ? 'resetSubscriptionPending' : resetOp.conflict ? 'resetSubscriptionConflict' : 'resetSubscriptionUncertain')}</p>
+        <div class="dist-qr-actions-bar has-gold-tag is-reset-only"><div class="dist-modal-actions dist-image-actions dist-qr-action-row cols-1"><button type="button" class="dist-reset-trigger-btn" data-modal-action="reset-subscription">${t(resetOp.conflict ? 'resetSubscriptionRefresh' : 'resetSubscriptionRetry')}</button></div>${goldTag}</div>`;
+    } else if (showQrImage) {
+      deliveryBodyHtml = `${modal.resetComplete ? `<p role="status" class="dist-reset-hint">${t('resetSubscriptionSuccess')}</p>` : ''}
+        <img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}">
+        <div class="dist-qr-actions-bar ${canReset ? 'has-gold-tag' : ''}"><div class="dist-modal-actions dist-image-actions dist-qr-action-row ${canReset ? 'cols-3' : 'cols-2'}"><button type="button" data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button type="button" class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button>${canReset ? `<button type="button" class="dist-reset-trigger-btn" data-modal-action="reset-subscription">${t('resetSubscription')}</button>` : ''}</div>${goldTag}</div>`;
+    } else {
+      deliveryBodyHtml = `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong>${claimed && issued ? `<small class="dist-network-status">${escapeHtml(connectionText)}</small>` : ''}</div>
+        ${canReset ? `<div class="dist-qr-actions-bar has-gold-tag is-reset-only"><div class="dist-modal-actions dist-image-actions dist-qr-action-row cols-1"><button type="button" class="dist-reset-trigger-btn" data-modal-action="reset-subscription">${t('resetSubscription')}</button></div>${goldTag}</div>` : ''}`;
+    }
     root.innerHTML = `<div class="dist-modal-backdrop"><section class="dist-modal dist-qr-modal"><button class="dist-modal-x" data-modal-action="close-delivery">×</button><h2>${t('qrTitle')}</h2>
       ${delivery.subscription_name ? `<p class="dist-delivery-identity"><strong>${escapeHtml(delivery.subscription_name)}</strong><small>${t('orderNo')}：${escapeHtml(delivery.trade_no)}</small></p>` : ''}
-      <p>${pending ? t('qrHint') : claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p>
-      ${pending && modal.imageUrl ? `<img class="dist-subscription-qr-preview" src="${modal.imageUrl}" alt="${escapeHtml(t('viewSubscriptionQr'))}"><div class="dist-modal-actions dist-image-actions"><button data-modal-action="copy-subscription-qr">${modal.copied ? t('copySuccess') : t('copyImage')}</button><button class="primary" data-modal-action="download-subscription-qr">${t('downloadImage')}</button></div>` : `<div class="dist-delivery-result">${claimed && issued ? '✓' : claimed ? '…' : '×'}<strong>${claimed && issued ? t('claimed') : claimed ? t('issuing') : t('closed')}</strong>${claimed && issued ? `<small class="dist-network-status">${escapeHtml(connectionText)}</small>` : ''}</div>`}
+      <p>${pending || modal.resetComplete ? t('qrHint') : claimed && issued ? t('claimedOk') : claimed ? t('issuing') : t('closed')}</p>
+      ${deliveryBodyHtml}
       <div class="dist-modal-actions"><button data-modal-action="buy-again">${t('buyAgain')}</button><button class="primary" data-modal-action="close-delivery">${t('closePopup')}</button></div>
       </section></div>`;
   }
@@ -1783,8 +3321,12 @@
   function closeModal() {
     state.modalOperationId += 1;
     abortScopedRequests('modal', 'cancelled');
+    revokeBatchModalUrls(state.modal);
     const entitlementTrigger = state.modal?.type === 'entitlement' ? state.modal.trigger : null;
     const modalTrigger = state.modalTrigger;
+    state.resetModal = null;
+    state.resetModalTrigger = null;
+    state.resetModalTarget = null;
     state.modal = null;
     state.modalTrigger = null;
     renderModal();
@@ -1804,22 +3346,158 @@
 
   function startPolling() {
     stopPolling();
+    let pollInFlight = false;
     state.poller = setInterval(async () => {
-      if (document.hidden || !state.active || !state.modal || state.modal.type !== 'delivery' || state.modal.delivery.delivery_status === 2 || state.modal.delivery.connected_at) return;
-      const pollSession = syncSession();
-      const pollModalOpId = state.modalOperationId;
+      if (pollInFlight || document.hidden || !state.active || !state.modal || state.resetModal) return;
+      pollInFlight = true;
       try {
-        const currentTradeNo = state.modal.delivery.trade_no;
-        const updated = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(currentTradeNo)}`));
-        if (!state.active || !isCurrentSession(pollSession) || state.modalOperationId !== pollModalOpId || !state.modal || state.modal.type !== 'delivery' || state.modal.delivery.trade_no !== currentTradeNo) return;
-        const devicesChanged = JSON.stringify(updated.hwid_devices || []) !== JSON.stringify(state.modal.delivery.hwid_devices || []);
-        if (updated.delivery_status !== state.modal.delivery.delivery_status || updated.config_issued_at !== state.modal.delivery.config_issued_at || updated.connected_at !== state.modal.delivery.connected_at || devicesChanged) {
-          const nextModal = await makeDeliveryModal(updated);
-          if (!state.active || !isCurrentSession(pollSession) || state.modalOperationId !== pollModalOpId || !state.modal || state.modal.type !== 'delivery' || state.modal.delivery.trade_no !== currentTradeNo) return;
-          state.modal = nextModal;
-          renderModal();
+        if (state.modal.type === 'batchDelivery') {
+          const batchModal = state.modal;
+          const activeTradeNos = batchModal.items
+            .filter((entry) => entry.delivery.delivery_status !== 2 || entry.resetComplete || entry.qrExpanded)
+            .map(({ delivery }) => delivery.trade_no);
+          if (!activeTradeNos.length) return;
+          const pollSession = syncSession();
+          const pollModalOpId = state.modalOperationId;
+          try {
+            const updates = dataOf(await api('/user/distributor/delivery/batch', {
+              method: 'POST',
+              data: { trade_nos: activeTradeNos.join(','), include_qr: 0 },
+            }));
+            if (!state.active || !isCurrentSession(pollSession) || state.modalOperationId !== pollModalOpId || state.modal !== batchModal || !Array.isArray(updates)) return;
+            const updatesByTradeNo = new Map(updates.map((item) => [item.trade_no, item]));
+            let anyChanged = false;
+            const isCurrentBatch = () => state.active && isCurrentSession(pollSession)
+              && state.modalOperationId === pollModalOpId && state.modal === batchModal;
+            // Invalidate every affected asset before awaiting image or network work.
+            for (const item of batchModal.items) {
+              if (state.subscriptionResetOperations.has(item.delivery.trade_no)) continue;
+              const updated = updatesByTradeNo.get(item.delivery.trade_no);
+              if (updated?.credential_version && updated.credential_version !== item.delivery.credential_version) {
+                const newlyClaimed = item.delivery.delivery_status === 0 && updated.delivery_status === 1;
+                if (item.imageUrl && batchModal.objectUrls?.has(item.imageUrl)) {
+                  try { URL.revokeObjectURL(item.imageUrl); } catch (_) { /* ignore */ }
+                  batchModal.objectUrls.delete(item.imageUrl);
+                }
+                item.delivery = { ...item.delivery, ...updated, qr_code: null };
+                item.imageUrl = null;
+                item.blob = null;
+                item.copied = false;
+                if (newlyClaimed) {
+                  item.resetComplete = false;
+                  item.qrExpanded = false;
+                }
+                item.needsQrRefresh = true;
+                batchModal.assetGeneration += 1;
+                anyChanged = true;
+              }
+            }
+            if (anyChanged) {
+              syncBatchDownloadState(batchModal);
+              renderModal();
+            }
+            await Promise.allSettled(batchModal.items.map(async (item, itemIndex) => {
+              if (state.subscriptionResetOperations.has(item.delivery.trade_no)) return;
+              const updated = updatesByTradeNo.get(item.delivery.trade_no);
+              if (!updated) return;
+              const devicesChanged = JSON.stringify(updated.hwid_devices || []) !== JSON.stringify(item.delivery.hwid_devices || []);
+              if (
+                updated.delivery_status !== item.delivery.delivery_status
+                || updated.config_issued_at !== item.delivery.config_issued_at
+                || updated.connected_at !== item.delivery.connected_at
+                || devicesChanged
+                || item.needsQrRefresh
+                || (item.delivery.delivery_status === 0 && !item.blob)
+              ) {
+                const newlyClaimed = item.delivery.delivery_status === 0 && updated.delivery_status === 1;
+                item.delivery = {
+                  ...item.delivery,
+                  ...updated,
+                  qr_code: updated.qr_code || item.delivery.qr_code,
+                };
+                if (newlyClaimed) {
+                  item.resetComplete = false;
+                  item.qrExpanded = false;
+                }
+                if (item.needsQrRefresh || (devicesChanged && (item.qrExpanded || item.resetComplete) && !item.delivery.qr_code)) {
+                  const refreshed = dataOf(await api(`/user/distributor/subscription-qr?trade_no=${encodeURIComponent(item.delivery.trade_no)}`));
+                  if (!isCurrentBatch()) return;
+                  item.delivery = { ...item.delivery, ...refreshed };
+                }
+                if ((devicesChanged || item.needsQrRefresh || !item.blob) && item.delivery.qr_code) {
+                  const sourceDelivery = item.delivery;
+                  const png = await composeSubscriptionQrPng(sourceDelivery, { batchIndex: itemIndex + 1, preferObjectUrl: true, objectUrls: batchModal.objectUrls });
+                  if (!isCurrentBatch() || item.delivery !== sourceDelivery) {
+                    if (png?.isObjectUrl) revokeTrackedObjectUrl(batchModal.objectUrls, png.imageUrl);
+                    if (state.modal !== batchModal) revokeBatchModalUrls(batchModal);
+                    return;
+                  }
+                  if (item.imageUrl && batchModal.objectUrls?.has(item.imageUrl)) {
+                    revokeTrackedObjectUrl(batchModal.objectUrls, item.imageUrl);
+                  }
+                  item.imageUrl = png.imageUrl;
+                  item.blob = png.blob;
+                  item.delivery.qr_code = null;
+                  item.copied = false;
+                  item.needsQrRefresh = false;
+                }
+                anyChanged = true;
+              }
+            }));
+            if (!isCurrentBatch()) return;
+            if (anyChanged) {
+              syncBatchDownloadState(batchModal);
+              renderModal();
+            }
+          } catch (_) { /* keep the current batch QR grid visible during transient failures */ }
+          return;
         }
-      } catch (_) { /* keep the current QR visible during transient failures */ }
+        if (!['delivery', 'subscriptionQr'].includes(state.modal.type)) return;
+        const singleModal = state.modal;
+        const currentDelivery = singleModal.delivery || singleModal.payload;
+        if (!currentDelivery?.trade_no || state.subscriptionResetOperations.has(currentDelivery.trade_no)) return;
+        if (currentDelivery.delivery_status === 2 && singleModal.type === 'delivery' && !singleModal.resetComplete) return;
+        const pollSession = syncSession();
+        const pollModalOpId = state.modalOperationId;
+        try {
+          const currentTradeNo = currentDelivery.trade_no;
+          const updated = dataOf(await api(`/user/distributor/delivery?trade_no=${encodeURIComponent(currentTradeNo)}`));
+          const isCurrentSingle = () => state.active && isCurrentSession(pollSession) && state.modalOperationId === pollModalOpId && state.modal === singleModal;
+          if (!isCurrentSingle()) return;
+          const devicesChanged = JSON.stringify(updated.hwid_devices || []) !== JSON.stringify(currentDelivery.hwid_devices || []);
+          const versionChanged = updated.credential_version && updated.credential_version !== currentDelivery.credential_version;
+          if (versionChanged) {
+            currentDelivery.qr_code = null;
+            singleModal.imageUrl = null;
+            singleModal.blob = null;
+            singleModal.copied = false;
+            renderModal();
+          }
+          if (versionChanged || updated.delivery_status !== currentDelivery.delivery_status || updated.config_issued_at !== currentDelivery.config_issued_at || updated.connected_at !== currentDelivery.connected_at || devicesChanged || (!singleModal.imageUrl && (singleModal.type === 'subscriptionQr' || updated.delivery_status === 0))) {
+            const newlyClaimed = currentDelivery.delivery_status === 0 && updated.delivery_status === 1;
+            const nextResetComplete = Boolean(singleModal.resetComplete && !newlyClaimed);
+            let nextModal;
+            if (singleModal.type === 'subscriptionQr') {
+              const payload = updated.qr_code ? updated : dataOf(await api(`/user/distributor/subscription-qr?trade_no=${encodeURIComponent(currentTradeNo)}`));
+              if (!isCurrentSingle()) return;
+              const png = await composeSubscriptionQrPng(payload);
+              nextModal = { type: 'subscriptionQr', payload, ...png, copied: false, resetComplete: singleModal.resetComplete };
+            } else if (nextResetComplete && updated.delivery_status !== 0) {
+              const payload = dataOf(await api(`/user/distributor/subscription-qr?trade_no=${encodeURIComponent(currentTradeNo)}`));
+              if (!isCurrentSingle()) return;
+              const png = await composeSubscriptionQrPng(payload);
+              nextModal = { type: 'delivery', delivery: { ...updated, ...payload }, ...png, copied: false, resetComplete: true };
+            } else {
+              nextModal = { ...(await makeDeliveryModal(updated)), resetComplete: nextResetComplete };
+            }
+            if (!isCurrentSingle()) return;
+            state.modal = nextModal;
+            renderModal();
+          }
+        } catch (_) { /* keep the current QR visible during transient failures */ }
+      } finally {
+        pollInFlight = false;
+      }
     }, 3000);
   }
 
@@ -1871,6 +3549,26 @@
     const period = target.closest('[data-plan-period]');
     if (period) {
       state.selectedPeriods[period.dataset.planId] = period.dataset.planPeriod;
+      extendPlanPriceTimerIfVisible();
+      renderPlanCatalog();
+      return;
+    }
+    const qtyPreset = target.closest('[data-plan-qty-preset]');
+    if (qtyPreset && !qtyPreset.disabled) {
+      const planId = qtyPreset.dataset.planId;
+      const preset = normalizeOrderQuantity(qtyPreset.dataset.planQtyPreset);
+      const current = selectedPlanQuantity(planId);
+      state.selectedQuantities[planId] = current === preset ? 1 : preset;
+      extendPlanPriceTimerIfVisible();
+      renderPlanCatalog();
+      return;
+    }
+    const qtyStep = target.closest('[data-plan-qty-step]');
+    if (qtyStep && !qtyStep.disabled) {
+      const planId = qtyStep.dataset.planId;
+      const delta = Number(qtyStep.dataset.planQtyStep) || 0;
+      state.selectedQuantities[planId] = normalizeOrderQuantity(selectedPlanQuantity(planId) + delta);
+      extendPlanPriceTimerIfVisible();
       renderPlanCatalog();
       return;
     }
@@ -2000,6 +3698,7 @@
     if (action === 'logout') {
       closePlanPrices(false);
       const tokenToLogout = authToken();
+      // Logging out never discards an uncertain purchase; the same account restores it after login.
       deactivateDistributorView();
       if (window.__xboardAuthSession?.logoutSession) {
         window.__xboardAuthSession.logoutSession(tokenToLogout);
@@ -2018,20 +3717,55 @@
       if (state.modal?.type === 'knowledge') closeModal();
       await renderPage();
       if (state.modal) renderModal();
+      if (state.resetModal) renderResetModal();
     } else if (action === 'theme') {
       state.dark = !state.dark;
       localStorage.setItem('xboard_distributor_dark', state.dark ? '1' : '0');
       await renderPage();
       if (state.modal) renderModal();
+      if (state.resetModal) renderResetModal();
     } else if (action === 'retry') {
       await renderPage();
     } else if (action === 'check-purchase-orders') {
       await checkPurchaseOrders();
+    } else if (action === 'resume-purchase') {
+      await resumeUncertainPurchase();
     } else if (action === 'acknowledge-order-check') {
-      if (!state.purchaseRecovery?.checked) return;
-      state.purchaseRecovery = null;
-      state.purchasingPlanId = null;
+      if (!state.purchaseRecovery?.tradeNo || !state.purchaseRecovery?.checked) return;
+      persistPurchaseRecovery(null);
       state.purchaseOperationId += 1;
+      if (currentPage() === '/plan') renderPlanCatalog();
+      else navigate('/plan');
+    } else if (action === 'abandon-purchase') {
+      const recovery = state.purchaseRecovery;
+      if (!recovery || recovery.tradeNo || recovery.resuming || !recovery.absenceConfirmedAt) return;
+      recovery.abandonArmed = true;
+      refreshPurchaseRecoveryView();
+    } else if (action === 'cancel-abandon-purchase') {
+      if (!state.purchaseRecovery) return;
+      state.purchaseRecovery.abandonArmed = false;
+      refreshPurchaseRecoveryView();
+    } else if (action === 'confirm-abandon-purchase') {
+      const recovery = state.purchaseRecovery;
+      if (!recovery || recovery.tradeNo || recovery.resuming || !recovery.abandonArmed) return;
+      // Re-validate against shared storage: another tab may have replayed or resolved this purchase.
+      const storedRecovery = findStoredPurchaseRecovery(purchaseRecoveryRecordId(recovery));
+      const safelyAbsent = Boolean(
+        storedRecovery
+        && !storedRecovery.tradeNo
+        && storedRecovery.absenceConfirmedAt
+        && storedRecovery.requestedAt === Number(recovery.requestedAt || 0)
+        && storedRecovery.absenceConfirmedAt - storedRecovery.requestedAt >= PURCHASE_ABANDON_SAFE_DELAY_MS
+      );
+      if (!safelyAbsent) {
+        recovery.abandonArmed = false;
+        toast(t('abandonPurchaseStale'), 'error');
+        syncPurchaseRecoveryFromStorage();
+        return;
+      }
+      persistPurchaseRecovery(null);
+      state.purchaseOperationId += 1;
+      toast(t('purchaseAbandoned'));
       if (currentPage() === '/plan') renderPlanCatalog();
       else navigate('/plan');
     } else if (action === 'retry-purchase-delivery') {
@@ -2039,11 +3773,13 @@
       const session = syncSession();
       if (!recovery?.tradeNo) return;
       try {
-        const opened = await openDelivery(recovery.tradeNo);
+        const opened = Array.isArray(recovery.tradeNos) && recovery.tradeNos.length > 1
+          ? await openBatchDelivery(recovery.tradeNos)
+          : await openDelivery(recovery.tradeNo);
         if (!opened || !isCurrentSession(session) || state.purchaseRecovery !== recovery) return;
-        state.purchaseRecovery = null;
-        state.purchasingPlanId = null;
+        persistPurchaseRecovery(null);
         if (currentPage() === '/plan') renderPlanCatalog();
+        else if (state.purchaseRecovery) refreshPurchaseRecoveryView();
         else document.querySelector('#distributor-app .dist-purchase-recovery')?.remove();
       } catch (error) { toastErrorIfCurrent(error, session); }
     } else if (action === 'export-orders') {
@@ -2122,9 +3858,18 @@
   }
 
   async function handleModalAction(target) {
-    const action = target.closest('[data-modal-action]')?.dataset.modalAction;
+    const actionEl = target.closest('[data-modal-action]');
+    const action = actionEl?.dataset.modalAction;
     if (!action) return;
-    if (action === 'close-delivery') closeModal();
+    if (action === 'reset-subscription') beginSubscriptionReset(actionEl);
+    else if (action === 'close-reset-confirm') closeResetModal();
+    else if (action === 'confirm-subscription-reset') await submitSubscriptionReset();
+    else if (action === 'refresh-subscription-reset') await refreshSubscriptionReset();
+    else if (action === 'open-batch-subscription') {
+      const index = Number(actionEl.dataset.batchIndex);
+      try { await openBatchCardQr(index); } catch (error) { toastErrorIfCurrent(error); }
+    }
+    else if (action === 'close-delivery') closeModal();
     else if (action === 'renew-done') {
       if (state.modal?.type === 'renewal' && state.modal.result) state.renewalOperations.delete(state.modal.order.trade_no);
       closeModal();
@@ -2205,6 +3950,40 @@
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 0);
     }
+    else if (action === 'download-batch-qr-images') {
+      if (state.modal?.type !== 'batchDelivery') return;
+      await downloadBatchDeliveryImages(state.modal);
+    }
+    else if (action === 'copy-batch-item-qr') {
+      const index = Number(target.closest('[data-modal-action]')?.dataset.batchIndex);
+      const activeBatchModal = state.modal?.type === 'batchDelivery' ? state.modal : null;
+      const item = activeBatchModal?.items?.[index] || null;
+      if (!item?.blob) return;
+      if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined' || !window.isSecureContext) {
+        toast(t('copyImageUnsupported'), 'error');
+        return;
+      }
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': item.blob })]);
+        if (state.modal !== activeBatchModal || activeBatchModal.items?.[index] !== item) return;
+        item.copied = true;
+        if (!syncBatchDeliveryProgressDom(activeBatchModal, [index])) renderModal();
+        window.setTimeout(() => {
+          if (state.modal !== activeBatchModal || activeBatchModal.items?.[index] !== item) return;
+          item.copied = false;
+          if (!syncBatchDeliveryProgressDom(activeBatchModal, [index])) renderModal();
+        }, 1800);
+      } catch (_) { toast(t('copyImageUnsupported'), 'error'); }
+    }
+    else if (action === 'download-batch-item-qr') {
+      const index = Number(target.closest('[data-modal-action]')?.dataset.batchIndex);
+      const batchModal = state.modal?.type === 'batchDelivery' ? state.modal : null;
+      const item = batchModal?.items?.[index] || null;
+      if (!item?.blob) return;
+      const padWidth = Math.max(2, String(batchModal.items.length).length);
+      const prefix = String(index + 1).padStart(padWidth, '0');
+      triggerBlobDownload(item.blob, `订阅二维码-#${prefix}-${sanitizeFilenamePart(subscriptionLabel(item.delivery))}.png`);
+    }
     else if (action === 'cancel') closeModal();
   }
 
@@ -2225,7 +4004,9 @@
     clearInterval(state.noticeTimer);
     state.noticeTimer = null;
     stopPolling();
+    if (state.resetModal) closeResetModal({ restoreFocus: false });
     if (state.modal) closeModal();
+    document.getElementById('dist-reset-modal-root')?.remove();
     abortScopedRequests('route', 'cancelled');
     abortScopedRequests('modal', 'cancelled');
     document.getElementById('distributor-app')?.remove();
@@ -2253,6 +4034,7 @@
     state.activeSessionEpoch = currentSession.localEpoch;
     state.activeUserKey = nextUserKey;
     state.decidedToken = currentSession.token;
+    restorePurchaseRecovery(nextUserKey, user);
     stopDetectorLoop();
     window.__xboardAuthSession?.hideRecoveryPrompt?.();
     const normalApp = document.getElementById('app');
@@ -2355,11 +4137,57 @@
   document.addEventListener('click', (event) => {
     if (!state.active) return;
     if (event.target.closest('[data-modal-action]')) handleModalAction(event.target);
+    else if (event.target.classList.contains('dist-reset-modal-backdrop')) {
+      if (!state.resetModal?.submitting) closeResetModal();
+    }
     else if (event.target.classList.contains('dist-modal-backdrop') && (isMobileOrderActionModal() || state.modal?.type === 'entitlement')) closeModal();
     else handleAction(event.target);
   });
+  document.addEventListener('input', (event) => {
+    if (!state.active) return;
+    const qtyInput = event.target?.closest?.('[data-plan-qty-input]');
+    if (!qtyInput) return;
+    const planId = qtyInput.dataset.planQtyInput;
+    const digits = String(qtyInput.value || '').replace(/[^\d]/g, '');
+    extendPlanPriceTimerIfVisible();
+    if (digits === '' || Number(digits) < 1) {
+      if (qtyInput.value !== digits) qtyInput.value = digits;
+      state.selectedQuantities[planId] = 1;
+      syncPlanCardQuantityDom(planId, 1);
+      return;
+    }
+    let parsed = Number.parseInt(digits, 10);
+    if (parsed > MAX_ORDER_QUANTITY) {
+      parsed = MAX_ORDER_QUANTITY;
+      qtyInput.value = String(MAX_ORDER_QUANTITY);
+      toast(t('quantityMaxHint'));
+    } else if (qtyInput.value !== String(parsed)) {
+      qtyInput.value = String(parsed);
+    }
+    state.selectedQuantities[planId] = parsed;
+    syncPlanCardQuantityDom(planId, parsed);
+  });
+  document.addEventListener('focusout', (event) => {
+    if (!state.active) return;
+    const qtyInput = event.target?.closest?.('[data-plan-qty-input]');
+    if (!qtyInput) return;
+    const planId = qtyInput.dataset.planQtyInput;
+    const normalized = normalizeOrderQuantity(qtyInput.value);
+    qtyInput.value = String(normalized);
+    state.selectedQuantities[planId] = normalized;
+    syncPlanCardQuantityDom(planId, normalized);
+  });
   document.addEventListener('change', (event) => {
     if (!state.active) return;
+    const qtyInput = event.target?.closest?.('[data-plan-qty-input]');
+    if (qtyInput) {
+      const planId = qtyInput.dataset.planQtyInput;
+      const normalized = normalizeOrderQuantity(qtyInput.value);
+      qtyInput.value = String(normalized);
+      state.selectedQuantities[planId] = normalized;
+      syncPlanCardQuantityDom(planId, normalized);
+      return;
+    }
     if (event.target.id === 'dist-order-page-size') {
       state.orderPerPage = Number(event.target.value) || 20;
       state.orderPage = 1;
@@ -2372,6 +4200,31 @@
   });
   document.addEventListener('keydown', (event) => {
     if (!state.active) return;
+    if (event.key === 'Tab' && state.resetModal) {
+      const elements = Array.from(document.querySelectorAll('#dist-reset-modal-root button:not(:disabled)'));
+      if (!elements.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (!elements.includes(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus({ preventScroll: true });
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus({ preventScroll: true });
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus({ preventScroll: true });
+      }
+      return;
+    }
+    if (event.key === 'Escape' && state.resetModal) {
+      event.preventDefault();
+      if (!state.resetModal.submitting) closeResetModal();
+      return;
+    }
     if (event.key === 'Tab' && state.modal?.type === 'notice') {
       const elements = Array.from(document.querySelectorAll('.dist-modal [data-modal-action], .dist-notice-body, .dist-notice-body a[href]'));
       const first = elements[0];
@@ -2382,6 +4235,23 @@
     if (event.key === 'Escape' && (isMobileOrderActionModal() || state.modal?.type === 'entitlement' || state.modal?.type === 'notice')) {
       event.preventDefault();
       closeModal();
+      return;
+    }
+    const qtyKeyInput = event.target?.closest?.('[data-plan-qty-input]');
+    if (qtyKeyInput && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+      event.preventDefault();
+      const planId = qtyKeyInput.dataset.planQtyInput;
+      const delta = event.key === 'ArrowUp' ? 1 : -1;
+      const next = normalizeOrderQuantity(selectedPlanQuantity(planId) + delta);
+      qtyKeyInput.value = String(next);
+      state.selectedQuantities[planId] = next;
+      extendPlanPriceTimerIfVisible();
+      syncPlanCardQuantityDom(planId, next);
+      return;
+    }
+    if (qtyKeyInput && event.key === 'Enter') {
+      event.preventDefault();
+      qtyKeyInput.blur();
       return;
     }
     if (event.key !== 'Enter') return;
@@ -2565,6 +4435,10 @@
   window.addEventListener('storage', (event) => {
     if (!event || !event.key || String(event.key).toUpperCase() === TOKEN_KEY) {
       handleSessionChange();
+    }
+    if (!event || !event.key || String(event.key).startsWith(`${PURCHASE_RECOVERY_STORAGE_KEY}:`)) {
+      const ownKey = purchaseRecoveryStorageKey();
+      if (ownKey && (!event?.key || event.key === ownKey)) syncPurchaseRecoveryFromStorage();
     }
   });
   window.addEventListener('xboard:auth-token-change', handleSessionChange);

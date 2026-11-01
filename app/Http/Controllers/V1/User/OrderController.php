@@ -38,8 +38,20 @@ class OrderController extends Controller
             'settlement_status' => 'nullable|integer|in:0,1',
             'search' => 'nullable|string|max:512',
         ];
+        $isIdempotencyLookup = false;
         if ($request->user()->is_distributor) {
-            $rules = array_merge($rules, $filterService->rules());
+            $isIdempotencyLookup = $request->filled('idempotency_key');
+            $rules = array_merge($rules, $filterService->rules(), [
+                'idempotency_key' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_-]+$/'],
+            ]);
+            if ($isIdempotencyLookup) {
+                $rules['per_page'] = [
+                    'nullable',
+                    'integer',
+                    'min:1',
+                    'max:' . DistributorOrderService::MAX_BATCH_QUANTITY,
+                ];
+            }
         }
         $validated = $request->validate($rules);
         $filters = $request->user()->is_distributor
@@ -68,6 +80,19 @@ class OrderController extends Controller
                         ? $query->whereNotNull('paid_at')
                         : $query->whereNull('paid_at');
                 }
+                if ($request->filled('idempotency_key')) {
+                    $rawKey = trim((string) $request->input('idempotency_key'));
+                    $batchPrefix = DistributorOrderService::batchIdempotencyPrefix($rawKey);
+                    $query->where(function ($idempotencyQuery) use ($rawKey, $batchPrefix) {
+                        $idempotencyQuery->where('distributor_idempotency_key', $rawKey);
+                        if ($batchPrefix !== null) {
+                            $idempotencyQuery->orWhereBetween('distributor_idempotency_key', [
+                                $batchPrefix . '000000',
+                                $batchPrefix . '999999',
+                            ]);
+                        }
+                    });
+                }
             })
             ->when($request->input('status') !== null, function ($query) use ($request) {
                 $query->where('status', $request->input('status'));
@@ -75,11 +100,12 @@ class OrderController extends Controller
 
         if ($filters !== null) {
             $filterService->apply($orders, $filters);
+            $defaultPerPage = $isIdempotencyLookup ? DistributorOrderService::MAX_BATCH_QUANTITY : 20;
             $page = $orders
                 ->orderByDesc('created_at')
                 ->orderByDesc('id')
                 ->paginate(
-                    perPage: (int) ($validated['per_page'] ?? 20),
+                    perPage: (int) ($validated['per_page'] ?? $defaultPerPage),
                     page: (int) ($validated['page'] ?? 1)
                 );
             $data = $page->getCollection()->map(
@@ -193,19 +219,36 @@ class OrderController extends Controller
         $userService = app(UserService::class);
 
         $plan = Plan::findOrFail($request->input('plan_id'));
+        $quantity = (int) $request->input('quantity', 1);
         if ($user->is_distributor) {
             if ($request->filled('coupon_code')) {
                 throw new ApiException('分销订单不支持优惠券或折扣');
             }
 
-            $order = app(DistributorOrderService::class)->create(
+            $orders = app(DistributorOrderService::class)->createBatch(
                 $user,
                 $plan,
                 $request->input('period'),
-                $request->input('customer_name')
+                $quantity,
+                $request->input('customer_name'),
+                $request->input('idempotency_key')
             );
 
-            return $this->success($order->trade_no);
+            if ($quantity === 1) {
+                return $this->success($orders[0]->trade_no);
+            }
+
+            return $this->success([
+                'trade_nos' => array_map(
+                    static fn(Order $order): string => $order->trade_no,
+                    $orders
+                ),
+                'quantity' => count($orders),
+            ]);
+        }
+
+        if ($quantity > 1) {
+            throw new ApiException('仅分销商账号支持批量选择下单数量', 422);
         }
 
         if ($userService->isNotCompleteOrderByUserId($user->id)) {

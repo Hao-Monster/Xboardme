@@ -1,7 +1,7 @@
 <?php
 
 use App\Support\EnvironmentSecret;
-
+use App\Support\HwidObservationConfigValidator;
 use Illuminate\Support\Str;
 
 return [
@@ -173,6 +173,27 @@ return [
             'port' => env('REDIS_PORT', 6379),
             'database' => env('REDIS_CACHE_DB', 1),
         ],
+
+        'hwid_observation_publish' => HwidObservationConfigValidator::buildPublishRedisConnectionConfig(
+            [
+                'url' => env('REDIS_URL'),
+                'host' => env('REDIS_HOST', '127.0.0.1'),
+                'username' => EnvironmentSecret::resolveValue(
+                    env('REDIS_USERNAME'),
+                    env('REDIS_USERNAME_FILE'),
+                    'REDIS_USERNAME'
+                ),
+                'password' => EnvironmentSecret::resolveValue(
+                    env('REDIS_PASSWORD'),
+                    env('REDIS_PASSWORD_FILE'),
+                    'REDIS_PASSWORD'
+                ),
+                'port' => env('REDIS_PORT', 6379),
+                'database' => env('REDIS_DB', 0),
+            ],
+            (float) env('SUBSCRIPTION_HWID_PUBLISH_CONNECT_TIMEOUT', 0.10),
+            (float) env('SUBSCRIPTION_HWID_PUBLISH_READ_TIMEOUT', 0.10)
+        ),
 
     ],
 

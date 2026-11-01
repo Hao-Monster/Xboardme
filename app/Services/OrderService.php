@@ -9,6 +9,7 @@ use App\Models\Plan;
 use App\Models\TrafficResetLog;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
+use App\Support\SqliteImmediateTransaction;
 use App\Utils\Helper;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -55,15 +56,20 @@ class OrderService
         $planService->validatePurchase($user, $period);
         HookManager::call('order.create.before', [$user, $plan, $period, $couponCode]);
 
-        return DB::transaction(function () use ($user, $plan, $period, $couponCode, $userService) {
+        return SqliteImmediateTransaction::write(function () use ($user, $plan, $period, $couponCode, $userService) {
+            $lockedUser = User::query()->lockForUpdate()->findOrFail($user->id);
+            $lockedPlan = Plan::query()->lockForUpdate()->findOrFail($plan->id);
+            (new PlanService($lockedPlan))->validatePurchase($lockedUser, $period, true);
+
             $newPeriod = PlanService::getPeriodKey($period);
 
             $order = new Order([
-                'user_id' => $user->id,
-                'plan_id' => $plan->id,
+                'user_id' => $lockedUser->id,
+                'plan_id' => $lockedPlan->id,
                 'period' => $newPeriod,
                 'trade_no' => Helper::generateOrderNo(),
-                'total_amount' => (int) (optional($plan->prices)[$newPeriod] * 100),
+                'total_amount' => (int) (optional($lockedPlan->prices)[$newPeriod] * 100),
+                'status' => Order::STATUS_PENDING,
             ]);
 
             $orderService = new self($order);
@@ -72,12 +78,12 @@ class OrderService
                 $orderService->applyCoupon($couponCode);
             }
 
-            $orderService->setVipDiscount($user);
-            $orderService->setOrderType($user);
-            $orderService->setInvite(user: $user);
+            $orderService->setVipDiscount($lockedUser);
+            $orderService->setOrderType($lockedUser);
+            $orderService->setInvite(user: $lockedUser);
 
-            if ($user->balance && $order->total_amount > 0) {
-                $orderService->handleUserBalance($user, $userService);
+            if ($lockedUser->balance && $order->total_amount > 0) {
+                $orderService->handleUserBalance($lockedUser, $userService);
             }
 
             if (!$order->save()) {
@@ -95,13 +101,12 @@ class OrderService
     public function open(): void
     {
         $order = $this->order;
-        $plan = Plan::find($order->plan_id);
 
         HookManager::call('order.open.before', $order);
 
-
-        DB::transaction(function () use ($order, $plan) {
-            $this->user = User::lockForUpdate()->find($order->user_id);
+        SqliteImmediateTransaction::write(function () use ($order) {
+            $this->user = User::lockForUpdate()->findOrFail($order->user_id);
+            $plan = Plan::query()->findOrFail($order->plan_id);
 
             if ($order->surplus_credit) {
                 $this->user->balance += $order->surplus_credit;
@@ -149,9 +154,10 @@ class OrderService
     public function setOrderType(User $user)
     {
         $order = $this->order;
+        $now = Carbon::now()->timestamp;
         if ($order->period === Plan::PERIOD_RESET_TRAFFIC) {
             $order->type = Order::TYPE_RESET_TRAFFIC;
-        } else if ($user->plan_id !== NULL && $order->plan_id !== $user->plan_id && ($user->expired_at > time() || $user->expired_at === NULL)) {
+        } else if ($user->plan_id !== NULL && (int) $order->plan_id !== (int) $user->plan_id && ($user->expired_at === NULL || (int) $user->expired_at >= $now)) {
             if (!(int) admin_setting('plan_change_enable', 1))
                 throw new ApiException('目前不允许更改订阅，请联系客服或提交工单操作');
             $order->type = Order::TYPE_UPGRADE;
@@ -163,7 +169,7 @@ class OrderService
             } else {
                 $order->total_amount = (int) ($order->total_amount - $order->surplus_amount);
             }
-        } else if (($user->expired_at === null || $user->expired_at > time()) && $order->plan_id == $user->plan_id) { // 用户订阅未过期或按流量订阅 且购买订阅与当前订阅相同 === 续费
+        } else if (($user->expired_at === null || (int) $user->expired_at >= $now) && (int) $order->plan_id === (int) $user->plan_id) { // 用户订阅未过期或按流量订阅 且购买订阅与当前订阅相同 === 续费
             $order->type = Order::TYPE_RENEWAL;
         } else { // 新购
             $order->type = Order::TYPE_NEW_PURCHASE;
@@ -371,7 +377,8 @@ class OrderService
      */
     private function getTime(string $periodKey, ?int $timestamp = null): int
     {
-        $timestamp = $timestamp < time() ? time() : $timestamp;
+        $now = Carbon::now()->timestamp;
+        $timestamp = $timestamp < $now ? $now : $timestamp;
         $periodKey = PlanService::getPeriodKey($periodKey);
 
         if (isset(self::STR_TO_TIME[$periodKey])) {

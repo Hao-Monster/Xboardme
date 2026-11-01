@@ -594,12 +594,34 @@ v2_reserved_jobs() {
       fwrite(STDERR, "No Horizon queues were configured.\n");
       exit(2);
   }
-  $redis = app("redis")->connection("default");
+  $hwidQueue = trim((string) config("subscription.hwid_observation_queue", "hwid_observation")) ?: "hwid_observation";
+  $hwidConn = (string) config("subscription.hwid_observation_worker_connection", "hwid_observation_worker");
   $reserved = 0;
   foreach ($queues as $queue) {
-      $reserved += (int) $redis->zcard("queues:{$queue}:reserved");
+      if ($queue === $hwidQueue) {
+          continue;
+      }
+      $reserved += (int) app("queue")->connection("redis")->reservedSize($queue);
+  }
+  if (is_array(config("queue.connections." . $hwidConn))) {
+      $reserved += (int) app("queue")->connection($hwidConn)->reservedSize($hwidQueue);
+  } else {
+      $reserved += (int) app("queue")->connection("redis")->reservedSize($hwidQueue);
   }
   echo $reserved;
+  '
+}
+
+v2_hwid_observation_backlog() {
+  local horizon_container=$1
+  docker exec "$horizon_container" php -r '
+  require "/www/vendor/autoload.php";
+  $app = require "/www/bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  $hwidQueue = trim((string) config("subscription.hwid_observation_queue", "hwid_observation")) ?: "hwid_observation";
+  $hwidConn = (string) config("subscription.hwid_observation_worker_connection", "hwid_observation_worker");
+  $connName = is_array(config("queue.connections." . $hwidConn)) ? $hwidConn : "redis";
+  echo (int) app("queue")->connection($connName)->size($hwidQueue);
   '
 }
 
@@ -939,6 +961,10 @@ v2_rollback_runtime() {
     done
     if [[ "$reserved_jobs" != 0 ]]; then
       echo "V2_WARN=rollback_jobs_not_drained:$reserved_jobs" >&2
+    fi
+    hwid_backlog=$(v2_hwid_observation_backlog "$horizon_id" 2>/dev/null || printf '%s\n' unknown)
+    if [[ "$hwid_backlog" != 0 ]]; then
+      echo "V2_WARN=rollback_hwid_observation_backlog:$hwid_backlog" >&2
     fi
   fi
   v2_compose stop --timeout 60 horizon >/dev/null 2>&1 || true
