@@ -146,9 +146,12 @@ services:
       timeout: 10s
       retries: 4
       start_period: 45s
+    # Default 768m assumes SUBSCRIPTION_HWID_OBSERVATION_WORKER_ENABLED=false;
+    # raise XBOARD_HORIZON_MEMORY_LIMIT to >=1200m before enabling the dedicated HWID worker.
     mem_limit: ${XBOARD_HORIZON_MEMORY_LIMIT:-768m}
     cpus: ${XBOARD_HORIZON_CPU_LIMIT:-2.0}
     pids_limit: 256
+    stop_grace_period: 60s
 
   scheduler:
     <<: *app-service

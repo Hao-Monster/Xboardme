@@ -229,8 +229,34 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pdo_mysql, pcntl, posix
+          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pdo_mysql, pcntl, posix, redis
           coverage: none
+
+      - name: Start isolated disposable Redis server for native Lua and observation queue tests
+        if: ${{ steps.scope.outputs.run_php_core == 'true' }}
+        run: |
+          docker rm -f xboard-ci-qa-redis >/dev/null 2>&1 || true
+          docker run -d --name xboard-ci-qa-redis \
+            -p 127.0.0.1:19449:6379 \
+            redis:7-alpine \
+            redis-server --save "" --appendonly no --loglevel warning >/dev/null
+          ready=0
+          for _ in $(seq 1 30); do
+            if docker exec xboard-ci-qa-redis redis-cli ping 2>/dev/null | grep -q '^PONG$'; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          qa_marker=$(openssl rand -hex 16)
+          test "${#qa_marker}" -eq 32
+          docker exec xboard-ci-qa-redis redis-cli SET qa:diagnostics:isolated-server "$qa_marker" >/dev/null
+          {
+            echo "QA_REDIS_HOST=127.0.0.1"
+            echo "QA_REDIS_PORT=19449"
+            echo "QA_REDIS_MARKER=$qa_marker"
+          } >> "$GITHUB_ENV"
 
       - name: Install locked PHP dependencies once
         if: ${{ steps.scope.outputs.run_php_core == 'true' }}
@@ -260,6 +286,12 @@ jobs:
       - name: Run PHP 8.3 SQLite regression tests
         if: ${{ steps.scope.outputs.run_php_core == 'true' }}
         run: php vendor/bin/phpunit
+
+      - name: Enforce native Redis Lua and observation queue verification without skips
+        if: ${{ steps.scope.outputs.run_php_core == 'true' }}
+        run: |
+          php vendor/bin/phpunit --fail-on-skipped tests/Feature/Diagnostics/DiagnosticLeaseFeatureTest.php
+          php vendor/bin/phpunit --fail-on-skipped --filter test_q08 tests/Feature/Subscription/SubscriptionObservationQueueTest.php
 
       - name: Wait for MySQL 5.7 and 8.4 compatibility containers
         if: ${{ steps.scope.outputs.run_mysql_compat == 'true' }}
@@ -327,7 +359,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pdo_mysql, pcntl, posix
+          extensions: mbstring, curl, fileinfo, zip, dom, xmlreader, intl, sodium, pdo_sqlite, sqlite3, pdo_mysql, pcntl, posix, redis
           coverage: none
 
       - name: Validate PHP 8.4 platform and static analysis
@@ -339,6 +371,10 @@ jobs:
       - name: Run PHP 8.4 SQLite regression tests
         if: ${{ steps.scope.outputs.run_php84_compat == 'true' }}
         run: php vendor/bin/phpunit
+
+      - name: Stop isolated disposable Redis container
+        if: ${{ always() && steps.scope.outputs.run_php_core == 'true' }}
+        run: docker rm -f xboard-ci-qa-redis >/dev/null 2>&1 || true
 
       - name: Validate companion JavaScript
         run: |
@@ -376,6 +412,18 @@ jobs:
         if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
         run: npm run test:browser:distributor-mobile
 
+      - name: Run distributor batch quantity and QR delivery browser regressions
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
+        run: npm run test:browser:distributor-batch
+
+      - name: Run distributor subscription reset browser regressions
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
+        run: npm run test:browser:distributor-reset
+
+      - name: Run admin diagnostics center browser regressions
+        if: ${{ steps.scope.outputs.run_browser_regression == 'true' }}
+        run: npm run test:browser:admin-diagnostics
+
       - name: Validate deployment scripts
         env:
           RUN_HEAVY_DEPLOY_TESTS: ${{ steps.scope.outputs.run_heavy_deploy_tests }}
@@ -411,6 +459,9 @@ jobs:
           bash -n .github/scripts/test-production-runtime-discovery.sh
           bash -n .github/scripts/smoke-admin-assets.sh
           bash -n .github/scripts/smoke-admin-assets-remote.sh
+          bash -n .github/scripts/verify-admin-assets-integrity.sh
+          bash .github/scripts/verify-admin-assets-integrity.sh
+          python3 -B -m unittest discover -s deploy/diagnostics -p "*_test.py"
           bash -n .github/scripts/run-distributor-smoke-bounded.sh
           bash -n .github/scripts/test-run-distributor-smoke-bounded.sh
           bash -n .github/scripts/smoke-distributor-remote.sh
@@ -885,6 +936,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Trust deployment host key
         env:
@@ -903,6 +956,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           TARGET_PORT: active
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ github.sha }}
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   rollback-admin-assets-hotfix:
@@ -1118,6 +1172,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Trust deployment host key
         env:
@@ -1136,6 +1192,7 @@ jobs:
           DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
           DEPLOY_USER: ${{ secrets.SERVICE_USER }}
           TARGET_PORT: ${{ inputs.stage_target_port }}
+          EXPECTED_ADMIN_ASSET_VERSION: ${{ github.sha }}
         run: bash .github/scripts/smoke-admin-assets-remote.sh
 
   cleanup-failed-green-stage:

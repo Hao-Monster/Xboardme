@@ -112,6 +112,13 @@ class Server extends Model
 
     protected $table = 'v2_server';
 
+    /**
+     * Per-instance status cache snapshot injected for a single request.
+     *
+     * @var array<string, mixed>|null
+     */
+    private ?array $statusCacheSnapshot = null;
+
     protected $guarded = ['id'];
     protected $casts = [
         'group_ids' => 'array',
@@ -438,15 +445,34 @@ class Server extends Model
     }
 
     /**
+     * @param array<string, mixed> $snapshot
+     */
+    public function injectStatusCacheSnapshot(array $snapshot): void
+    {
+        $this->statusCacheSnapshot = $snapshot;
+    }
+
+    public function statusCacheKeyFor(string $metric): string
+    {
+        $type = strtoupper((string) $this->type);
+        $serverId = $this->parent_id ?: $this->id;
+
+        return CacheKey::get("SERVER_{$type}_{$metric}", $serverId);
+    }
+
+    /**
      * 最后检查时间访问器
      */
     protected function lastCheckAt(): Attribute
     {
         return Attribute::make(
             get: function () {
-                $type = strtoupper($this->type);
-                $serverId = $this->parent_id ?: $this->id;
-                return Cache::get(CacheKey::get("SERVER_{$type}_LAST_CHECK_AT", $serverId));
+                $key = $this->statusCacheKeyFor('LAST_CHECK_AT');
+                if ($this->statusCacheSnapshot !== null && array_key_exists($key, $this->statusCacheSnapshot)) {
+                    return $this->statusCacheSnapshot[$key];
+                }
+
+                return Cache::get($key);
             }
         );
     }
@@ -458,9 +484,12 @@ class Server extends Model
     {
         return Attribute::make(
             get: function () {
-                $type = strtoupper($this->type);
-                $serverId = $this->parent_id ?: $this->id;
-                return Cache::get(CacheKey::get("SERVER_{$type}_LAST_PUSH_AT", $serverId));
+                $key = $this->statusCacheKeyFor('LAST_PUSH_AT');
+                if ($this->statusCacheSnapshot !== null && array_key_exists($key, $this->statusCacheSnapshot)) {
+                    return $this->statusCacheSnapshot[$key];
+                }
+
+                return Cache::get($key);
             }
         );
     }
@@ -472,9 +501,12 @@ class Server extends Model
     {
         return Attribute::make(
             get: function () {
-                $type = strtoupper($this->type);
-                $serverId = $this->parent_id ?: $this->id;
-                return Cache::get(CacheKey::get("SERVER_{$type}_ONLINE_USER", $serverId)) ?? 0;
+                $key = $this->statusCacheKeyFor('ONLINE_USER');
+                if ($this->statusCacheSnapshot !== null && array_key_exists($key, $this->statusCacheSnapshot)) {
+                    return $this->statusCacheSnapshot[$key] ?? 0;
+                }
+
+                return Cache::get($key) ?? 0;
             }
         );
     }

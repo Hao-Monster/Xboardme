@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\DistributorOrder;
+use App\Models\User;
 use App\Rules\DistributorName;
 use App\Support\SqliteImmediateTransaction;
 use Carbon\Carbon;
@@ -15,6 +16,51 @@ use RuntimeException;
 class DistributorSubscriptionNameService
 {
     private const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+    public function validateMerchantName(User $distributor): string
+    {
+        $merchantName = trim((string) $distributor->distributor_name);
+        Validator::make(['distributor_name' => $merchantName], [
+            'distributor_name' => ['required', 'string', new DistributorName()],
+        ], ['distributor_name.required' => '请先为分销商设置名称'])->validate();
+
+        return $merchantName;
+    }
+
+    /**
+     * @param array<string, mixed> $attributes
+     */
+    public function createWithGeneratedName(
+        array $attributes,
+        string $merchantName,
+        int $orderCreatedAt
+    ): DistributorOrder {
+        if ($orderCreatedAt <= 0) {
+            throw new RuntimeException('分销订阅缺少原始订单日期');
+        }
+
+        $day = Carbon::createFromTimestamp($orderCreatedAt, 'Asia/Shanghai')->format('ymd');
+
+        for ($attempt = 0; $attempt < 10; $attempt++) {
+            $code = $this->generateCode();
+            $name = $merchantName . '-' . $day . '-' . $code;
+            try {
+                // A savepoint lets a unique-code collision retry without aborting the batch transaction.
+                return DB::transaction(static function () use ($attributes, $code, $name): DistributorOrder {
+                    return DistributorOrder::create(array_merge($attributes, [
+                        'subscription_code' => $code,
+                        'subscription_name' => $name,
+                    ]));
+                });
+            } catch (UniqueConstraintViolationException $exception) {
+                if ($attempt === 9) {
+                    throw $exception;
+                }
+            }
+        }
+
+        throw new RuntimeException('无法分配唯一订阅编号');
+    }
 
     public function assignToNewSubscription(DistributorOrder $delivery): void
     {

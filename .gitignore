@@ -39,3 +39,5 @@ compose.v2.yaml
 !.docker/v2/secrets/.gitignore
 .scribe
 /docs-dev/
+__pycache__/
+*.py[cod]

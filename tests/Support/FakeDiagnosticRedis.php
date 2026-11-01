@@ -257,6 +257,12 @@ final class FakeDiagnosticRedis
         }
 
         // DiagnosticLeaseService scripts
+        if (str_contains($script, '-- diagnostics_legacy_read:')) {
+            // This fake has one unprefixed namespace, so a missing canonical
+            // GET cannot have a second legacy physical key to fall back to.
+            return null;
+        }
+
         if (str_contains($script, 'max_active_sessions_exceeded')) {
             return $this->evalStartScript($keys, $argv);
         }

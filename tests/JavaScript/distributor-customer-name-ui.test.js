@@ -8,7 +8,7 @@ const styles = fs.readFileSync('theme/Xboard/assets/distributor.css', 'utf8');
 test('distributor checkout creates an order directly without a customer-name confirmation modal', () => {
   const purchaseBlock = source.match(/async function purchasePlan\(plan, period, button\)[\s\S]*?\n  }/);
   assert.ok(purchaseBlock, 'direct purchase handler should exist');
-  assert.match(purchaseBlock[0], /data: \{ plan_id: plan\.id, period \}/);
+  assert.match(purchaseBlock[0], /data: \{ plan_id: plan\.id, idempotency_key: idempotencyKey, period \}/);
   assert.match(purchaseBlock[0], /await openDelivery\(tradeNo\)/);
   assert.match(purchaseBlock[0], /button\.disabled = true/);
   assert.match(purchaseBlock[0], /button\.disabled = false/);

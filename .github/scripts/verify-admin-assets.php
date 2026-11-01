@@ -35,6 +35,18 @@ function verifyAsset(string $adminRoot, mixed $relativePath, string $source): st
         fail("{$source} is empty: {$relativePath}");
     }
 
+    $baseName = basename($normalized);
+    if (preg_match('/^.+[-]([0-9a-f]{10})\.(js|css)$/', $baseName, $matches) === 1) {
+        $fileDigest = hash_file('sha256', $resolved);
+        if ($fileDigest === false) {
+            fail("unable to hash {$source}: {$relativePath}");
+        }
+        $actualPrefix = substr($fileDigest, 0, 10);
+        if ($actualPrefix !== $matches[1]) {
+            fail("{$source} digest mismatch for {$relativePath}: expected sha256 prefix {$matches[1]}, got {$actualPrefix}");
+        }
+    }
+
     return $normalized;
 }
 

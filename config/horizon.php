@@ -6,6 +6,24 @@ use Linfo\Linfo;
 // $lInfo = new Linfo();
 // $parser = $lInfo->getParser();
 
+$hwidObservationSupervisor = (bool) env('SUBSCRIPTION_HWID_OBSERVATION_WORKER_ENABLED', false)
+    ? [
+        'hwid-observation' => [
+            'connection' => 'hwid_observation_worker',
+            'queue' => ['hwid_observation'],
+            'balance' => 'simple',
+            'minProcesses' => 1,
+            'maxProcesses' => 1,
+            'memory' => (int) env('HORIZON_WORKER_MEMORY_MB', 128),
+            'maxTime' => (int) env('HORIZON_WORKER_MAX_TIME', 3600),
+            'maxJobs' => (int) env('HORIZON_WORKER_MAX_JOBS', 1000),
+            'tries' => 3,
+            'timeout' => 45,
+            'backoff' => [5, 30],
+        ],
+    ]
+    : [];
+
 return [
 
     /*
@@ -210,6 +228,7 @@ return [
                 'timeout' => 60,
                 'backoff' => [3, 10, 30],
             ],
+            ...$hwidObservationSupervisor,
         ],
         'local' => [
             'Xboard' => [
@@ -232,6 +251,7 @@ return [
                 'timeout' => 60,
                 'balanceCooldown' => 3,
             ],
+            ...$hwidObservationSupervisor,
         ],
     ],
 ];

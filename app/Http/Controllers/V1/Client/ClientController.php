@@ -5,15 +5,21 @@ namespace App\Http\Controllers\V1\Client;
 use App\Http\Controllers\Controller;
 use App\Models\DistributorOrder;
 use App\Models\Server;
+use App\Models\User;
 use App\Protocols\General;
 use App\Services\Plugin\HookManager;
 use App\Services\ServerService;
 use App\Services\UserService;
+use App\Services\DistributorHwidObservationPublisher;
 use App\Services\DistributorHwidService;
+use App\Support\SubscriptionTiming;
+use App\Support\SqliteImmediateTransaction;
+use App\Support\SubscriptionCredentials;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\Response;
+use Throwable;
 
 class ClientController extends Controller
 {
@@ -61,45 +67,122 @@ class ClientController extends Controller
             return response('', 403, ['Content-Type' => 'text/plain']);
         }
 
-        $hwid = app(DistributorHwidService::class)->authorizeSubscription($user, $request);
+        $timing = SubscriptionTiming::forRequest($request);
+        $hwidService = app(DistributorHwidService::class);
+        $hwid = $timing !== null
+            ? $timing->measure(
+                SubscriptionTiming::STAGE_HWID_AUTHORIZE,
+                static fn (): array => $hwidService->authorizeSubscription($user, $request, $timing)
+            )
+            : $hwidService->authorizeSubscription($user, $request);
+
         if (!$hwid['allowed']) {
-            return response('', 404, $hwid['headers']);
+            return response('', 404, ['Cache-Control' => 'no-store'] + $hwid['headers']);
         }
 
-        if ($hwid['delivery']) {
-            $now = time();
-            DistributorOrder::query()
-                ->whereKey($hwid['delivery']->id)
-                ->where('delivery_status', DistributorOrder::DELIVERY_PENDING)
-                ->update([
-                    'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
-                    'claimed_at' => DB::raw("COALESCE(claimed_at, {$now})"),
-                    'claim_ip' => mb_substr((string) $request->ip(), 0, 45),
-                    'claim_ua' => mb_substr((string) $request->userAgent(), 0, 255),
-                    'updated_at' => $now,
-                ]);
+        $observation = $hwid['observation'] ?? null;
+        $delivery = $hwid['delivery'];
+        $initialStatus = $delivery?->delivery_status;
+        $initialConfigIssuedAt = $delivery?->config_issued_at;
+
+        try {
+            if ($delivery && $initialStatus === DistributorOrder::DELIVERY_PENDING) {
+                $claimWrite = function () use ($delivery, $request, $timing, $user): void {
+                    $timing?->incrementDeliveryWriteAttempts();
+                    $now = time();
+                    $this->writeDeliveryForCurrentCredentials($delivery, $user, [
+                        'delivery_status' => DistributorOrder::DELIVERY_CLAIMED,
+                        'claimed_at' => DB::raw("COALESCE(claimed_at, {$now})"),
+                        'claim_ip' => mb_substr((string) $request->ip(), 0, 45),
+                        'claim_ua' => mb_substr((string) $request->userAgent(), 0, 255),
+                        'updated_at' => $now,
+                    ], DistributorOrder::DELIVERY_PENDING);
+                };
+                if ($timing !== null) {
+                    $timing->measure(SubscriptionTiming::STAGE_DELIVERY_CLAIM, $claimWrite);
+                } else {
+                    $claimWrite();
+                }
+            }
+
+            $response = $this->doSubscribe($request, $user);
+
+            if (
+                $delivery
+                && in_array($initialStatus, [DistributorOrder::DELIVERY_PENDING, DistributorOrder::DELIVERY_CLAIMED], true)
+                && $initialConfigIssuedAt === null
+                && $this->isUsableSubscriptionResponse($response)
+            ) {
+                $issueWrite = function () use ($delivery, $timing, $user): void {
+                    $timing?->incrementDeliveryWriteAttempts();
+                    $now = time();
+                    $this->writeDeliveryForCurrentCredentials($delivery, $user, [
+                        'config_issued_at' => $now,
+                        'updated_at' => $now,
+                    ], DistributorOrder::DELIVERY_CLAIMED, 'config_issued_at');
+                };
+                if ($timing !== null) {
+                    $timing->measure(SubscriptionTiming::STAGE_DELIVERY_ISSUE, $issueWrite);
+                } else {
+                    $issueWrite();
+                }
+            }
+
+            $applyHeaders = function () use ($response, $hwid, $delivery): void {
+                foreach ($hwid['headers'] as $name => $value) {
+                    $response->headers->set($name, $value);
+                }
+
+                $this->addDistributorOrderHeaders($response, $delivery);
+            };
+            if ($timing !== null) {
+                $timing->measure(SubscriptionTiming::STAGE_RESPONSE_HEADERS, $applyHeaders);
+            } else {
+                $applyHeaders();
+            }
+
+            if ($delivery !== null && !SubscriptionCredentials::isCurrent($user)) {
+                $observation = null;
+                return response('', 403, ['Cache-Control' => 'no-store']);
+            }
+            if (!$response->isSuccessful()) {
+                $observation = null;
+            }
+
+            return $response;
+        } catch (Throwable $exception) {
+            $observation = null;
+            throw $exception;
+        } finally {
+            if (is_array($observation)) {
+                try {
+                    app(DistributorHwidObservationPublisher::class)->publish($observation, $timing);
+                } catch (Throwable) {
+                    // Never override original response or exception when publishing observation fails.
+                }
+            }
         }
+    }
 
-        $response = $this->doSubscribe($request, $user);
-
-        if ($hwid['delivery'] && $this->isUsableSubscriptionResponse($response)) {
-            $now = time();
-            DistributorOrder::query()
-                ->whereKey($hwid['delivery']->id)
-                ->where('delivery_status', DistributorOrder::DELIVERY_CLAIMED)
-                ->update([
-                    'config_issued_at' => DB::raw("COALESCE(config_issued_at, {$now})"),
-                    'updated_at' => $now,
-                ]);
-        }
-
-        foreach ($hwid['headers'] as $name => $value) {
-            $response->headers->set($name, $value);
-        }
-
-        $this->addDistributorOrderHeaders($response, $hwid['delivery']);
-
-        return $response;
+    /** @param array<string, mixed> $attributes */
+    private function writeDeliveryForCurrentCredentials(
+        DistributorOrder $delivery,
+        User $subscriber,
+        array $attributes,
+        int $requiredStatus,
+        ?string $requiredNullColumn = null
+    ): void
+    {
+        SqliteImmediateTransaction::write(static function () use ($delivery, $subscriber, $attributes, $requiredStatus, $requiredNullColumn): void {
+            $locked = DistributorOrder::query()->lockForUpdate()->find($delivery->id);
+            if ($locked && SubscriptionCredentials::isCurrent($subscriber, true)) {
+                DistributorOrder::query()
+                    ->whereKey($delivery->id)
+                    ->where('delivery_status', $requiredStatus)
+                    ->when($requiredNullColumn !== null, fn ($query) => $query->whereNull($requiredNullColumn))
+                    ->update($attributes);
+            }
+        }, 3);
     }
 
     private function addDistributorOrderHeaders(Response $response, ?DistributorOrder $delivery): void
@@ -168,38 +251,51 @@ class ClientController extends Controller
 
     public function doSubscribe(Request $request, $user, $servers = null)
     {
+        $timing = SubscriptionTiming::forRequest($request);
+
         if ($servers === null) {
-            $servers = ServerService::getAvailableServers($user);
-            $servers = HookManager::filter('client.subscribe.servers', $servers, $user, $request);
+            $loadServers = static function () use ($user, $request, $timing): array {
+                $available = ServerService::getAvailableServers($user, $timing);
+                return HookManager::filter('client.subscribe.servers', $available, $user, $request);
+            };
+            $servers = $timing !== null
+                ? $timing->measure(SubscriptionTiming::STAGE_SERVER_LOOKUP_TRANSFORM, $loadServers)
+                : $loadServers();
         }
 
-        $clientInfo = $this->getClientInfo($request);
+        $generateProtocol = function () use ($request, $user, $servers) {
+            $clientInfo = $this->getClientInfo($request);
 
-        $requestedTypes = $this->parseRequestedTypes($request->input('types'));
-        $filterKeywords = $this->parseFilterKeywords($request->input('filter'));
+            $requestedTypes = $this->parseRequestedTypes($request->input('types'));
+            $filterKeywords = $this->parseFilterKeywords($request->input('filter'));
 
-        $protocolClassName = app('protocols.manager')->matchProtocolClassName($clientInfo['flag'])
-            ?? General::class;
+            $protocolClassName = app('protocols.manager')->matchProtocolClassName($clientInfo['flag'])
+                ?? General::class;
 
-        $serversFiltered = $this->filterServers(
-            servers: $servers,
-            allowedTypes: $requestedTypes,
-            filterKeywords: $filterKeywords
-        );
+            $serversFiltered = $this->filterServers(
+                servers: $servers,
+                allowedTypes: $requestedTypes,
+                filterKeywords: $filterKeywords
+            );
 
-        $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
-        $serversFiltered = $this->addPrefixToServerName($serversFiltered);
+            $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
+            $serversFiltered = $this->addPrefixToServerName($serversFiltered);
 
-        // Instantiate the protocol class with filtered servers and client info
-        $protocolInstance = app()->make($protocolClassName, [
-            'user' => $user,
-            'servers' => $serversFiltered,
-            'clientName' => $clientInfo['name'] ?? null,
-            'clientVersion' => $clientInfo['version'] ?? null,
-            'userAgent' => $clientInfo['flag'] ?? null
-        ]);
+            // Instantiate the protocol class with filtered servers and client info
+            $protocolInstance = app()->make($protocolClassName, [
+                'user' => $user,
+                'servers' => $serversFiltered,
+                'clientName' => $clientInfo['name'] ?? null,
+                'clientVersion' => $clientInfo['version'] ?? null,
+                'userAgent' => $clientInfo['flag'] ?? null
+            ]);
 
-        return $protocolInstance->handle();
+            return $protocolInstance->handle();
+        };
+
+        return $timing !== null
+            ? $timing->measure(SubscriptionTiming::STAGE_PROTOCOL_GENERATE, $generateProtocol)
+            : $generateProtocol();
     }
 
     /**

@@ -7,6 +7,7 @@ use App\Models\DistributorOrder;
 use App\Models\User;
 use App\Services\DistributorOrderService;
 use App\Support\SqliteImmediateTransaction;
+use App\Support\SubscriptionCredentials;
 use Illuminate\Http\Request;
 
 class DistributorClaimController extends Controller
@@ -51,7 +52,7 @@ class DistributorClaimController extends Controller
             $delivery->save();
 
             return $delivery->setRelation('subscriber', $subscriber);
-        });
+        }, 3);
 
         if (!$delivery) {
             return response('This subscription QR code has already been used or closed.', 410, [
@@ -69,6 +70,10 @@ class DistributorClaimController extends Controller
             if ($fragment !== '') {
                 $url .= '#' . $fragment;
             }
+        }
+
+        if (!SubscriptionCredentials::isCurrent($delivery->subscriber)) {
+            return response('', 410, ['Cache-Control' => 'no-store']);
         }
 
         return redirect()->away($url, 302, [

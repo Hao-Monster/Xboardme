@@ -7,6 +7,7 @@ use App\Models\ServerMachine;
 use App\Models\ServerRoute;
 use App\Models\User;
 use App\Services\Plugin\HookManager;
+use App\Support\SubscriptionTiming;
 use App\Utils\CacheKey;
 use App\Utils\Helper;
 use Illuminate\Support\Facades\Cache;
@@ -52,7 +53,7 @@ class ServerService
      * @param User $user
      * @return array
      */
-    public static function getAvailableServers(User $user): array
+    public static function getAvailableServers(User $user, ?SubscriptionTiming $timing = null): array
     {
         $servers = Server::whereJsonContains('group_ids', (string) $user->group_id)
             ->where('show', true)
@@ -62,8 +63,12 @@ class ServerService
                     ->orWhereRaw('u + d < transfer_enable');
             })
             ->orderBy('sort', 'asc')
-            ->get()
-            ->append(['last_check_at', 'last_push_at', 'online', 'is_online', 'available_status', 'cache_key', 'server_key']);
+            ->get();
+
+        $timing?->setServerCount($servers->count());
+        self::prefetchServerStatusSnapshots($servers, $timing);
+
+        $servers->append(['last_check_at', 'last_push_at', 'online', 'is_online', 'available_status', 'cache_key', 'server_key']);
 
         $servers = collect($servers)->map(function ($server) use ($user) {
             // 判断动态端口
@@ -80,6 +85,50 @@ class ServerService
         })->toArray();
 
         return $servers;
+    }
+
+    /**
+     * @param Collection<int, Server> $servers
+     */
+    private static function prefetchServerStatusSnapshots(Collection $servers, ?SubscriptionTiming $timing = null): void
+    {
+        if ($servers->isEmpty()) {
+            $timing?->setCacheUniqueKeys(0);
+            return;
+        }
+
+        /** @var array<int, array{0: string, 1: string, 2: string}> $perServerKeys */
+        $perServerKeys = [];
+        /** @var array<string, true> $uniqueKeyMap */
+        $uniqueKeyMap = [];
+
+        foreach ($servers as $index => $server) {
+            $keys = [
+                $server->statusCacheKeyFor('LAST_CHECK_AT'),
+                $server->statusCacheKeyFor('LAST_PUSH_AT'),
+                $server->statusCacheKeyFor('ONLINE_USER'),
+            ];
+            $perServerKeys[$index] = $keys;
+            foreach ($keys as $key) {
+                $uniqueKeyMap[$key] = true;
+            }
+        }
+
+        /** @var list<string> $uniqueKeys */
+        $uniqueKeys = array_keys($uniqueKeyMap);
+        $timing?->setCacheUniqueKeys(count($uniqueKeys));
+
+        $values = $timing !== null
+            ? $timing->measure(SubscriptionTiming::STAGE_SERVER_STATUS_CACHE, static fn (): array => Cache::many($uniqueKeys))
+            : Cache::many($uniqueKeys);
+
+        foreach ($servers as $index => $server) {
+            $snapshot = [];
+            foreach ($perServerKeys[$index] as $key) {
+                $snapshot[$key] = array_key_exists($key, $values) ? $values[$key] : null;
+            }
+            $server->injectStatusCacheSnapshot($snapshot);
+        }
     }
 
     /**

@@ -67,6 +67,19 @@ if [[ "$(grep -Rho "127\\.0\\.0\\.1:$GREEN_PORT" /etc/caddy 2>/dev/null | wc -l)
   exit 1
 fi
 
+if ! docker exec "$green" php -r '
+  require "/www/vendor/autoload.php";
+  $app = require "/www/bootstrap/app.php";
+  $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+  if (class_exists(App\Support\HwidObservationConfigValidator::class)) {
+      App\Support\HwidObservationConfigValidator::assertReleaseSwitchCombination();
+      App\Support\HwidObservationConfigValidator::assertQueueParity();
+  }
+'; then
+  echo 'RELEASE_ROLES_FAIL=hwid_observation_config_invalid'
+  exit 1
+fi
+
 horizon_name="xboard-horizon-$RELEASE_ID"
 scheduler_name="xboard-scheduler-$RELEASE_ID"
 role_transition=activate
@@ -171,13 +184,24 @@ old_horizon_paused=1
 
 zero_reserved_samples=0
 for attempt in {1..35}; do
-  reserved_jobs=$(docker exec "$blue" php -r '
+  reserved_jobs=$(docker exec "$green" php -r '
   require "/www/vendor/autoload.php";
   $app = require "/www/bootstrap/app.php";
   $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
   $queue = app("queue")->connection("redis");
   $names = ["traffic_fetch", "stat", "user_alive_sync", "default", "order_handle", "send_email", "send_telegram", "send_email_mass", "node_sync"];
-  echo array_sum(array_map(fn ($name) => $queue->reservedSize($name), $names));
+  $total = array_sum(array_map(fn ($name) => $queue->reservedSize($name), $names));
+  $hwidConn = trim((string) config("subscription.hwid_observation_worker_connection", "hwid_observation_worker"));
+  $hwidQueue = trim((string) config("subscription.hwid_observation_queue", "hwid_observation"));
+  if ($hwidQueue === "") {
+      $hwidQueue = "hwid_observation";
+  }
+  if ($hwidConn !== "" && is_array(config("queue.connections." . $hwidConn))) {
+      $total += app("queue")->connection($hwidConn)->reservedSize($hwidQueue);
+  } elseif (!in_array($hwidQueue, $names, true)) {
+      $total += $queue->reservedSize($hwidQueue);
+  }
+  echo $total;
   ')
   if [[ "$reserved_jobs" == 0 ]]; then
     ((zero_reserved_samples += 1))
@@ -195,7 +219,7 @@ if ((zero_reserved_samples < 3)); then
 fi
 
 if [[ "$role_mode" == release ]]; then
-  docker stop --time 20 "$previous_horizon" >/dev/null
+  docker stop --time 60 "$previous_horizon" >/dev/null
   old_horizon_stopped=1
 fi
 

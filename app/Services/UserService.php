@@ -164,15 +164,21 @@ class UserService
 
         // 基本信息
         $user->email = $data['email'];
-        $user->password = isset($data['password'])
-            ? Hash::make($data['password'])
-            : Hash::make($data['email']);
+        $user->password = isset($data['password_hash']) && is_string($data['password_hash']) && $data['password_hash'] !== ''
+            ? $data['password_hash']
+            : (isset($data['password'])
+                ? Hash::make($data['password'])
+                : Hash::make($data['email']));
         $user->uuid = Helper::guid(true);
         $user->token = Helper::guid();
 
         // 默认设置
-        $user->remind_expire = admin_setting('default_remind_expire', 1);
-        $user->remind_traffic = admin_setting('default_remind_traffic', 1);
+        $user->remind_expire = array_key_exists('remind_expire', $data)
+            ? $data['remind_expire']
+            : admin_setting('default_remind_expire', 1);
+        $user->remind_traffic = array_key_exists('remind_traffic', $data)
+            ? $data['remind_traffic']
+            : admin_setting('default_remind_traffic', 1);
         $user->expired_at = null;
 
         // 可选字段
@@ -184,7 +190,9 @@ class UserService
         }
 
         // 处理计划
-        if (isset($data['plan_id'])) {
+        if (isset($data['plan']) && $data['plan'] instanceof Plan) {
+            $this->applyPlanToUser($user, $data['plan'], $data['expired_at'] ?? null);
+        } elseif (isset($data['plan_id'])) {
             $this->setPlanForUser($user, $data['plan_id'], $data['expired_at'] ?? null);
         } else {
             $this->setTryOutPlan(user: $user);
@@ -225,6 +233,11 @@ class UserService
         if (!$plan)
             return;
 
+        $this->applyPlanToUser($user, $plan, $expiredAt);
+    }
+
+    private function applyPlanToUser(User $user, Plan $plan, ?int $expiredAt = null): void
+    {
         $user->plan_id = $plan->id;
         $user->group_id = $plan->group_id;
         $user->transfer_enable = $plan->transfer_enable * 1073741824;

@@ -75,36 +75,38 @@ if [ "$XBOARD_RUNTIME_ROLE" = ws ]; then
     export WS_LOG_FILE
 fi
 
-# Keep knowledge attachments on a private, writable filesystem. The directory
-# is mounted by the Compose templates and remains outside the public web root.
-: "${KNOWLEDGE_ATTACHMENT_ROOT:=/www/storage/app/knowledge-attachments}"
-case "${KNOWLEDGE_ATTACHMENT_ROOT}" in
-    /*) ;;
-    *) echo "[entrypoint] KNOWLEDGE_ATTACHMENT_ROOT must be an absolute path." >&2; exit 1 ;;
-esac
-case "${KNOWLEDGE_ATTACHMENT_ROOT}" in
-    /|/www|/www/storage|/www/storage/app)
-        echo "[entrypoint] Refusing unsafe KNOWLEDGE_ATTACHMENT_ROOT=${KNOWLEDGE_ATTACHMENT_ROOT}." >&2
+if [ "${XBOARD_ENTRYPOINT_SELF_TEST:-}" != "autotune-gate" ]; then
+    # Keep knowledge attachments on a private, writable filesystem. The directory
+    # is mounted by the Compose templates and remains outside the public web root.
+    : "${KNOWLEDGE_ATTACHMENT_ROOT:=/www/storage/app/knowledge-attachments}"
+    case "${KNOWLEDGE_ATTACHMENT_ROOT}" in
+        /*) ;;
+        *) echo "[entrypoint] KNOWLEDGE_ATTACHMENT_ROOT must be an absolute path." >&2; exit 1 ;;
+    esac
+    case "${KNOWLEDGE_ATTACHMENT_ROOT}" in
+        /|/www|/www/storage|/www/storage/app)
+            echo "[entrypoint] Refusing unsafe KNOWLEDGE_ATTACHMENT_ROOT=${KNOWLEDGE_ATTACHMENT_ROOT}." >&2
+            exit 1
+            ;;
+    esac
+    mkdir -p "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
+             "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
+             "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
+    chown www:www "${KNOWLEDGE_ATTACHMENT_ROOT}" \
+                  "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
+                  "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
+                  "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
+    chmod 0750 "${KNOWLEDGE_ATTACHMENT_ROOT}" \
+               "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
+               "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
+               "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
+    if ! su-exec www test -r "${KNOWLEDGE_ATTACHMENT_ROOT}" || ! su-exec www test -w "${KNOWLEDGE_ATTACHMENT_ROOT}"; then
+        echo "[entrypoint] Knowledge attachment storage is not readable and writable by uid 1000." >&2
         exit 1
-        ;;
-esac
-mkdir -p "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
-         "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
-         "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
-chown www:www "${KNOWLEDGE_ATTACHMENT_ROOT}" \
-              "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
-              "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
-              "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
-chmod 0750 "${KNOWLEDGE_ATTACHMENT_ROOT}" \
-           "${KNOWLEDGE_ATTACHMENT_ROOT}/files" \
-           "${KNOWLEDGE_ATTACHMENT_ROOT}/temporary" \
-           "${KNOWLEDGE_ATTACHMENT_ROOT}/quarantine"
-if ! su-exec www test -r "${KNOWLEDGE_ATTACHMENT_ROOT}" || ! su-exec www test -w "${KNOWLEDGE_ATTACHMENT_ROOT}"; then
-    echo "[entrypoint] Knowledge attachment storage is not readable and writable by uid 1000." >&2
-    exit 1
+    fi
+    export KNOWLEDGE_ATTACHMENT_ROOT
+    echo "[entrypoint] Knowledge attachment storage ready: ${KNOWLEDGE_ATTACHMENT_ROOT}"
 fi
-export KNOWLEDGE_ATTACHMENT_ROOT
-echo "[entrypoint] Knowledge attachment storage ready: ${KNOWLEDGE_ATTACHMENT_ROOT}"
 
 # ---------------------------------------------------------------------------
 # Auto-tune worker counts based on the host (CPU + memory).
@@ -141,12 +143,21 @@ detect_mem_mib() {
     [ "$avail" -lt "$cap" ] && echo "$avail" || echo "$cap"
 }
 
-CPUS=$(detect_cpus)
-MEM_MIB=$(detect_mem_mib)
+if [ "${XBOARD_ENTRYPOINT_SELF_TEST:-}" = "autotune-gate" ] && [ -n "${XBOARD_TEST_CPUS:-}" ]; then
+    CPUS=${XBOARD_TEST_CPUS}
+else
+    CPUS=$(detect_cpus)
+fi
+if [ "${XBOARD_ENTRYPOINT_SELF_TEST:-}" = "autotune-gate" ] && [ -n "${XBOARD_TEST_MEM_MIB:-}" ]; then
+    MEM_MIB=${XBOARD_TEST_MEM_MIB}
+else
+    MEM_MIB=$(detect_mem_mib)
+fi
 
 # Resource profile presets. RESOURCE_PROFILE selects ratios for the budget split:
-#   minimal     - smallest possible footprint (~250-350 MiB), single octane worker,
-#                 horizon capped to 1/1/1. Suitable for VPS with <=512 MiB RAM.
+#   minimal     - smallest profile reserves (~200 MiB base, 100 MiB/slot), single octane worker,
+#                 horizon maxProcesses set to 1/1/1 (note: balance=auto/simple still maintains
+#                 at least 1 worker per configured queue pool).
 #   balanced    - default; ~80 MiB per worker, octane gets 25% of slots.
 #   performance - larger reserves for opcache/caches, more aggressive horizon caps.
 #   auto        - same as balanced.
@@ -163,6 +174,23 @@ SLOTS=$(( BUDGET / SLOT_MIB ))
 
 clamp() { v=$1; lo=$2; hi=$3; [ "$v" -lt "$lo" ] && v=$lo; [ "$v" -gt "$hi" ] && v=$hi; echo "$v"; }
 
+user_octane_workers="${OCTANE_WORKERS:-}"
+case "$user_octane_workers" in
+    "")
+        resolved_octane_workers=""
+        ;;
+    auto)
+        resolved_octane_workers="$CPUS"
+        [ "$resolved_octane_workers" -lt 1 ] && resolved_octane_workers=1
+        ;;
+    *[!0-9]*|0)
+        echo "[entrypoint] Refusing invalid OCTANE_WORKERS='${user_octane_workers}'; expected 'auto' or a positive integer." >&2
+        exit 1
+        ;;
+    *)
+        resolved_octane_workers="$user_octane_workers"
+        ;;
+esac
 if [ "$OCT_FORCE" = "1" ]; then
     auto_octane=1
     auto_dp=1; auto_biz=1; auto_notif=1
@@ -175,27 +203,85 @@ else
     auto_notif=$(clamp $(( remaining / 4 )) 1 "$CPUS")
 fi
 
-# User-set ENV always wins.
-: "${OCTANE_WORKERS:=$auto_octane}"
-: "${OCTANE_TASK_WORKERS:=1}"
-: "${OCTANE_MAX_REQUESTS:=500}"
-: "${OCTANE_GARBAGE_MB:=$auto_octane_gc}"
-: "${OCTANE_MAX_EXECUTION_TIME:=60}"
+# Export Horizon caps before validating config/horizon.php so effective worker pool
+# calculations reflect the exact supervisor options Horizon will boot with.
 : "${HORIZON_DATA_PIPELINE_MAX:=$auto_dp}"
 : "${HORIZON_BUSINESS_MAX:=$auto_biz}"
 : "${HORIZON_NOTIFICATION_MAX:=$auto_notif}"
 : "${HORIZON_WORKER_MEMORY_MB:=$auto_horizon_mem}"
 : "${HORIZON_WORKER_MAX_TIME:=0}"
 : "${HORIZON_WORKER_MAX_JOBS:=0}"
-
-export OCTANE_WORKERS OCTANE_TASK_WORKERS OCTANE_MAX_REQUESTS \
-       OCTANE_GARBAGE_MB OCTANE_MAX_EXECUTION_TIME \
-       HORIZON_DATA_PIPELINE_MAX HORIZON_BUSINESS_MAX HORIZON_NOTIFICATION_MAX \
+export HORIZON_DATA_PIPELINE_MAX HORIZON_BUSINESS_MAX HORIZON_NOTIFICATION_MAX \
        HORIZON_WORKER_MEMORY_MB HORIZON_WORKER_MAX_TIME HORIZON_WORKER_MAX_JOBS \
        RESOURCE_PROFILE
 
+: "${XBOARD_APP_ROOT:=/www}"
+: "${PHP_BIN:=php}"
+hwid_switch_exports=$(
+    XBOARD_APP_ROOT="${XBOARD_APP_ROOT}" \
+    XBOARD_ENV_PATH="${XBOARD_ENV_PATH:-}" \
+    XBOARD_ENV_FILE="${XBOARD_ENV_FILE:-}" \
+    "${PHP_BIN}" -r '
+        $root = rtrim((string) getenv("XBOARD_APP_ROOT"), "/\\");
+        $envPath = getenv("XBOARD_ENV_PATH");
+        $envFile = getenv("XBOARD_ENV_FILE");
+        require $root . "/vendor/autoload.php";
+        try {
+            $flags = App\Support\HwidObservationConfigValidator::resolveAndValidateBootstrapSwitches(
+                $root,
+                is_string($envPath) && $envPath !== "" ? $envPath : null,
+                is_string($envFile) && $envFile !== "" ? $envFile : null
+            );
+        } catch (Throwable $e) {
+            fwrite(STDERR, "[entrypoint] Refusing invalid subscription HWID configuration: " . $e->getMessage() . "\n");
+            exit(1);
+        }
+        printf(
+            "SUBSCRIPTION_HWID_ASYNC_RESOLVED=%s\nSUBSCRIPTION_HWID_WORKER_RESOLVED=%s\nSUBSCRIPTION_HWID_REQUIRED_HORIZON_SLOTS=%d\n",
+            $flags["hwid_async_metadata"] ? "true" : "false",
+            $flags["hwid_observation_worker_enabled"] ? "true" : "false",
+            (int) ($flags["required_horizon_workers"] ?? 10)
+        );
+    '
+) || exit 1
+eval "$hwid_switch_exports"
+
+if [ "${ENABLE_HORIZON:-true}" = "true" ] && [ "$SUBSCRIPTION_HWID_WORKER_RESOLVED" = "true" ]; then
+    required_web_slots=0
+    if [ "${ENABLE_WEB:-true}" = "true" ]; then
+        required_web_slots=${resolved_octane_workers:-1}
+        [ "$required_web_slots" -lt 1 ] && required_web_slots=1
+    fi
+    required_horizon_slots=${SUBSCRIPTION_HWID_REQUIRED_HORIZON_SLOTS:-10}
+    [ "$required_horizon_slots" -lt 1 ] && required_horizon_slots=1
+    required_total_mib=$(( RESERVED_MIB + (required_web_slots + required_horizon_slots) * SLOT_MIB ))
+    if [ "$MEM_MIB" -lt "$required_total_mib" ]; then
+        echo "[entrypoint] Refusing SUBSCRIPTION_HWID_OBSERVATION_WORKER_ENABLED=true for profile=${RESOURCE_PROFILE}: mem=${MEM_MIB}MiB is below required ${required_total_mib}MiB." >&2
+        exit 1
+    fi
+    if [ -z "$user_octane_workers" ] && [ "${ENABLE_WEB:-true}" = "true" ] && [ "$OCT_FORCE" != "1" ]; then
+        avail_web_slots=$(( SLOTS - required_horizon_slots ))
+        [ "$avail_web_slots" -lt 1 ] && avail_web_slots=1
+        [ "$auto_octane" -gt "$avail_web_slots" ] && auto_octane=$avail_web_slots
+    fi
+fi
+
+# User-set ENV always wins.
+: "${OCTANE_WORKERS:=$auto_octane}"
+: "${OCTANE_TASK_WORKERS:=1}"
+: "${OCTANE_MAX_REQUESTS:=500}"
+: "${OCTANE_GARBAGE_MB:=$auto_octane_gc}"
+: "${OCTANE_MAX_EXECUTION_TIME:=60}"
+
+export OCTANE_WORKERS OCTANE_TASK_WORKERS OCTANE_MAX_REQUESTS \
+       OCTANE_GARBAGE_MB OCTANE_MAX_EXECUTION_TIME
+
 echo "[entrypoint] Auto-tune (profile=${RESOURCE_PROFILE}): cpus=${CPUS} mem=${MEM_MIB}MiB slots=${SLOTS} -> octane=${OCTANE_WORKERS} horizon(dp/biz/notif)=${HORIZON_DATA_PIPELINE_MAX}/${HORIZON_BUSINESS_MAX}/${HORIZON_NOTIFICATION_MAX} horizon_worker_mem=${HORIZON_WORKER_MEMORY_MB}MB"
-echo "[entrypoint] Horizon supervisors use balance=auto with minProcesses=1, so they scale up to the cap on demand and back down when idle."
+echo "[entrypoint] Horizon supervisors with balance=auto/simple maintain at least one worker per queue pool and scale up to maxProcesses under load."
+
+if [ "${XBOARD_ENTRYPOINT_SELF_TEST:-}" = "autotune-gate" ]; then
+    exit 0
+fi
 
 redis_reachable() {
     local host port

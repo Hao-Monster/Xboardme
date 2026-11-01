@@ -74,6 +74,20 @@ test("UI/theme/asset changes escalate to L2 with Playwright browser regression a
   assert.equal(uiScope.run_pr_image_build, "true");
   assert.equal(uiScope.run_mysql_compat, "false");
   assert.equal(uiScope.run_heavy_deploy_tests, "false");
+
+  for (const apiPath of [
+    "app/Http/Controllers/V1/User/OrderController.php",
+    "app/Http/Requests/User/OrderSave.php",
+    "app/Http/Resources/OrderResource.php"
+  ]) {
+    const userApiScope = analyzeCiScope([apiPath], {
+      eventName: "pull_request",
+      ref: "refs/pull/91/merge"
+    });
+    assert.equal(userApiScope.tier, "L2", apiPath);
+    assert.equal(userApiScope.run_browser_regression, "true", apiPath);
+    assert.equal(userApiScope.run_pr_image_build, "true", apiPath);
+  }
 });
 
 test("database migration or model changes escalate to L2 with MySQL 5.7/8.4 and PHP 8.4 compatibility", () => {

@@ -59,7 +59,10 @@ const uiOrAssetPrefixes = [
   "theme/",
   "public/",
   "resources/",
-  "tests/Browser/"
+  "tests/Browser/",
+  "app/Http/Controllers/V1/User/",
+  "app/Http/Requests/User/",
+  "app/Http/Resources/"
 ];
 
 const coreAppExactFiles = new Set([

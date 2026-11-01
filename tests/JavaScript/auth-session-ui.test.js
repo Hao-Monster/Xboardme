@@ -165,7 +165,11 @@ class FakeElement {
     if (selector === '.dist-purchase-recovery') {
       const recoverySection = /<section\b[^>]*class="[^"]*\bdist-purchase-recovery\b[^"]*"[^>]*>[\s\S]*?<\/section>/;
       if (!recoverySection.test(this._innerHTML)) return null;
-      return { remove: () => { this.innerHTML = this._innerHTML.replace(recoverySection, ''); } };
+      const self = this;
+      return {
+        remove: () => { this.innerHTML = this._innerHTML.replace(recoverySection, ''); },
+        set outerHTML(value) { self.innerHTML = self._innerHTML.replace(recoverySection, () => String(value ?? '')); },
+      };
     }
     if (selector === '.dist-account') {
       if (!this._innerHTML.includes('class="dist-account"')) return null;
@@ -470,11 +474,12 @@ function createUmiGuardHarness({ initialToken = null, getConfigImpl, getUserInfo
   };
 }
 
-function createDistributorHarness({ initialToken = null, fetchImpl, initialHash = '#/plan', online = true }) {
+function createDistributorHarness({ initialToken = null, fetchImpl, initialHash = '#/plan', online = true, sharedStorage = null }) {
   const entries = initialToken
     ? [['VUE_NAIVE_ACCESS_TOKEN', JSON.stringify({ value: initialToken, time: 1, expire: null })]]
     : [];
-  const storage = new MemoryStorage(entries);
+  const storage = sharedStorage || new MemoryStorage(entries);
+  if (sharedStorage && initialToken) storage.setItem('VUE_NAIVE_ACCESS_TOKEN', entries[0][1]);
   const doc = new FakeDocument();
   const timers = new Map();
   const intervals = new Map();
@@ -570,10 +575,14 @@ function createDistributorHarness({ initialToken = null, fetchImpl, initialHash 
     }
   }
 
+  const sessionStorageObj = new MemoryStorage();
+  windowObj.sessionStorage = sessionStorageObj;
+
   const sandbox = {
     window: windowObj,
     document: doc,
     localStorage: storage,
+    sessionStorage: sessionStorageObj,
     navigator: navigatorObj,
     Image: FakeImage,
     URL: Object.assign(URL, {
@@ -628,7 +637,7 @@ function createDistributorHarness({ initialToken = null, fetchImpl, initialHash 
       navigatorObj.onLine = Boolean(isOnline);
       windowObj.dispatchEvent({ type: isOnline ? 'online' : 'offline' });
     },
-    click({ buy, action, modalAction, subscriptionQr, renew, nav } = {}) {
+    click({ buy, action, modalAction, subscriptionQr, renew, nav, planQtyStep, planId } = {}) {
       const target = new FakeElement('button', doc);
       if (buy !== undefined) target.dataset.buy = String(buy);
       if (action !== undefined) target.dataset.action = String(action);
@@ -636,6 +645,8 @@ function createDistributorHarness({ initialToken = null, fetchImpl, initialHash 
       if (subscriptionQr !== undefined) target.dataset.subscriptionQr = String(subscriptionQr);
       if (renew !== undefined) target.dataset.renew = String(renew);
       if (nav !== undefined) target.dataset.nav = String(nav);
+      if (planQtyStep !== undefined) target.dataset.planQtyStep = String(planQtyStep);
+      if (planId !== undefined) target.dataset.planId = String(planId);
       target.closest = (selector) => {
         if (selector === '[data-buy]' && buy !== undefined) return target;
         if (action !== undefined && (selector === '[data-action]' || selector.includes(`data-action="${action}"`))) return target;
@@ -643,6 +654,7 @@ function createDistributorHarness({ initialToken = null, fetchImpl, initialHash 
         if (selector === '[data-subscription-qr]' && subscriptionQr !== undefined) return target;
         if (selector === '[data-renew]' && renew !== undefined) return target;
         if (selector === '[data-nav]' && nav !== undefined) return target;
+        if (selector === '[data-plan-qty-step]' && planQtyStep !== undefined) return target;
         return null;
       };
       doc.dispatchEvent({ type: 'click', target });
@@ -676,6 +688,9 @@ function createDistributorHarness({ initialToken = null, fetchImpl, initialHash 
       for (const interval of Array.from(intervals.values())) {
         if (interval.delay === 300) interval.fn();
       }
+    },
+    dispatchStorage(key) {
+      windowObj.dispatchEvent({ type: 'storage', key });
     },
     flushMicrotasks: async (rounds = 24) => {
       for (let i = 0; i < rounds; i++) {
@@ -1854,15 +1869,16 @@ test('mobile slow new purchase survives timeout and resume without issuing a sec
   assert.match(harness.doc.getElementById('dist-modal-root')?.innerHTML || '', /MOBILE-NEW-ORDER|已经领取|订阅已经领取/);
 });
 
-test('mobile ambiguous new purchase retains its lock until read-only order review and explicit new intent', async () => {
-  let postCalls = 0;
+test('mobile ambiguous new purchase retains its lock across empty order reads and only replays the exact same idempotency key', async () => {
+  const savePayloads = [];
   let orderReads = 0;
   const harness = createDistributorHarness({
     initialToken: 'Bearer mobile-ambiguous-purchase',
     fetchImpl(url, options) {
       if (url.includes('/order/save')) {
-        postCalls += 1;
-        return postCalls === 1
+        const params = new URLSearchParams(String(options?.body || ''));
+        savePayloads.push(Object.fromEntries(params.entries()));
+        return savePayloads.length === 1
           ? Promise.reject(new TypeError('Failed to fetch'))
           : Promise.resolve(networkResponse({ data: 'MOBILE-NEW-ORDER' }));
       }
@@ -1874,6 +1890,7 @@ test('mobile ambiguous new purchase retains its lock until read-only order revie
   harness.click({ buy: 1 });
   await harness.flushMicrotasks();
   assert.match(renderedText(harness), /未能确认下单结果，请先查看我的订单/);
+  assert.match(renderedText(harness), /data-action="resume-purchase"/);
   assert.match(renderedText(harness), /data-action="check-purchase-orders"/);
   harness.click({ buy: 1 });
   harness.setHidden(true);
@@ -1886,20 +1903,78 @@ test('mobile ambiguous new purchase retains its lock until read-only order revie
   await harness.flushMicrotasks();
   harness.click({ buy: 1 });
   await harness.flushMicrotasks();
-  assert.equal(postCalls, 1);
+  assert.equal(savePayloads.length, 1);
   harness.click({ action: 'check-purchase-orders' });
   await harness.flushMicrotasks();
   assert.ok(orderReads >= 1);
+  assert.doesNotMatch(renderedText(harness), /data-action="acknowledge-order-check"/, 'empty order list cannot prove an in-flight write failed');
+  harness.click({ nav: '/plan' });
+  await harness.flushMicrotasks();
   harness.click({ buy: 1 });
   await harness.flushMicrotasks();
-  assert.equal(postCalls, 1, 'reading orders alone cannot prove that a delayed write did not commit');
-  assert.match(renderedText(harness), /我已核对，继续下单/);
+  assert.equal(savePayloads.length, 1, 'empty order results must never unlock a fresh purchase');
+  harness.click({ action: 'resume-purchase' });
+  await harness.flushMicrotasks();
+  assert.equal(savePayloads.length, 2, 'resume-purchase replays the original operation');
+  assert.ok(savePayloads[0].idempotency_key);
+  assert.equal(savePayloads[1].idempotency_key, savePayloads[0].idempotency_key);
+  assert.equal(savePayloads[1].plan_id, savePayloads[0].plan_id);
+  assert.equal(savePayloads[1].period, savePayloads[0].period);
+  assert.match(harness.doc.getElementById('dist-modal-root')?.innerHTML || '', /MOBILE-NEW-ORDER|已经领取|订阅已经领取/);
+});
+
+test('batch purchase 503 followed by empty order check never creates a second batch and replays identical idempotency key', async () => {
+  const savePayloads = [];
+  const harness = createDistributorHarness({
+    initialToken: 'Bearer batch-503-idempotency-recovery',
+    fetchImpl(url, options) {
+      if (url.includes('/order/save')) {
+        const params = new URLSearchParams(String(options?.body || ''));
+        savePayloads.push(Object.fromEntries(params.entries()));
+        return savePayloads.length === 1
+          ? Promise.resolve(networkResponse({ message: 'Bad Gateway' }, 503))
+          : Promise.resolve(networkResponse({ data: { trade_nos: ['BATCH-503-1', 'BATCH-503-2'], quantity: 2 } }));
+      }
+      if (url.includes('/distributor/delivery/batch')) {
+        return Promise.resolve(networkResponse({
+          data: [
+            { trade_no: 'BATCH-503-1', delivery_status: 1, config_issued_at: 1700000000 },
+            { trade_no: 'BATCH-503-2', delivery_status: 1, config_issued_at: 1700000000 },
+          ],
+        }));
+      }
+      if (url.includes('/order/fetch')) {
+        return Promise.resolve(networkResponse({ data: [], current_page: 1, per_page: 20, total: 0, last_page: 1 }));
+      }
+      return Promise.resolve(healthyDistributorResponse(url, options));
+    },
+  });
+  await harness.flushMicrotasks();
+  harness.click({ planQtyStep: 1, planId: 1 });
+  await harness.flushMicrotasks();
+  harness.click({ buy: 1 });
+  await harness.flushMicrotasks();
+  assert.equal(savePayloads.length, 1);
+  assert.equal(savePayloads[0].quantity, '2');
+  assert.ok(savePayloads[0].idempotency_key);
+  assert.match(renderedText(harness), /未能确认本次（2个）下单结果/);
+  harness.click({ action: 'check-purchase-orders' });
+  await harness.flushMicrotasks();
+  assert.doesNotMatch(renderedText(harness), /data-action="acknowledge-order-check"/);
   harness.click({ action: 'acknowledge-order-check' });
   harness.click({ nav: '/plan' });
   await harness.flushMicrotasks();
   harness.click({ buy: 1 });
   await harness.flushMicrotasks();
-  assert.equal(postCalls, 2, 'only an explicit new purchase intention may release the uncertain result lock');
+  assert.equal(savePayloads.length, 1, 'must stay locked against starting a second batch');
+  harness.click({ action: 'resume-purchase' });
+  await harness.flushMicrotasks(80);
+  assert.equal(savePayloads.length, 2);
+  assert.equal(savePayloads[1].idempotency_key, savePayloads[0].idempotency_key);
+  assert.equal(savePayloads[1].quantity, '2');
+  assert.equal(savePayloads[1].plan_id, savePayloads[0].plan_id);
+  assert.equal(savePayloads[1].period, savePayloads[0].period);
+  assert.match(harness.doc.getElementById('dist-modal-root')?.innerHTML || '', /BATCH-503-1/);
 });
 
 test('mobile confirmed purchase followed by failed delivery keeps the order number and never offers a duplicate buy', async () => {
@@ -2446,7 +2521,8 @@ for (const entry of ['banner', 'bottom-navigation']) {
     for (const key of ['search', 'settlement_status', 'start_date', 'end_date', 'period', 'min_amount', 'max_amount']) {
       assert.equal(query.has(key), false, `reconciliation must remove the old ${key} restriction`);
     }
-    assert.match(renderedText(harness), /data-action="acknowledge-order-check"/, 'both entrances must expose the same explicit acknowledgement');
+    assert.match(renderedText(harness), /data-action="resume-purchase"/, 'both entrances must keep same-operation recovery available');
+    assert.doesNotMatch(renderedText(harness), /data-action="acknowledge-order-check"/, 'empty order list must not expose an unlock button');
     harness.click({ nav: '/plan' });
     await harness.flushMicrotasks(80);
     harness.click({ buy: 1 });
@@ -2866,4 +2942,386 @@ test('review R9 resumed different hash never presents old orders as a failed pla
   await harness.flushMicrotasks(80);
   assert.equal(planCalls, 3);
   assert.match(harness.doc.getElementById('distributor-app')?.innerHTML || '', /Mobile Priority Plan/);
+});
+
+test('resume-purchase keeps recovery lock across 429, gateway 403 HTML, and 401 re-login of same account while isolating other accounts', async () => {
+  const savePayloads = [];
+  let saveMode = '503';
+  let currentUserId = 77;
+  const harness = createDistributorHarness({
+    initialToken: 'Bearer dist-77-old',
+    fetchImpl(url, options) {
+      if (url.includes('/api/v1/user/info')) {
+        return Promise.resolve(networkResponse({
+          data: { id: currentUserId, email: `dist${currentUserId}@example.com`, distributor_name: `商户${currentUserId}`, is_distributor: true },
+        }));
+      }
+      if (url.includes('/api/v1/user/order/save')) {
+        savePayloads.push(Object.fromEntries(options.body.entries()));
+        if (saveMode === '503') return Promise.resolve(networkResponse({ message: 'Gateway Timeout' }, 503));
+        if (saveMode === '429') return Promise.resolve(networkResponse({ message: 'Too Many Requests' }, 429));
+        if (saveMode === '403-html') return Promise.resolve({ ok: false, status: 403, text: () => Promise.resolve('<html>WAF Forbidden</html>') });
+        if (saveMode === '401') return Promise.resolve(networkResponse({ message: '未登录或登陆已过期' }, 401));
+        return Promise.resolve(networkResponse({ data: 'RECOVERED-AFTER-RELOGIN-001' }));
+      }
+      if (url.includes('/api/v1/user/distributor/delivery')) {
+        return Promise.resolve(networkResponse({
+          data: {
+            trade_no: 'RECOVERED-AFTER-RELOGIN-001',
+            subscription_name: '商户77-261031-RECOVER1',
+            delivery_status: 1,
+            config_issued_at: 1700000000,
+          },
+        }));
+      }
+      return Promise.resolve(healthyDistributorResponse(url, options));
+    },
+  });
+
+  await harness.flushMicrotasks(80);
+  harness.click({ buy: 1 });
+  await harness.flushMicrotasks(80);
+  assert.equal(savePayloads.length, 1);
+  const originalKey = savePayloads[0].idempotency_key;
+  assert.ok(originalKey);
+
+  // 429 rate-limit on resume MUST NOT drop purchaseRecovery
+  saveMode = '429';
+  harness.click({ action: 'resume-purchase' });
+  await harness.flushMicrotasks(80);
+  assert.equal(savePayloads.length, 2);
+  assert.equal(savePayloads[1].idempotency_key, originalKey);
+  assert.match(renderedText(harness), /data-action="resume-purchase"/);
+
+  // 403 non-JSON WAF response MUST NOT drop purchaseRecovery
+  saveMode = '403-html';
+  harness.click({ action: 'resume-purchase' });
+  await harness.flushMicrotasks(80);
+  assert.equal(savePayloads.length, 3);
+  assert.match(renderedText(harness), /data-action="resume-purchase"/);
+
+  // 401 auth expiry invalidates token; logging in as DIFFERENT user 88 must NOT inherit user 77's recovery
+  saveMode = '401';
+  harness.click({ action: 'resume-purchase' });
+  await harness.flushMicrotasks(80);
+  currentUserId = 88;
+  harness.windowObj.location.hash = '#/plan';
+  harness.storage.setItem('VUE_NAIVE_ACCESS_TOKEN', JSON.stringify({ value: 'Bearer dist-88-session', expire: null }));
+  await harness.flushMicrotasks(80);
+  assert.doesNotMatch(renderedText(harness), /data-action="resume-purchase"/, 'different distributor must not inherit pending recovery');
+
+  // Re-logging in as original user 77 restores the exact pending recovery and replays original idempotency_key
+  currentUserId = 77;
+  harness.storage.setItem('VUE_NAIVE_ACCESS_TOKEN', JSON.stringify({ value: 'Bearer dist-77-renewed', expire: null }));
+  await harness.flushMicrotasks(80);
+  assert.match(renderedText(harness), /data-action="resume-purchase"/, 'same distributor re-login after 401 must restore pending recovery');
+  saveMode = 'ok';
+  harness.click({ action: 'resume-purchase' });
+  await harness.flushMicrotasks(80);
+  assert.equal(savePayloads.at(-1).idempotency_key, originalKey);
+  assert.match(harness.doc.getElementById('dist-modal-root')?.innerHTML || '', /RECOVERED-AFTER-RELOGIN-001/);
+});
+
+const PURCHASE_RECOVERY_ACCOUNT_KEY = 'xboard_distributor_purchase_recovery:id:501';
+
+function storedRecoveryRecords(storage, key = PURCHASE_RECOVERY_ACCOUNT_KEY) {
+  const raw = storage.getItem(key);
+  return raw ? JSON.parse(raw).records : [];
+}
+
+function batchRecoveryFetch(savePayloads, saveResponder) {
+  return (url, options) => {
+    if (url.includes('/order/save')) {
+      const params = new URLSearchParams(String(options?.body || ''));
+      savePayloads.push(Object.fromEntries(params.entries()));
+      return saveResponder(savePayloads.length);
+    }
+    if (url.includes('/distributor/delivery/batch')) {
+      return Promise.resolve(networkResponse({
+        data: [
+          { trade_no: 'TAB-BATCH-1', delivery_status: 1, config_issued_at: 1700000000 },
+          { trade_no: 'TAB-BATCH-2', delivery_status: 1, config_issued_at: 1700000000 },
+        ],
+      }));
+    }
+    return Promise.resolve(healthyDistributorResponse(url, options));
+  };
+}
+
+test('uncertain batch purchase survives closing the tab and a new tab can only replay the original key', async () => {
+  const sharedStorage = new MemoryStorage();
+  const firstTabPayloads = [];
+  const firstTab = createDistributorHarness({
+    initialToken: 'Bearer tab-close-recovery',
+    sharedStorage,
+    fetchImpl: batchRecoveryFetch(firstTabPayloads, () => Promise.resolve(networkResponse({ message: 'Bad Gateway' }, 503))),
+  });
+  await firstTab.flushMicrotasks();
+  firstTab.click({ planQtyStep: 1, planId: 1 });
+  await firstTab.flushMicrotasks();
+  firstTab.click({ buy: 1 });
+  await firstTab.flushMicrotasks();
+  assert.equal(firstTabPayloads.length, 1);
+  const originalKey = firstTabPayloads[0].idempotency_key;
+  assert.ok(originalKey);
+  assert.equal(firstTab.windowObj.sessionStorage.getItem('xboard_distributor_purchase_recovery'), null, 'recovery must not depend on per-tab sessionStorage');
+  const [stored] = storedRecoveryRecords(sharedStorage);
+  assert.equal(stored.idempotencyKey, originalKey);
+  assert.equal(stored.count, 2);
+  assert.equal(stored.tradeNo, null);
+
+  // The first tab is closed; a brand-new tab of the same account opens later.
+  const secondTabPayloads = [];
+  const secondTab = createDistributorHarness({
+    initialToken: 'Bearer tab-close-recovery',
+    sharedStorage,
+    fetchImpl: batchRecoveryFetch(secondTabPayloads, () => Promise.resolve(networkResponse({
+      data: { trade_nos: ['TAB-BATCH-1', 'TAB-BATCH-2'], quantity: 2 },
+    }))),
+  });
+  await secondTab.flushMicrotasks();
+  assert.match(renderedText(secondTab), /未能确认本次（2个）下单结果/);
+  assert.match(renderedText(secondTab), /data-action="resume-purchase"/);
+  secondTab.click({ buy: 1 });
+  await secondTab.flushMicrotasks();
+  assert.equal(secondTabPayloads.length, 0, 'a new tab must not start a second batch while the first is uncertain');
+  secondTab.click({ action: 'resume-purchase' });
+  await secondTab.flushMicrotasks(80);
+  assert.equal(secondTabPayloads.length, 1);
+  assert.equal(secondTabPayloads[0].idempotency_key, originalKey);
+  assert.equal(secondTabPayloads[0].quantity, '2');
+  assert.match(secondTab.doc.getElementById('dist-modal-root')?.innerHTML || '', /TAB-BATCH-1/);
+  assert.equal(sharedStorage.getItem(PURCHASE_RECOVERY_ACCOUNT_KEY), null, 'a delivered replay resolves the shared record');
+});
+
+test('write-ahead purchase intent locks other open tabs and is released only after delivery succeeds', async () => {
+  const sharedStorage = new MemoryStorage();
+  const firstTabPayloads = [];
+  let resolveFirstSave;
+  const firstTab = createDistributorHarness({
+    initialToken: 'Bearer tab-in-flight',
+    sharedStorage,
+    fetchImpl: batchRecoveryFetch(firstTabPayloads, () => new Promise((resolve) => { resolveFirstSave = resolve; })),
+  });
+  const secondTabPayloads = [];
+  const secondTab = createDistributorHarness({
+    initialToken: 'Bearer tab-in-flight',
+    sharedStorage,
+    fetchImpl: batchRecoveryFetch(secondTabPayloads, () => Promise.resolve(networkResponse({ data: 'SECOND-TAB-ORDER' }))),
+  });
+  await firstTab.flushMicrotasks();
+  await secondTab.flushMicrotasks();
+  firstTab.click({ planQtyStep: 1, planId: 1 });
+  await firstTab.flushMicrotasks();
+  firstTab.click({ buy: 1 });
+  await firstTab.flushMicrotasks();
+  assert.equal(firstTabPayloads.length, 1);
+  const [intent] = storedRecoveryRecords(sharedStorage);
+  assert.equal(intent.idempotencyKey, firstTabPayloads[0].idempotency_key, 'intent is recorded before the response arrives');
+  assert.doesNotMatch(renderedText(firstTab), /data-action="resume-purchase"/, 'the purchasing tab does not show its own in-flight intent');
+
+  // Even without the storage event, the second tab re-reads shared storage before writing.
+  secondTab.click({ buy: 1 });
+  await secondTab.flushMicrotasks();
+  assert.equal(secondTabPayloads.length, 0);
+  assert.match(renderedText(secondTab), /data-action="resume-purchase"/);
+
+  resolveFirstSave(networkResponse({ data: { trade_nos: ['TAB-BATCH-1', 'TAB-BATCH-2'], quantity: 2 } }));
+  await firstTab.flushMicrotasks(80);
+  assert.match(firstTab.doc.getElementById('dist-modal-root')?.innerHTML || '', /TAB-BATCH-1/);
+  assert.equal(sharedStorage.getItem(PURCHASE_RECOVERY_ACCOUNT_KEY), null);
+
+  secondTab.dispatchStorage(PURCHASE_RECOVERY_ACCOUNT_KEY);
+  await secondTab.flushMicrotasks();
+  assert.doesNotMatch(renderedText(secondTab), /data-action="resume-purchase"/, 'the resolved purchase unlocks the other tab');
+  secondTab.click({ buy: 1 });
+  await secondTab.flushMicrotasks(80);
+  assert.equal(secondTabPayloads.length, 1);
+  assert.notEqual(secondTabPayloads[0].idempotency_key, firstTabPayloads[0].idempotency_key);
+});
+
+test('a storage event from another tab immediately shows an uncertain purchase without a click', async () => {
+  const sharedStorage = new MemoryStorage();
+  const firstTab = createDistributorHarness({
+    initialToken: 'Bearer tab-event',
+    sharedStorage,
+    fetchImpl: batchRecoveryFetch([], () => Promise.reject(new TypeError('Failed to fetch'))),
+  });
+  const secondTab = createDistributorHarness({
+    initialToken: 'Bearer tab-event',
+    sharedStorage,
+    fetchImpl: batchRecoveryFetch([], () => Promise.resolve(networkResponse({ data: 'UNUSED' }))),
+  });
+  await firstTab.flushMicrotasks();
+  await secondTab.flushMicrotasks();
+  assert.doesNotMatch(renderedText(secondTab), /data-action="resume-purchase"/);
+  firstTab.click({ buy: 1 });
+  await firstTab.flushMicrotasks();
+  assert.match(renderedText(firstTab), /data-action="resume-purchase"/);
+  secondTab.dispatchStorage(PURCHASE_RECOVERY_ACCOUNT_KEY);
+  await secondTab.flushMicrotasks();
+  assert.match(renderedText(secondTab), /data-action="resume-purchase"/);
+  secondTab.dispatchStorage('xboard_distributor_purchase_recovery:id:999');
+  await secondTab.flushMicrotasks();
+  assert.match(renderedText(secondTab), /data-action="resume-purchase"/, 'another account key never changes this tab');
+});
+
+test('logging out keeps an uncertain purchase for the same account and isolates other accounts', async () => {
+  const savePayloads = [];
+  let currentUserId = 501;
+  let saveMode = '503';
+  const harness = createDistributorHarness({
+    initialToken: 'Bearer logout-keeps-recovery',
+    fetchImpl(url, options) {
+      if (url.includes('/api/v1/user/info')) {
+        return Promise.resolve(networkResponse({
+          data: { id: currentUserId, email: `dist${currentUserId}@example.com`, distributor_name: `商户${currentUserId}`, is_distributor: true },
+        }));
+      }
+      if (url.includes('/api/v1/user/order/save')) {
+        const params = new URLSearchParams(String(options?.body || ''));
+        savePayloads.push(Object.fromEntries(params.entries()));
+        if (saveMode === '503') return Promise.resolve(networkResponse({ message: 'Gateway Timeout' }, 503));
+        return Promise.resolve(networkResponse({ data: saveMode === 'other' ? 'OTHER-ACCOUNT-ORDER' : 'LOGOUT-RECOVERED-ORDER' }));
+      }
+      if (url.includes('/api/v1/user/distributor/delivery')) {
+        const tradeNo = saveMode === 'other' ? 'OTHER-ACCOUNT-ORDER' : 'LOGOUT-RECOVERED-ORDER';
+        return Promise.resolve(networkResponse({
+          data: { trade_no: tradeNo, subscription_name: `订阅-${tradeNo}`, delivery_status: 1, config_issued_at: 1700000000 },
+        }));
+      }
+      return Promise.resolve(healthyDistributorResponse(url, options));
+    },
+  });
+  await harness.flushMicrotasks(80);
+  harness.click({ buy: 1 });
+  await harness.flushMicrotasks(80);
+  const originalKey = savePayloads[0].idempotency_key;
+  assert.match(renderedText(harness), /data-action="resume-purchase"/);
+
+  harness.click({ action: 'logout' });
+  await harness.flushMicrotasks(80);
+  assert.equal(harness.windowObj.location.hash, '#/login');
+  assert.equal(storedRecoveryRecords(harness.storage)[0].idempotencyKey, originalKey, 'logout must not discard the uncertain purchase');
+
+  currentUserId = 777;
+  saveMode = 'other';
+  harness.storage.setItem('VUE_NAIVE_ACCESS_TOKEN', JSON.stringify({ value: 'Bearer other-account', expire: null }));
+  harness.windowObj.location.hash = '#/plan';
+  await harness.flushMicrotasks(80);
+  assert.doesNotMatch(renderedText(harness), /data-action="resume-purchase"/, 'another distributor never sees this recovery');
+  harness.click({ buy: 1 });
+  await harness.flushMicrotasks(80);
+  assert.equal(savePayloads.length, 2);
+  assert.notEqual(savePayloads[1].idempotency_key, originalKey);
+
+  currentUserId = 501;
+  saveMode = 'ok';
+  harness.storage.setItem('VUE_NAIVE_ACCESS_TOKEN', JSON.stringify({ value: 'Bearer original-account-again', expire: null }));
+  harness.windowObj.location.hash = '#/plan';
+  await harness.flushMicrotasks(80);
+  assert.match(renderedText(harness), /data-action="resume-purchase"/, 'the same account restores its recovery after logging in again');
+  harness.click({ action: 'resume-purchase' });
+  await harness.flushMicrotasks(80);
+  assert.equal(savePayloads.at(-1).idempotency_key, originalKey);
+  assert.match(harness.doc.getElementById('dist-modal-root')?.innerHTML || '', /LOGOUT-RECOVERED-ORDER/);
+});
+
+test('abandoning an uncertain purchase requires an empty check after the safe window and a second confirmation', async () => {
+  const savePayloads = [];
+  const harness = createDistributorHarness({
+    initialToken: 'Bearer abandon-after-window',
+    fetchImpl(url, options) {
+      if (url.includes('/order/save')) {
+        const params = new URLSearchParams(String(options?.body || ''));
+        savePayloads.push(Object.fromEntries(params.entries()));
+        return savePayloads.length === 1
+          ? Promise.reject(new TypeError('Failed to fetch'))
+          : Promise.resolve(networkResponse({ data: 'MOBILE-NEW-ORDER' }));
+      }
+      return Promise.resolve(healthyDistributorResponse(url, options));
+    },
+  });
+  await harness.flushMicrotasks();
+  harness.click({ buy: 1 });
+  await harness.flushMicrotasks();
+  const originalKey = savePayloads[0].idempotency_key;
+  assert.doesNotMatch(renderedText(harness), /data-action="abandon-purchase"/, 'no abandon before any order check');
+
+  harness.click({ action: 'check-purchase-orders' });
+  await harness.flushMicrotasks();
+  assert.match(renderedText(harness), /原请求可能仍在处理中/);
+  assert.doesNotMatch(renderedText(harness), /data-action="abandon-purchase"/, 'an early empty list cannot prove the write failed');
+
+  await harness.advanceTimeAsync(180000);
+  harness.click({ action: 'check-purchase-orders' });
+  await harness.flushMicrotasks();
+  assert.match(renderedText(harness), /data-action="abandon-purchase"/);
+  harness.click({ action: 'abandon-purchase' });
+  await harness.flushMicrotasks();
+  assert.match(renderedText(harness), /data-action="confirm-abandon-purchase"/);
+  assert.match(renderedText(harness), /data-action="cancel-abandon-purchase"/);
+  assert.ok(storedRecoveryRecords(harness.storage).length === 1, 'the first click only arms the abandon confirmation');
+
+  harness.click({ action: 'cancel-abandon-purchase' });
+  await harness.flushMicrotasks();
+  assert.doesNotMatch(renderedText(harness), /data-action="confirm-abandon-purchase"/);
+  harness.click({ action: 'confirm-abandon-purchase' });
+  await harness.flushMicrotasks();
+  assert.equal(storedRecoveryRecords(harness.storage).length, 1, 'confirm without arming is ignored');
+
+  harness.click({ action: 'abandon-purchase' });
+  harness.click({ action: 'confirm-abandon-purchase' });
+  await harness.flushMicrotasks();
+  assert.equal(harness.storage.getItem(PURCHASE_RECOVERY_ACCOUNT_KEY), null);
+  assert.doesNotMatch(renderedText(harness), /data-action="resume-purchase"/);
+  harness.click({ nav: '/plan' });
+  await harness.flushMicrotasks();
+  harness.click({ buy: 1 });
+  await harness.flushMicrotasks(80);
+  assert.equal(savePayloads.length, 2);
+  assert.notEqual(savePayloads[1].idempotency_key, originalKey);
+});
+
+test('a replay in another tab restarts the safe window so a stale tab cannot abandon the purchase', async () => {
+  const sharedStorage = new MemoryStorage();
+  const firstTabPayloads = [];
+  const firstTab = createDistributorHarness({
+    initialToken: 'Bearer stale-abandon',
+    sharedStorage,
+    fetchImpl: batchRecoveryFetch(firstTabPayloads, () => Promise.reject(new TypeError('Failed to fetch'))),
+  });
+  await firstTab.flushMicrotasks();
+  firstTab.click({ buy: 1 });
+  await firstTab.flushMicrotasks();
+  await firstTab.advanceTimeAsync(180000);
+  firstTab.click({ action: 'check-purchase-orders' });
+  await firstTab.flushMicrotasks();
+  firstTab.click({ action: 'abandon-purchase' });
+  await firstTab.flushMicrotasks();
+  assert.match(renderedText(firstTab), /data-action="confirm-abandon-purchase"/);
+
+  const secondTabPayloads = [];
+  const secondTab = createDistributorHarness({
+    initialToken: 'Bearer stale-abandon',
+    sharedStorage,
+    fetchImpl: batchRecoveryFetch(secondTabPayloads, () => new Promise(() => {})),
+  });
+  await secondTab.flushMicrotasks();
+  await secondTab.advanceTimeAsync(240000);
+  secondTab.click({ action: 'resume-purchase' });
+  await secondTab.flushMicrotasks();
+  assert.equal(secondTabPayloads.length, 1);
+  assert.equal(secondTabPayloads[0].idempotency_key, firstTabPayloads[0].idempotency_key);
+  assert.equal(storedRecoveryRecords(sharedStorage)[0].absenceConfirmedAt, null, 'the replay invalidates the earlier absence proof');
+
+  // The storage event has not reached the first tab yet; confirm must re-validate shared storage.
+  firstTab.click({ action: 'confirm-abandon-purchase' });
+  await firstTab.flushMicrotasks();
+  assert.equal(storedRecoveryRecords(sharedStorage).length, 1, 'a stale tab must not delete a purchase being replayed');
+  assert.match(renderedText(firstTab), /本次下单状态已在其他页面更新/);
+  assert.doesNotMatch(renderedText(firstTab), /data-action="abandon-purchase"/);
+  firstTab.click({ buy: 1 });
+  await firstTab.flushMicrotasks();
+  assert.equal(firstTabPayloads.length, 1);
 });
