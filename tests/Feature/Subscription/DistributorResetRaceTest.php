@@ -125,8 +125,7 @@ class DistributorResetRaceTest extends TestCase
         $this->seedRegisteredHwidDevice($fixture['delivery'], 'headers-reset-device');
         $reset = false;
         DB::listen(function ($event) use ($fixture, &$reset): void {
-            if (!$reset && str_starts_with(strtolower($event->sql), 'select')
-                && str_contains($event->sql, 'from "v2_order"')) {
+            if (!$reset && preg_match('/^\s*select\b.*\bfrom\s+[`"]?v2_order[`"]?\b/is', $event->sql) === 1) {
                 $reset = true;
                 $this->resetFixture($fixture);
             }
