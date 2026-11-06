@@ -288,12 +288,92 @@ YAML;
         }
     }
 
+    public function test_gateway_proxy_hop_is_strictly_confined_to_read_only_subscription_routes(): void
+    {
+        admin_setting([
+            'app_url' => self::ORIGIN_URL,
+            'subscribe_url' => self::GATEWAY_URL,
+        ]);
+
+        $plan = $this->makeSubscriptionPlan();
+        $subscriber = $this->makeOrdinarySubscriber($plan);
+        $this->makeOnlineServer();
+
+        $fixture = $this->makeDistributorSubscriptionFixture();
+        $claimToken = str_repeat('c', 64);
+        $fixture['delivery']->update([
+            'delivery_status' => DistributorOrder::DELIVERY_PENDING,
+            'claim_token' => $claimToken,
+            'claim_token_hash' => hash('sha256', $claimToken),
+        ]);
+
+        $gatewayEnvironments = [
+            'direct_gateway_peer' => [
+                'REMOTE_ADDR' => self::GATEWAY_IP,
+                'HTTP_HOST' => 'cloud.thinderbox.com',
+                'HTTP_X_FORWARDED_FOR' => '113.108.12.34',
+                'HTTP_USER_AGENT' => 'Clash.Meta/v1.18.0',
+            ],
+            'via_host_caddy_and_v2_edge' => [
+                'REMOTE_ADDR' => '172.18.0.5',
+                'HTTP_HOST' => 'cloud.thinderbox.com',
+                'HTTP_X_FORWARDED_FOR' => '113.108.12.34, ' . self::GATEWAY_IP . ', 172.18.0.1',
+                'HTTP_USER_AGENT' => 'Clash.Meta/v1.18.0',
+            ],
+        ];
+
+        foreach ($gatewayEnvironments as $label => $serverVars) {
+            foreach ([
+                ['POST', '/api/v1/passport/auth/login', ['email' => 'a@b.com', 'password' => 'secret']],
+                ['GET', '/api/v1/guest/comm/config', []],
+                ['GET', '/', []],
+                ['POST', "/s/{$subscriber->token}", []],
+            ] as [$method, $uri, $params]) {
+                $blocked = $this->call($method, $uri, $params, [], [], $serverVars);
+                $this->assertSame(403, $blocked->getStatusCode(), "{$label}: expected 403 on {$method} {$uri}");
+            }
+
+            $allowedSub = $this->call('GET', "/s/{$subscriber->token}", [], [], [], $serverVars);
+            $allowedSub->assertOk();
+
+            $allowedLegacy = $this->call('GET', '/api/v1/client/subscribe', ['token' => $subscriber->token], [], [], $serverVars);
+            $allowedLegacy->assertOk();
+        }
+
+        $allowedClaim = $this->call(
+            'GET',
+            "/api/v1/client/distributor/claim/{$claimToken}",
+            [],
+            [],
+            [],
+            $gatewayEnvironments['via_host_caddy_and_v2_edge']
+        );
+        $allowedClaim->assertStatus(302);
+
+        // Anti-spoofing: attacker behind Cloudflare (172.68.10.20) spoofing X-Forwarded-For with gateway IP must NOT trigger false 403
+        $spoofedViaCloudflare = $this->call(
+            'GET',
+            '/api/v1/guest/comm/config',
+            [],
+            [],
+            [],
+            [
+                'REMOTE_ADDR' => '172.18.0.5',
+                'HTTP_HOST' => 'cloud.thinderbox.com',
+                'HTTP_X_FORWARDED_FOR' => self::GATEWAY_IP . ', 203.0.113.9, 172.68.10.20, 172.18.0.1',
+            ]
+        );
+        $spoofedViaCloudflare->assertOk();
+    }
+
     public function test_edge_caddy_and_release_workflow_converge_gateway_trust_and_compression(): void
     {
         $caddyV2 = (string) file_get_contents(base_path('.docker/caddy/Caddyfile.v2'));
         $this->assertStringContainsString('trusted_proxies static private_ranges 103.133.179.159/32', $caddyV2);
         $this->assertStringContainsString('trusted_proxies_strict', $caddyV2);
         $this->assertStringContainsString('encode zstd gzip', $caddyV2);
+        $this->assertStringContainsString('@untrusted_gateway_path', $caddyV2);
+        $this->assertStringContainsString('respond @untrusted_gateway_path "Forbidden" 403', $caddyV2);
 
         $defaultSingBox = json_decode((string) file_get_contents(base_path('resources/rules/default.sing-box.json')), true);
         $this->assertIsArray($defaultSingBox);
