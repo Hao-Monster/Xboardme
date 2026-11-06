@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Cache;
 
@@ -16,11 +17,16 @@ class SubscribeTemplate extends Model
 
     private static string $cachePrefix = 'subscribe_template:';
 
+    private static function cacheStore(): Repository
+    {
+        return Cache::store(config('cache.settings_store', 'redis'));
+    }
+
     public static function getContent(string $name): ?string
     {
         $cacheKey = self::$cachePrefix . $name;
 
-        return Cache::store('redis')->remember($cacheKey, 3600, function () use ($name) {
+        return self::cacheStore()->remember($cacheKey, 3600, function () use ($name) {
             return self::where('name', $name)->value('content');
         });
     }
@@ -31,7 +37,7 @@ class SubscribeTemplate extends Model
             ['name' => $name],
             ['content' => $content]
         );
-        Cache::store('redis')->forget(self::$cachePrefix . $name);
+        self::cacheStore()->forget(self::$cachePrefix . $name);
     }
 
     public static function getAllContents(): array
@@ -41,6 +47,6 @@ class SubscribeTemplate extends Model
 
     public static function flushCache(string $name): void
     {
-        Cache::store('redis')->forget(self::$cachePrefix . $name);
+        self::cacheStore()->forget(self::$cachePrefix . $name);
     }
 }

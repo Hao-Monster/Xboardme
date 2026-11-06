@@ -16,52 +16,11 @@ dns:
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
   use-hosts: true
-  nameserver-policy:
-    "+.google.com": "https://dns.cloudflare.com/dns-query"
-    "+.googleapis.com": "https://dns.cloudflare.com/dns-query"
-    "+.googleapis.cn": "https://dns.cloudflare.com/dns-query"
-    "+.googlevideo.com": "https://dns.cloudflare.com/dns-query"
-    "+.gstatic.com": "https://dns.cloudflare.com/dns-query"
-    "+.youtube.com": "https://dns.cloudflare.com/dns-query"
-    "+.youtu.be": "https://dns.cloudflare.com/dns-query"
-    "+.facebook.com": "https://dns.cloudflare.com/dns-query"
-    "+.twitter.com": "https://dns.cloudflare.com/dns-query"
-    "+.x.com": "https://dns.cloudflare.com/dns-query"
-    "+.github.com": "https://dns.cloudflare.com/dns-query"
-    "+.githubusercontent.com": "https://dns.cloudflare.com/dns-query"
-    "+.openai.com": "https://dns.cloudflare.com/dns-query"
-    "+.chatgpt.com": "https://dns.cloudflare.com/dns-query"
-    "+.anthropic.com": "https://dns.cloudflare.com/dns-query"
   nameserver:
     - https://doh.pub/dns-query
     - https://dns.alidns.com/dns-query
     - tls://dot.pub:853
     - tls://dns.alidns.com:853
-  fallback:
-    - https://dns.cloudflare.com/dns-query
-    - https://dns.google/dns-query
-    - tls://1.1.1.1:853
-    - tls://8.8.8.8:853
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
-    ipcidr:
-      - 0.0.0.0/8
-      - 10.0.0.0/8
-      - 100.64.0.0/10
-      - 127.0.0.0/8
-      - 169.254.0.0/16
-      - 172.16.0.0/12
-      - 192.168.0.0/16
-      - 224.0.0.0/4
-      - 240.0.0.0/4
-    domain:
-      - "+.google.com"
-      - "+.facebook.com"
-      - "+.youtube.com"
-      - "+.githubusercontent.com"
-      - "+.googlevideo.com"
-      - "+.googleapis.cn"
   fake-ip-filter:
     - "*.lan"
     - "*.local"

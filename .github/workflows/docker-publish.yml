@@ -521,6 +521,12 @@ jobs:
           bash .github/scripts/validate-v2-compose.sh
           bash -n .github/scripts/cleanup-xboard-retain-online-only.sh
           bash -n .github/scripts/test-cleanup-xboard-retain-online-only.sh
+          bash -n .github/scripts/converge-xboard-host-network.sh
+          bash -n .github/scripts/test-converge-xboard-host-network.sh
+          bash .github/scripts/test-converge-xboard-host-network.sh
+          bash -n .github/scripts/converge-xboard-subscription-gateway.sh
+          bash -n .github/scripts/test-converge-xboard-subscription-gateway.sh
+          bash .github/scripts/test-converge-xboard-subscription-gateway.sh
           bash .github/scripts/test-resolve-xboard-v2-port.sh
           bash .github/scripts/test-run-distributor-smoke-bounded.sh
           bash -n .github/scripts/deploy-admin-assets-hotfix.sh

@@ -69,7 +69,18 @@ class Surfboard extends AbstractProtocol
         $config = subscribe_template('surfboard');
         // Subscription link
         $subsURL = Helper::getSubscribeUrl($user['token']);
-        $subsDomain = request()->header('Host');
+        $parsedSubsHost = parse_url($subsURL, PHP_URL_HOST);
+        $subsDomain = is_string($parsedSubsHost) && $parsedSubsHost !== ''
+            ? $parsedSubsHost
+            : ($this->primarySubscriptionDomain() ?? (string) request()->header('Host', ''));
+        $directDomains = $this->subscriptionDirectDomains();
+        if (!empty($directDomains)) {
+            $directDomainLines = implode("\n", array_map(
+                static fn(string $domain): string => "DOMAIN,{$domain},DIRECT",
+                $directDomains
+            ));
+            $config = str_replace('DOMAIN,$subs_domain,DIRECT', $directDomainLines, $config);
+        }
 
         $config = str_replace('$subs_link', $subsURL, $config);
         $config = str_replace('$subs_domain', $subsDomain, $config);

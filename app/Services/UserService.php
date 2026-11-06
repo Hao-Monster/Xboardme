@@ -13,6 +13,7 @@ use App\Services\Plugin\HookManager;
 use App\Services\TrafficResetService;
 use App\Models\TrafficResetLog;
 use App\Utils\Helper;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\Hash;
 
 class UserService
@@ -47,7 +48,7 @@ class UserService
 
     public function isAvailable(User $user)
     {
-        if (!$user->banned && $user->transfer_enable && ($user->expired_at > time() || $user->expired_at === NULL)) {
+        if (!$user->banned && $user->transfer_enable && ($user->expired_at > Carbon::now()->timestamp || $user->expired_at === NULL)) {
             return true;
         }
         return false;

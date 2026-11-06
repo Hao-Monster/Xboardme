@@ -30,6 +30,7 @@ class Clash extends AbstractProtocol
         $template = subscribe_template('clash');
 
         $config = Yaml::parse($template);
+        $config = $this->sanitizeClashFakeIpBootstrapDns(is_array($config) ? $config : []);
         $proxy = [];
         $proxies = [];
 
@@ -111,13 +112,7 @@ class Clash extends AbstractProtocol
      */
     public function buildRules($config)
     {
-        // Force the current subscription domain to be a direct rule
-        $subsDomain = request()->header('Host');
-        if ($subsDomain) {
-            array_unshift($config['rules'], "DOMAIN,{$subsDomain},DIRECT");
-        }
-
-        return $config;
+        return $this->prependClashDirectSubscriptionDomains($config);
     }
 
     public static function buildShadowsocks($uuid, $server)

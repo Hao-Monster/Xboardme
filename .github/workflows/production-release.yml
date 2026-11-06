@@ -1209,6 +1209,8 @@ jobs:
         run: |
           test "$EXPECTED_SHA" = "$GITHUB_SHA"
           test "$RELEASE_IMAGE" = "$(printf '%s' "$RELEASE_IMAGE" | grep -E '^ghcr\.io/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$')"
+          bash -n .github/scripts/converge-xboard-host-network.sh
+          bash .github/scripts/test-converge-xboard-host-network.sh
           echo "release_id=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
       - name: Trust deployment host key
@@ -1233,6 +1235,23 @@ jobs:
             bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
               -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
               "docker login ghcr.io --username '${{ github.actor }}' --password-stdin"
+
+      - name: Converge host BBR, local hostname, and Caddy trusted gateway proxies
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/converge-xboard-host-network.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s"
 
       - name: Prepare the exact signed release without production mutation
         env:
@@ -1710,6 +1729,8 @@ jobs:
           test "$RELEASE_ID" = "$(printf '%s' "$RELEASE_ID" | grep -E '^[0-9]+-[0-9]+$')"
           bash -n .github/scripts/cleanup-xboard-retain-online-only.sh
           bash .github/scripts/test-cleanup-xboard-retain-online-only.sh
+          bash -n .github/scripts/converge-xboard-subscription-gateway.sh
+          bash .github/scripts/test-converge-xboard-subscription-gateway.sh
 
       - name: Trust deployment host key
         env:
@@ -1766,6 +1787,25 @@ jobs:
           grep -Fxq 'RETENTION_CANDIDATE_CONTAINER_COUNT=0' "$RUNNER_TEMP/post-release-cleanup-audit.txt"
           grep -Fxq 'NETWORK_DEBT_CANDIDATE_COUNT=0' "$RUNNER_TEMP/post-release-cleanup-audit.txt"
 
+      - name: Converge HK subscription gateway URL and Mainland bootstrap templates
+        env:
+          SSHPASS: ${{ secrets.SERVICES_PASSWARD }}
+          DEPLOY_HOST: ${{ secrets.SERVICES_IP }}
+          DEPLOY_PORT: ${{ secrets.SERVICES_SSH_PORT }}
+          DEPLOY_USER: ${{ secrets.SERVICE_USER }}
+          EXPECTED_WORKFLOW_SHA: ${{ inputs.expected_sha }}
+        run: |
+          cat .github/scripts/production-runtime-discovery.sh \
+              .github/scripts/release-state.sh \
+              .github/scripts/retention-continuity.sh \
+              .github/scripts/v2-low-memory-common.sh \
+              .github/scripts/converge-xboard-subscription-gateway.sh |
+            bash "$GITHUB_WORKSPACE/.github/scripts/ssh-with-password.sh" \
+              -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              "EXPECTED_WORKFLOW_SHA='$EXPECTED_WORKFLOW_SHA' bash -s" |
+            tee "$RUNNER_TEMP/post-release-subscription-gateway.txt"
+          grep -Eq '^CONVERGE_SUBSCRIPTION_GATEWAY=PASS ' "$RUNNER_TEMP/post-release-subscription-gateway.txt"
+
       - name: Verify public production and distributor assets after cleanup
         uses: ./.github/actions/distributor-smoke
         with:
@@ -1800,6 +1840,7 @@ jobs:
             ${{ runner.temp }}/post-release-online-only-cleanup.txt
             ${{ runner.temp }}/post-release-cleanup-preflight.txt
             ${{ runner.temp }}/post-release-cleanup-audit.txt
+            ${{ runner.temp }}/post-release-subscription-gateway.txt
           if-no-files-found: warn
           retention-days: 90
 

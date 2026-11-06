@@ -8,13 +8,16 @@
 	}
 	servers {
 		# The edge service is published only on host loopback. Trust private
-		# upstream addresses without accepting arbitrary public spoofed hops.
-		trusted_proxies static private_ranges
+		# upstream addresses and the dedicated HK subscription gateway without
+		# accepting arbitrary public spoofed hops.
+		trusted_proxies static private_ranges 103.133.179.159/32
 		trusted_proxies_strict
 	}
 }
 
 :7001 {
+	encode zstd gzip
+
 	@ws path /ws
 	reverse_proxy @ws ws:8076
 
