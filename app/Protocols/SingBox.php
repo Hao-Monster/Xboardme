@@ -25,6 +25,11 @@ class SingBox extends AbstractProtocol
     const CUSTOM_TEMPLATE_FILE = 'resources/rules/custom.sing-box.json';
     const DEFAULT_TEMPLATE_FILE = 'resources/rules/default.sing-box.json';
 
+    private const MAINLAND_RULESET_MIRRORS = [
+        'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs' => 'https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs',
+        'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs' => 'https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/cn.srs',
+    ];
+
     /**
      * 多客户端协议支持配置
      */
@@ -113,6 +118,7 @@ class SingBox extends AbstractProtocol
     {
         $appName = admin_setting('app_name', 'XBoard');
         $this->config = $this->loadConfig();
+        $this->normalizeMainlandRuleSets();
         $this->buildOutbounds();
         $this->buildRule();
         $this->adaptConfigForVersion();
@@ -130,6 +136,92 @@ class SingBox extends AbstractProtocol
         $jsonData = subscribe_template('singbox');
 
         return is_array($jsonData) ? $jsonData : json_decode($jsonData, true);
+    }
+
+    /**
+     * Rewrite stock Mainland-blocked raw.githubusercontent.com CN bootstrap rule-sets
+     * to Mainland-reachable CDN mirrors with direct download detour.
+     */
+    protected function normalizeMainlandRuleSets(): void
+    {
+        if (is_array($this->config)) {
+            $this->config = self::sanitizeMainlandRuleSetConfig($this->config);
+        }
+    }
+
+    public static function sanitizeMainlandRuleSetConfig(array $config): array
+    {
+        if (!isset($config['route']['rule_set']) || !is_array($config['route']['rule_set'])) {
+            return $config;
+        }
+
+        $directTag = 'direct';
+        if (isset($config['outbounds']) && is_array($config['outbounds'])) {
+            foreach ($config['outbounds'] as $outbound) {
+                if (is_array($outbound) && ($outbound['type'] ?? null) === 'direct' && !empty($outbound['tag'])) {
+                    $directTag = (string) $outbound['tag'];
+                    break;
+                }
+            }
+        }
+
+        foreach ($config['route']['rule_set'] as &$ruleSet) {
+            if (!is_array($ruleSet)) {
+                continue;
+            }
+            $url = trim((string) ($ruleSet['url'] ?? ''));
+            if (isset(self::MAINLAND_RULESET_MIRRORS[$url])) {
+                $ruleSet['url'] = self::MAINLAND_RULESET_MIRRORS[$url];
+                $ruleSet['download_detour'] = $directTag;
+                continue;
+            }
+            if (
+                in_array($ruleSet['tag'] ?? '', ['geosite-cn', 'geoip-cn'], true)
+                && str_starts_with($url, 'https://testingcf.jsdelivr.net/')
+            ) {
+                $ruleSet['download_detour'] = $directTag;
+            }
+        }
+        unset($ruleSet);
+
+        return $config;
+    }
+
+    protected function resolveDirectOutboundTag(): ?string
+    {
+        if (!isset($this->config['outbounds']) || !is_array($this->config['outbounds'])) {
+            return null;
+        }
+
+        foreach ($this->config['outbounds'] as $outbound) {
+            if (is_array($outbound) && ($outbound['type'] ?? null) === 'direct' && !empty($outbound['tag'])) {
+                return (string) $outbound['tag'];
+            }
+        }
+
+        return null;
+    }
+
+    protected function resolveDirectDnsServerTag(): ?string
+    {
+        if (!isset($this->config['dns']['servers']) || !is_array($this->config['dns']['servers'])) {
+            return null;
+        }
+
+        $tags = [];
+        foreach ($this->config['dns']['servers'] as $server) {
+            if (is_array($server) && !empty($server['tag'])) {
+                $tags[] = (string) $server['tag'];
+            }
+        }
+
+        foreach (['local', 'dns_direct', 'direct'] as $preferred) {
+            if (in_array($preferred, $tags, true)) {
+                return $preferred;
+            }
+        }
+
+        return null;
     }
 
     protected function buildOutbounds()
@@ -307,7 +399,54 @@ class SingBox extends AbstractProtocol
      */
     protected function buildRule()
     {
-        $rules = $this->config['route']['rules'];
+        $rules = isset($this->config['route']['rules']) && is_array($this->config['route']['rules'])
+            ? $this->config['route']['rules']
+            : [];
+
+        $domains = $this->subscriptionDirectDomains();
+        if (!empty($domains)) {
+            $directDnsTag = $this->resolveDirectDnsServerTag();
+            if ($directDnsTag !== null && isset($this->config['dns']) && is_array($this->config['dns'])) {
+                $dnsRules = isset($this->config['dns']['rules']) && is_array($this->config['dns']['rules'])
+                    ? $this->config['dns']['rules']
+                    : [];
+                $dnsRule = [
+                    'domain' => $domains,
+                    'server' => $directDnsTag,
+                ];
+                if (!in_array($dnsRule, $dnsRules, true)) {
+                    array_unshift($dnsRules, $dnsRule);
+                }
+                $this->config['dns']['rules'] = $dnsRules;
+            }
+
+            $directOutboundTag = $this->resolveDirectOutboundTag();
+            if ($directOutboundTag !== null) {
+                $routeRule = [
+                    'domain' => $domains,
+                    'outbound' => $directOutboundTag,
+                ];
+                if (!in_array($routeRule, $rules, true)) {
+                    $insertAt = 0;
+                    foreach ($rules as $index => $existingRule) {
+                        if (
+                            is_array($existingRule)
+                            && (
+                                ($existingRule['action'] ?? null) === 'hijack-dns'
+                                || ($existingRule['protocol'] ?? null) === 'dns'
+                                || ($existingRule['action'] ?? null) === 'sniff'
+                            )
+                        ) {
+                            $insertAt = $index + 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    array_splice($rules, $insertAt, 0, [$routeRule]);
+                }
+            }
+        }
+
         $this->config['route']['rules'] = $rules;
     }
 

@@ -263,4 +263,182 @@ abstract class AbstractProtocol
         }
         return $result;
     }
+
+    /**
+     * Extract a normalized multi-label domain from a URL or Host header value.
+     */
+    protected function extractSubscriptionDomain(string $value): ?string
+    {
+        $trimmed = trim($value);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        if (str_contains($trimmed, '://')) {
+            $parsedHost = parse_url($trimmed, PHP_URL_HOST);
+            $host = is_string($parsedHost) ? $parsedHost : '';
+        } else {
+            $withoutPath = explode('/', $trimmed, 2)[0];
+            $host = (string) preg_replace('/:\d+$/', '', $withoutPath);
+        }
+
+        $host = strtolower(trim($host, ". \t\n\r\0\x0B[]"));
+        if ($host === '' || filter_var($host, FILTER_VALIDATE_IP) !== false || !str_contains($host, '.')) {
+            return null;
+        }
+
+        if (preg_match('/^[a-z0-9.-]+$/', $host) !== 1) {
+            return null;
+        }
+
+        return $host;
+    }
+
+    /**
+     * Return ordered, deduplicated subscription gateway and origin domains
+     * that must always bypass proxy outbounds for reliable profile self-updates.
+     *
+     * @return list<string>
+     */
+    protected function subscriptionDirectDomains(): array
+    {
+        $candidates = [];
+
+        $subscribeUrlSetting = (string) admin_setting('subscribe_url', '');
+        if ($subscribeUrlSetting !== '') {
+            foreach (explode(',', $subscribeUrlSetting) as $entry) {
+                $candidates[] = $entry;
+            }
+        }
+
+        $candidates[] = (string) admin_setting('app_url', '');
+
+        if (app()->bound('request')) {
+            $candidates[] = (string) request()->getHost();
+            $candidates[] = (string) request()->header('Host', '');
+        }
+
+        $domains = [];
+        foreach ($candidates as $candidate) {
+            $domain = $this->extractSubscriptionDomain($candidate);
+            if ($domain !== null && !in_array($domain, $domains, true)) {
+                $domains[] = $domain;
+            }
+        }
+
+        return $domains;
+    }
+
+    /**
+     * Return the primary domain used for subscription self-update links.
+     */
+    protected function primarySubscriptionDomain(): ?string
+    {
+        $domains = $this->subscriptionDirectDomains();
+
+        return $domains[0] ?? null;
+    }
+
+    /**
+     * Prepend DIRECT rules for all subscription gateway/origin domains on Clash-family configs.
+     */
+    protected function prependClashDirectSubscriptionDomains(array $config): array
+    {
+        $rules = isset($config['rules']) && is_array($config['rules']) ? $config['rules'] : [];
+        $domains = $this->subscriptionDirectDomains();
+
+        if (empty($domains) && app()->bound('request')) {
+            $rawHost = trim((string) request()->header('Host', ''));
+            $fallbackHost = (string) preg_replace('/:\d+$/', '', $rawHost);
+            if ($fallbackHost !== '' && filter_var($fallbackHost, FILTER_VALIDATE_IP) === false) {
+                $domains = [$fallbackHost];
+            }
+        }
+
+        $prepend = [];
+        foreach ($domains as $domain) {
+            $rule = "DOMAIN,{$domain},DIRECT";
+            if (!in_array($rule, $rules, true) && !in_array($rule, $prepend, true)) {
+                $prepend[] = $rule;
+            }
+        }
+
+        $config['rules'] = array_merge($prepend, $rules);
+
+        return $config;
+    }
+
+    /**
+     * Strip bare Mainland-blocked DoH/DoT/DNS endpoints from Clash fake-ip bootstrap config
+     * while preserving explicit Mihomo proxy-detoured resolvers (containing '#').
+     */
+    public static function sanitizeClashFakeIpBootstrapDns(array $config): array
+    {
+        if (!isset($config['dns']) || !is_array($config['dns'])) {
+            return $config;
+        }
+
+        $enhancedMode = strtolower(trim((string) ($config['dns']['enhanced-mode'] ?? '')));
+        if ($enhancedMode !== 'fake-ip') {
+            return $config;
+        }
+
+        if (isset($config['dns']['nameserver-policy']) && is_array($config['dns']['nameserver-policy'])) {
+            foreach ($config['dns']['nameserver-policy'] as $pattern => $resolver) {
+                if (is_string($resolver)) {
+                    if (self::isMainlandBlockedBareDnsEndpoint($resolver)) {
+                        unset($config['dns']['nameserver-policy'][$pattern]);
+                    }
+                    continue;
+                }
+
+                if (is_array($resolver)) {
+                    $filtered = array_values(array_filter(
+                        $resolver,
+                        fn($item) => !self::isMainlandBlockedBareDnsEndpoint($item)
+                    ));
+                    if (empty($filtered)) {
+                        unset($config['dns']['nameserver-policy'][$pattern]);
+                    } else {
+                        $config['dns']['nameserver-policy'][$pattern] = $filtered;
+                    }
+                }
+            }
+
+            if (empty($config['dns']['nameserver-policy'])) {
+                unset($config['dns']['nameserver-policy']);
+            }
+        }
+
+        if (isset($config['dns']['fallback']) && is_array($config['dns']['fallback'])) {
+            $filteredFallback = array_values(array_filter(
+                $config['dns']['fallback'],
+                fn($item) => !self::isMainlandBlockedBareDnsEndpoint($item)
+            ));
+            if (empty($filteredFallback)) {
+                unset($config['dns']['fallback'], $config['dns']['fallback-filter']);
+            } else {
+                $config['dns']['fallback'] = $filteredFallback;
+            }
+        }
+
+        return $config;
+    }
+
+    public static function isMainlandBlockedBareDnsEndpoint(mixed $endpoint): bool
+    {
+        if (!is_string($endpoint)) {
+            return false;
+        }
+
+        $trimmed = trim($endpoint);
+        if ($trimmed === '' || str_contains($trimmed, '#')) {
+            return false;
+        }
+
+        return preg_match(
+            '#(?:^|//)(?:dns\.cloudflare\.com|cloudflare-dns\.com|one\.one\.one\.one|dns\.google(?:\.com)?|dns\.quad9\.net|1\.1\.1\.1|1\.0\.0\.1|8\.8\.8\.8|8\.8\.4\.4|9\.9\.9\.9)(?:[:/]|$)#i',
+            $trimmed
+        ) === 1;
+    }
 }
