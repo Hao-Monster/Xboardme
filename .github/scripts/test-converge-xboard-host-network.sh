@@ -81,7 +81,9 @@ cfg=${2:?cfg}
 has_trusted=false
 has_strict=false
 has_encode=false
+has_gw_guard=false
 trusted_cidr=""
+guard_cidr=""
 site_line=""
 dial=""
 
@@ -95,7 +97,11 @@ while IFS= read -r line; do
     has_strict=true
   elif [[ "$trimmed" == "encode zstd gzip" ]]; then
     has_encode=true
-  elif [[ "$trimmed" =~ ^(https?://)?([A-Za-z0-9.-]+)[[:space:]]*\{$ ]]; then
+  elif [[ "$trimmed" =~ ^remote_ip[[:space:]]+([^[:space:]]+)$ ]]; then
+    guard_cidr=${BASH_REMATCH[1]}
+  elif [[ "$trimmed" == 'respond @untrusted_gateway_path "Forbidden" 403' ]]; then
+    has_gw_guard=true
+  elif [[ "$trimmed" != "servers {" && "$trimmed" != "not {" && "$trimmed" =~ ^(https?://)?([A-Za-z0-9.-]+)[[:space:]]*\{$ ]]; then
     site_line=$trimmed
   elif [[ "$trimmed" =~ ^reverse_proxy[[:space:]]+(127\.0\.0\.1:[0-9]{4,5})$ ]]; then
     dial=${BASH_REMATCH[1]}
@@ -122,10 +128,12 @@ if [[ "$cmd" == "adapt" ]]; then
     --arg host "$host" \
     --arg dial "$dial" \
     --arg cidr "$trusted_cidr" \
+    --arg guard_cidr "$guard_cidr" \
     --argjson listen "$listen" \
     --argjson has_trusted "$has_trusted" \
     --argjson has_strict "$has_strict" \
-    --argjson has_encode "$has_encode" '
+    --argjson has_encode "$has_encode" \
+    --argjson has_gw_guard "$has_gw_guard" '
     {
       apps: {
         http: {
@@ -138,6 +146,16 @@ if [[ "$cmd" == "adapt" ]]; then
                     match: [{host: [$host]}],
                     handle: (
                       (if $has_encode then [{handler: "encode", encodings: {zstd: {}, gzip: {}}}] else [] end)
+                      + (if $has_gw_guard then [{
+                          match: [{
+                            remote_ip: {ranges: [$guard_cidr]},
+                            not: [{
+                              method: ["GET", "HEAD", "OPTIONS"],
+                              path: ["/s/*", "/api/v1/client/subscribe", "/api/v1/client/distributor/claim/*"]
+                            }]
+                          }],
+                          handle: [{handler: "static_response", status_code: 403, body: "Forbidden"}]
+                        }] else [] end)
                       + [{handler: "reverse_proxy", upstreams: [{dial: $dial}]}]
                     )
                   }
@@ -190,6 +208,11 @@ grep -Eq '^127\.0\.1\.1[[:space:]]+V20260731082214-001$' "$hosts_file"
 grep -Fxq 'trusted_proxies static 103.133.179.159/32' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
 grep -Fxq 'trusted_proxies_strict' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
 grep -Fxq 'encode zstd gzip' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
+grep -Fxq '@untrusted_gateway_path {' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
+grep -Fxq 'remote_ip 103.133.179.159/32' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
+grep -Fxq 'method GET HEAD OPTIONS' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
+grep -Fxq 'path /s/* /api/v1/client/subscribe /api/v1/client/distributor/claim/*' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
+grep -Fxq 'respond @untrusted_gateway_path "Forbidden" 403' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
 grep -Fxq 'reverse_proxy 127.0.0.1:7002' < <(sed -E 's/^[[:space:]]+//' "$caddy_root/Caddyfile")
 [[ "$(cat "$state_dir/reload_count")" == "1" ]]
 

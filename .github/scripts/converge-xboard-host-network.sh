@@ -231,6 +231,25 @@ assert_converged_caddy_json() {
           .apps.http.servers[]?
           | ..
           | objects
+          | select(
+              ((.match? // []) | any(
+                (.remote_ip.ranges? // []) == [$cidr]
+                and (
+                  (.not? // []) | any(
+                    (.method? // []) == ["GET", "HEAD", "OPTIONS"]
+                    and (.path? // []) == ["/s/*", "/api/v1/client/subscribe", "/api/v1/client/distributor/claim/*"]
+                  )
+                )
+              ))
+              and ((.handle? // []) | any(.handler? == "static_response" and (.status_code == 403 or .status_code == "403")))
+            )
+        ] | length
+      ) == 1
+      and (
+        [
+          .apps.http.servers[]?
+          | ..
+          | objects
           | select(.handler? == "reverse_proxy")
           | .upstreams[]?.dial
         ]
@@ -250,6 +269,14 @@ cat >"$caddy_desired" <<EOF
 
 ${site_address} {
 	encode zstd gzip
+	@untrusted_gateway_path {
+		remote_ip ${SUBSCRIPTION_GATEWAY_TRUSTED_CIDR}
+		not {
+			method GET HEAD OPTIONS
+			path /s/* /api/v1/client/subscribe /api/v1/client/distributor/claim/*
+		}
+	}
+	respond @untrusted_gateway_path "Forbidden" 403
 	reverse_proxy 127.0.0.1:${active_port}
 }
 EOF

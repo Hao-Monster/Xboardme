@@ -18,6 +18,15 @@
 :7001 {
 	encode zstd gzip
 
+	@untrusted_gateway_path {
+		remote_ip 103.133.179.159/32
+		not {
+			method GET HEAD OPTIONS
+			path /s/* /api/v1/client/subscribe /api/v1/client/distributor/claim/*
+		}
+	}
+	respond @untrusted_gateway_path "Forbidden" 403
+
 	@ws path /ws
 	reverse_proxy @ws ws:8076
 
