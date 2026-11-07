@@ -2,6 +2,7 @@
 
 use App\Services\ThemeService;
 use App\Support\AssetVersion;
+use App\Support\DynamicRouteSynchronizer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
@@ -107,7 +108,7 @@ Route::get('/', function (Request $request) {
 });
 
 //TODO:: 兼容
-Route::get('/' . admin_setting('secure_path', admin_setting('frontend_admin_path', hash('crc32b', config('app.key')))), function () {
+$adminWebRoute = Route::get('/' . DynamicRouteSynchronizer::resolveSecurePath(), function () {
     return view('admin', [
         'title' => admin_setting('app_name', 'XBoard'),
         'theme_sidebar' => admin_setting('frontend_theme_sidebar', 'light'),
@@ -116,10 +117,12 @@ Route::get('/' . admin_setting('secure_path', admin_setting('frontend_admin_path
         'background_url' => admin_setting('frontend_background_url'),
         'version' => AssetVersion::current(),
         'logo' => admin_setting('logo'),
-        'secure_path' => admin_setting('secure_path', admin_setting('frontend_admin_path', hash('crc32b', config('app.key'))))
+        'secure_path' => DynamicRouteSynchronizer::resolveSecurePath()
     ]);
 });
+$adminWebRoute->action['metadata'][DynamicRouteSynchronizer::METADATA_KEY] = DynamicRouteSynchronizer::KIND_ADMIN_WEB;
 
-Route::get('/' . (admin_setting('subscribe_path', 's')) . '/{token}', [\App\Http\Controllers\V1\Client\ClientController::class, 'subscribe'])
+$subscribeRoute = Route::get('/' . DynamicRouteSynchronizer::resolveSubscribePath() . '/{token}', [\App\Http\Controllers\V1\Client\ClientController::class, 'subscribe'])
     ->middleware('client')
     ->name('client.subscribe');
+$subscribeRoute->action['metadata'][DynamicRouteSynchronizer::METADATA_KEY] = DynamicRouteSynchronizer::KIND_CLIENT_SUBSCRIBE;

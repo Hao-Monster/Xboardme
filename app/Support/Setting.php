@@ -145,5 +145,6 @@ class Setting
     {
         $this->cache->forget(self::CACHE_KEY);
         $this->loadedSettings = null;
+        DynamicRouteSynchronizer::synchronize();
     }
 }

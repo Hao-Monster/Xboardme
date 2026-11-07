@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Middleware;
 
+use App\Support\DynamicRouteSynchronizer;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\IpUtils;
@@ -105,8 +106,19 @@ class RestrictSubscriptionGatewayRoutes
             return true;
         }
 
-        if (str_starts_with($path, '/s/') && strlen($path) > 3) {
-            return true;
+        $subscribePath = DynamicRouteSynchronizer::resolveSubscribePath();
+        $securePath = DynamicRouteSynchronizer::resolveSecurePath();
+        if (
+            $subscribePath !== ''
+            && $subscribePath !== 'api'
+            && !str_starts_with($subscribePath, 'api/')
+            && $subscribePath !== $securePath
+            && !str_starts_with($subscribePath, $securePath . '/')
+        ) {
+            $subscribePrefix = '/' . $subscribePath . '/';
+            if (str_starts_with($path, $subscribePrefix) && strlen($path) > strlen($subscribePrefix)) {
+                return true;
+            }
         }
 
         $claimPrefix = '/api/v1/client/distributor/claim/';
