@@ -15,7 +15,11 @@ class PluginServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->app->scoped(PluginManager::class, function ($app) {
+        $this->app->instance('hook.actions', new \ArrayObject());
+        $this->app->instance('hook.filters', new \ArrayObject());
+        $this->app->instance('hook.owners', new \ArrayObject());
+
+        $this->app->singleton(PluginManager::class, function ($app) {
             return new PluginManager();
         });
     }

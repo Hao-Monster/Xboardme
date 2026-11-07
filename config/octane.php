@@ -137,7 +137,6 @@ return [
     ],
 
     'flush' => [
-        \App\Services\Plugin\HookManager::class,
     ],
 
     /*

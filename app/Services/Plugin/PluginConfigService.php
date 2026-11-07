@@ -70,6 +70,10 @@ class PluginConfigService
                 'updated_at' => now()
             ]);
 
+        if (Plugin::query()->where('code', $pluginCode)->where('is_enabled', true)->exists()) {
+            $this->pluginManager->initializeEnabledPlugins();
+        }
+
         return true;
     }
 

@@ -2,23 +2,182 @@
 
 namespace App\Services\Plugin;
 
-use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
+use ArrayObject;
 use Illuminate\Support\Facades\App;
+use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
 
 class HookManager
 {
+    private static ?string $currentOwner = null;
+
+    /**
+     * Resolve an ArrayObject store bound on the container so mutations persist
+     * across Octane sandbox clones while remaining isolated per test application.
+     *
+     * @return ArrayObject<string, mixed>
+     */
+    protected static function resolveStore(string $key): ArrayObject
+    {
+        $app = App::getFacadeApplication() ?? app();
+        if (!$app->bound($key)) {
+            $store = new ArrayObject();
+            $app->instance($key, $store);
+            return $store;
+        }
+
+        $existing = $app->make($key);
+        if ($existing instanceof ArrayObject) {
+            return $existing;
+        }
+
+        $store = new ArrayObject(is_array($existing) ? $existing : []);
+        $app->instance($key, $store);
+        return $store;
+    }
+
+    /**
+     * Execute a callback while attributing all registered hooks to a plugin owner.
+     */
+    public static function withOwner(string $owner, callable $callback): mixed
+    {
+        $previous = self::$currentOwner;
+        self::$currentOwner = $owner;
+
+        $ownersStore = self::resolveStore('hook.owners');
+        $owners = $ownersStore->getArrayCopy();
+        $owners[$owner] ??= [];
+        $ownersStore->exchangeArray($owners);
+
+        try {
+            return $callback();
+        } finally {
+            self::$currentOwner = $previous;
+        }
+    }
+
+    /**
+     * Determine whether hooks for the given plugin owner are currently initialized.
+     */
+    public static function isInitializedForOwner(string $owner): bool
+    {
+        $owners = self::resolveStore('hook.owners')->getArrayCopy();
+        if (!array_key_exists($owner, $owners) || !is_array($owners[$owner])) {
+            return false;
+        }
+
+        if ($owners[$owner] === []) {
+            return true;
+        }
+
+        $actions = null;
+        $filters = null;
+
+        foreach ($owners[$owner] as $entry) {
+            if (!is_array($entry)) {
+                return false;
+            }
+
+            $type = $entry['type'] ?? '';
+            $hook = $entry['hook'] ?? '';
+            $priority = $entry['priority'] ?? 20;
+            $id = $entry['id'] ?? '';
+
+            if ($type === 'action') {
+                $actions ??= self::getActions();
+                if (!isset($actions[$hook][$priority][$id])) {
+                    return false;
+                }
+                continue;
+            }
+
+            if ($type === 'filter') {
+                $filters ??= self::getFilters();
+                if (!isset($filters[$hook][$priority][$id])) {
+                    return false;
+                }
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Remove all action and filter hooks registered by a specific plugin owner.
+     */
+    public static function removeByOwner(string $owner): void
+    {
+        $ownersStore = self::resolveStore('hook.owners');
+        $owners = $ownersStore->getArrayCopy();
+        if (!array_key_exists($owner, $owners)) {
+            return;
+        }
+
+        $entries = is_array($owners[$owner]) ? $owners[$owner] : [];
+        if ($entries !== []) {
+            $actions = self::getActions();
+            $filters = self::getFilters();
+
+            foreach ($entries as $entry) {
+                if (!is_array($entry)) {
+                    continue;
+                }
+                $type = $entry['type'] ?? '';
+                $hook = $entry['hook'] ?? '';
+                $priority = $entry['priority'] ?? 20;
+                $id = $entry['id'] ?? '';
+
+                if ($type === 'action' && isset($actions[$hook][$priority][$id])) {
+                    unset($actions[$hook][$priority][$id]);
+                    if (empty($actions[$hook][$priority])) {
+                        unset($actions[$hook][$priority]);
+                    }
+                    if (empty($actions[$hook])) {
+                        unset($actions[$hook]);
+                    }
+                } elseif ($type === 'filter' && isset($filters[$hook][$priority][$id])) {
+                    unset($filters[$hook][$priority][$id]);
+                    if (empty($filters[$hook][$priority])) {
+                        unset($filters[$hook][$priority]);
+                    }
+                    if (empty($filters[$hook])) {
+                        unset($filters[$hook]);
+                    }
+                }
+            }
+
+            self::setActions($actions);
+            self::setFilters($filters);
+        }
+
+        unset($owners[$owner]);
+        $ownersStore->exchangeArray($owners);
+    }
+
+    protected static function recordOwnerHook(string $owner, string $type, string $hook, int $priority, string $id): void
+    {
+        $ownersStore = self::resolveStore('hook.owners');
+        $owners = $ownersStore->getArrayCopy();
+        if (!isset($owners[$owner]) || !is_array($owners[$owner])) {
+            $owners[$owner] = [];
+        }
+        $owners[$owner][] = [
+            'type' => $type,
+            'hook' => $hook,
+            'priority' => $priority,
+            'id' => $id,
+        ];
+        $ownersStore->exchangeArray($owners);
+    }
+
     /**
      * Container for storing action hooks
-     * 
-     * Uses request() to store hook data within the cycle to avoid Octane memory leaks
      */
     public static function getActions(): array
     {
-        if (!App::has('hook.actions')) {
-            App::instance('hook.actions', []);
-        }
-
-        return App::make('hook.actions');
+        return self::resolveStore('hook.actions')->getArrayCopy();
     }
 
     /**
@@ -26,11 +185,7 @@ class HookManager
      */
     public static function getFilters(): array
     {
-        if (!App::has('hook.filters')) {
-            App::instance('hook.filters', []);
-        }
-
-        return App::make('hook.filters');
+        return self::resolveStore('hook.filters')->getArrayCopy();
     }
 
     /**
@@ -38,7 +193,7 @@ class HookManager
      */
     protected static function setActions(array $actions): void
     {
-        App::instance('hook.actions', $actions);
+        self::resolveStore('hook.actions')->exchangeArray($actions);
     }
 
     /**
@@ -46,12 +201,12 @@ class HookManager
      */
     protected static function setFilters(array $filters): void
     {
-        App::instance('hook.filters', $filters);
+        self::resolveStore('hook.filters')->exchangeArray($filters);
     }
 
     /**
      * Generate unique identifier for callback
-     * 
+     *
      * @param callable $callback
      * @return string
      */
@@ -168,9 +323,14 @@ class HookManager
             $actions[$hook][$priority] = [];
         }
 
-        $actions[$hook][$priority][self::getCallableId($callback)] = $callback;
+        $callbackId = self::getCallableId($callback);
+        $actions[$hook][$priority][$callbackId] = $callback;
 
         self::setActions($actions);
+
+        if (self::$currentOwner !== null) {
+            self::recordOwnerHook(self::$currentOwner, 'action', $hook, $priority, $callbackId);
+        }
     }
 
     /**
@@ -193,9 +353,14 @@ class HookManager
             $filters[$hook][$priority] = [];
         }
 
-        $filters[$hook][$priority][self::getCallableId($callback)] = $callback;
+        $callbackId = self::getCallableId($callback);
+        $filters[$hook][$priority][$callbackId] = $callback;
 
         self::setFilters($filters);
+
+        if (self::$currentOwner !== null) {
+            self::recordOwnerHook(self::$currentOwner, 'filter', $hook, $priority, $callbackId);
+        }
     }
 
     /**
@@ -280,7 +445,8 @@ class HookManager
      */
     public static function reset(): void
     {
-        App::instance('hook.actions', []);
-        App::instance('hook.filters', []);
+        self::resolveStore('hook.actions')->exchangeArray([]);
+        self::resolveStore('hook.filters')->exchangeArray([]);
+        self::resolveStore('hook.owners')->exchangeArray([]);
     }
 }
