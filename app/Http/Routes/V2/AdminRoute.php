@@ -23,6 +23,7 @@ use App\Http\Controllers\V2\Admin\PaymentController;
 use App\Http\Controllers\V2\Admin\SystemController;
 use App\Http\Controllers\V2\Admin\ThemeController;
 use App\Http\Controllers\V2\Admin\TrafficResetController;
+use App\Support\DynamicRouteSynchronizer;
 use Illuminate\Contracts\Routing\Registrar;
 
 class AdminRoute
@@ -30,8 +31,11 @@ class AdminRoute
     public function map(Registrar $router)
     {
         $router->group([
-            'prefix' => admin_setting('secure_path', admin_setting('frontend_admin_path', hash('crc32b', config('app.key')))),
+            'prefix' => DynamicRouteSynchronizer::resolveSecurePath(),
             'middleware' => ['admin', 'log'],
+            'metadata' => [
+                DynamicRouteSynchronizer::METADATA_KEY => DynamicRouteSynchronizer::KIND_ADMIN_API_V2,
+            ],
         ], function ($router) {
             // Config
             $router->group([
