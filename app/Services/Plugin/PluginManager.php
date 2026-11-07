@@ -7,17 +7,44 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\View;
+use Illuminate\Routing\RouteCollection;
+use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
+use WeakMap;
 
 class PluginManager
 {
+    public const ROUTE_METADATA_KEY = 'xboard_plugin_route';
+    public const ROUTE_SIGNATURE_METADATA_KEY = 'xboard_plugin_route_signature';
+
     protected string $pluginPath;
     protected string $corePluginPath;
     protected array $loadedPlugins = [];
     protected bool $pluginsInitialized = false;
     protected array $configTypesCache = [];
+
+    /**
+     * @var array<string, string>
+     */
+    protected array $activePluginSignatures = [];
+
+    /**
+     * @var array<string, bool>
+     */
+    protected array $pluginHasRouteFilesCache = [];
+
+    /**
+     * @var array<string, class-string<ServiceProvider>|false>
+     */
+    protected array $providerClassCache = [];
+
+    /**
+     * @var WeakMap<RouteCollection, array<string, string>>|null
+     */
+    protected ?WeakMap $mountedRouteSignatures = null;
 
     public function __construct()
     {
@@ -106,35 +133,166 @@ class PluginManager
      */
     protected function registerServiceProvider(string $pluginCode): void
     {
-        $providerClass = $this->getPluginNamespace($pluginCode) . '\\Providers\\PluginServiceProvider';
+        if (!array_key_exists($pluginCode, $this->providerClassCache)) {
+            $providerClass = $this->getPluginNamespace($pluginCode) . '\\Providers\\PluginServiceProvider';
+            if (!class_exists($providerClass)) {
+                $providerFile = $this->getPluginPath($pluginCode) . '/Providers/PluginServiceProvider.php';
+                if (File::exists($providerFile)) {
+                    require_once $providerFile;
+                }
+            }
+            /** @var class-string<ServiceProvider>|false $resolved */
+            $resolved = class_exists($providerClass) && is_subclass_of($providerClass, ServiceProvider::class)
+                ? $providerClass
+                : false;
+            $this->providerClassCache[$pluginCode] = $resolved;
+        }
 
-        if (class_exists($providerClass)) {
+        $providerClass = $this->providerClassCache[$pluginCode];
+        if ($providerClass !== false && app()->getProvider($providerClass) === null) {
             app()->register($providerClass);
         }
+    }
+
+    protected function computePluginSignature(string $version, ?string $rawConfig): string
+    {
+        return $version . ':' . sha1((string) ($rawConfig ?? ''));
+    }
+
+    protected function hasRouteFiles(string $pluginCode): bool
+    {
+        if (!array_key_exists($pluginCode, $this->pluginHasRouteFilesCache)) {
+            $routesPath = $this->getPluginPath($pluginCode) . '/routes';
+            $this->pluginHasRouteFilesCache[$pluginCode] = File::exists($routesPath . '/web.php')
+                || File::exists($routesPath . '/api.php');
+        }
+
+        return $this->pluginHasRouteFilesCache[$pluginCode];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    protected function getMountedRouteSignatures(RouteCollection $routes): array
+    {
+        $map = $this->mountedRouteSignatures ??= new WeakMap();
+        if (isset($map[$routes])) {
+            return $map[$routes];
+        }
+
+        $discovered = [];
+        foreach ($routes->getRoutes() as $route) {
+            $owner = $route->action['metadata'][self::ROUTE_METADATA_KEY] ?? null;
+            if (is_string($owner) && $owner !== '') {
+                $signature = $route->action['metadata'][self::ROUTE_SIGNATURE_METADATA_KEY] ?? '';
+                $discovered[$owner] = is_string($signature) ? $signature : '';
+            }
+        }
+
+        $map[$routes] = $discovered;
+        return $discovered;
+    }
+
+    /**
+     * @param array<int, string> $codesToRemove
+     */
+    protected function removePluginRoutes(array $codesToRemove): void
+    {
+        if ($codesToRemove === [] || !app()->bound('router')) {
+            return;
+        }
+
+        /** @var Router $router */
+        $router = app('router');
+        $routes = $router->getRoutes();
+        if (!$routes instanceof RouteCollection || $routes->count() === 0) {
+            return;
+        }
+
+        $removeLookup = array_flip($codesToRemove);
+        $rebuilt = new RouteCollection();
+        $removedAny = false;
+        $remainingSignatures = [];
+
+        foreach ($routes->getRoutes() as $route) {
+            $owner = $route->action['metadata'][self::ROUTE_METADATA_KEY] ?? null;
+            if (is_string($owner) && isset($removeLookup[$owner])) {
+                $removedAny = true;
+                continue;
+            }
+
+            $rebuilt->add($route);
+            if (is_string($owner) && $owner !== '') {
+                $signature = $route->action['metadata'][self::ROUTE_SIGNATURE_METADATA_KEY] ?? '';
+                $remainingSignatures[$owner] = is_string($signature) ? $signature : '';
+            }
+        }
+
+        if (!$removedAny) {
+            return;
+        }
+
+        $rebuilt->refreshNameLookups();
+        $rebuilt->refreshActionLookups();
+        $router->setRoutes($rebuilt);
+
+        if (app()->resolved('url')) {
+            app('url')->setRoutes($rebuilt);
+        }
+
+        $map = $this->mountedRouteSignatures ??= new WeakMap();
+        $map[$rebuilt] = $remainingSignatures;
     }
 
     /**
      * 加载插件的路由
      */
-    protected function loadRoutes(string $pluginCode): void
+    protected function loadRoutes(string $pluginCode, string $signature = ''): void
     {
         $routesPath = $this->getPluginPath($pluginCode) . '/routes';
-        if (File::exists($routesPath)) {
-            $webRouteFile = $routesPath . '/web.php';
-            $apiRouteFile = $routesPath . '/api.php';
-            if (File::exists($webRouteFile)) {
-                Route::middleware('web')
-                    ->namespace($this->getPluginNamespace($pluginCode) . '\\Controllers')
-                    ->group(function () use ($webRouteFile) {
-                        require $webRouteFile;
-                    });
+        if (!File::exists($routesPath)) {
+            return;
+        }
+
+        /** @var Router $router */
+        $router = app('router');
+        $existingCollection = $router->getRoutes();
+        $existingRouteIds = [];
+        if ($existingCollection instanceof RouteCollection) {
+            foreach ($existingCollection->getRoutes() as $existingRoute) {
+                $existingRouteIds[spl_object_id($existingRoute)] = true;
             }
-            if (File::exists($apiRouteFile)) {
-                Route::middleware('api')
-                    ->namespace($this->getPluginNamespace($pluginCode) . '\\Controllers')
-                    ->group(function () use ($apiRouteFile) {
-                        require $apiRouteFile;
-                    });
+        }
+
+        $webRouteFile = $routesPath . '/web.php';
+        $apiRouteFile = $routesPath . '/api.php';
+        if (File::exists($webRouteFile)) {
+            Route::middleware('web')
+                ->namespace($this->getPluginNamespace($pluginCode) . '\\Controllers')
+                ->group(function () use ($webRouteFile) {
+                    require $webRouteFile;
+                });
+        }
+        if (File::exists($apiRouteFile)) {
+            Route::middleware('api')
+                ->namespace($this->getPluginNamespace($pluginCode) . '\\Controllers')
+                ->group(function () use ($apiRouteFile) {
+                    require $apiRouteFile;
+                });
+        }
+
+        $updatedCollection = $router->getRoutes();
+        if ($updatedCollection instanceof RouteCollection) {
+            foreach ($updatedCollection->getRoutes() as $route) {
+                if (!isset($existingRouteIds[spl_object_id($route)])) {
+                    $route->action['metadata'][self::ROUTE_METADATA_KEY] = $pluginCode;
+                    $route->action['metadata'][self::ROUTE_SIGNATURE_METADATA_KEY] = $signature;
+                }
+            }
+            $updatedCollection->refreshNameLookups();
+            $updatedCollection->refreshActionLookups();
+            if (app()->resolved('url')) {
+                app('url')->setRoutes($updatedCollection);
             }
         }
     }
@@ -146,7 +304,14 @@ class PluginManager
     {
         $viewsPath = $this->getPluginPath($pluginCode) . '/resources/views';
         if (File::exists($viewsPath)) {
-            View::addNamespace(Str::studly($pluginCode), $viewsPath);
+            $namespace = Str::studly($pluginCode);
+            $finder = View::getFinder();
+            $hints = $finder instanceof \Illuminate\View\FileViewFinder
+                ? ($finder->getHints()[$namespace] ?? [])
+                : [];
+            if (!in_array($viewsPath, $hints, true)) {
+                View::addNamespace($namespace, $viewsPath);
+            }
             return;
         }
     }
@@ -353,35 +518,14 @@ class PluginManager
             throw new \Exception('Plugin not found: ' . $pluginCode);
         }
 
-        // 获取插件配置
-        $dbPlugin = Plugin::query()
-            ->where('code', $pluginCode)
-            ->first();
-
-        if ($dbPlugin && !empty($dbPlugin->config)) {
-            $values = json_decode($dbPlugin->config, true) ?: [];
-            $values = $this->castConfigValuesByType($pluginCode, $values);
-            $plugin->setConfig($values);
-        }
-
-        // 注册服务提供者
-        $this->registerServiceProvider($pluginCode);
-
-        // 加载路由
-        $this->loadRoutes($pluginCode);
-
-        // 加载视图
-        $this->loadViews($pluginCode);
-
-        // 更新数据库状态
         Plugin::query()
             ->where('code', $pluginCode)
             ->update([
                 'is_enabled' => true,
                 'updated_at' => now(),
             ]);
-        // 初始化插件
-        $plugin->boot();
+
+        $this->initializeEnabledPlugins();
 
         return true;
     }
@@ -404,6 +548,7 @@ class PluginManager
             ]);
 
         $plugin->cleanup();
+        $this->initializeEnabledPlugins();
 
         return true;
     }
@@ -591,42 +736,126 @@ class PluginManager
     }
 
     /**
-     * Initializes all enabled plugins from the database.
-     * This method ensures that plugins are loaded, and their routes, views,
-     * and service providers are registered only once per request cycle.
+     * Reconciles active worker plugin state (routes, hooks, providers, views, config)
+     * against the enabled plugin rows in the database without duplicating registrations.
      */
     public function initializeEnabledPlugins(): void
     {
-        if ($this->pluginsInitialized) {
-            return;
+        $enabledPlugins = Plugin::query()
+            ->where('is_enabled', true)
+            ->orderBy('code')
+            ->get();
+
+        $desiredByCode = [];
+        $desiredSignatures = [];
+        foreach ($enabledPlugins as $dbPlugin) {
+            $code = (string) $dbPlugin->code;
+            $desiredByCode[$code] = $dbPlugin;
+            $rawConfig = $dbPlugin->getRawOriginal('config');
+            $desiredSignatures[$code] = $this->computePluginSignature(
+                (string) $dbPlugin->version,
+                is_string($rawConfig) ? $rawConfig : null
+            );
         }
 
-        $enabledPlugins = Plugin::where('is_enabled', true)->get();
+        /** @var Router|null $router */
+        $router = app()->bound('router') ? app('router') : null;
+        $routeCollection = $router?->getRoutes();
+        $mountedSignatures = $routeCollection instanceof RouteCollection
+            ? $this->getMountedRouteSignatures($routeCollection)
+            : [];
 
-        foreach ($enabledPlugins as $dbPlugin) {
+        $staleCodes = array_values(array_unique(array_merge(
+            array_diff(array_keys($this->activePluginSignatures), array_keys($desiredSignatures)),
+            array_diff(array_keys($mountedSignatures), array_keys($desiredSignatures))
+        )));
+
+        if ($staleCodes !== []) {
+            foreach ($staleCodes as $staleCode) {
+                HookManager::removeByOwner($staleCode);
+                unset(
+                    $this->activePluginSignatures[$staleCode],
+                    $this->loadedPlugins[$staleCode],
+                    $this->pluginHasRouteFilesCache[$staleCode],
+                    $this->providerClassCache[$staleCode],
+                    $this->configTypesCache[$staleCode]
+                );
+            }
+            $this->removePluginRoutes($staleCodes);
+            $routeCollection = $router?->getRoutes();
+            $mountedSignatures = $routeCollection instanceof RouteCollection
+                ? $this->getMountedRouteSignatures($routeCollection)
+                : [];
+        }
+
+        foreach ($desiredByCode as $pluginCode => $dbPlugin) {
             try {
-                $pluginCode = $dbPlugin->code;
+                $signature = $desiredSignatures[$pluginCode];
+                $signatureChanged = ($this->activePluginSignatures[$pluginCode] ?? null) !== $signature;
+                $hooksReady = HookManager::isInitializedForOwner($pluginCode);
+                $hasRoutes = $this->hasRouteFiles($pluginCode);
+                $routesReady = !$hasRoutes || (($mountedSignatures[$pluginCode] ?? null) === $signature);
 
-                $pluginInstance = $this->loadPlugin($pluginCode);
-                if (!$pluginInstance) {
+                if (!$signatureChanged && $hooksReady && $routesReady) {
+                    $this->registerServiceProvider($pluginCode);
                     continue;
                 }
 
-                if (!empty($dbPlugin->config)) {
-                    $values = json_decode($dbPlugin->config, true) ?: [];
-                    $values = $this->castConfigValuesByType($pluginCode, $values);
-                    $pluginInstance->setConfig($values);
+                if ($signatureChanged) {
+                    unset(
+                        $this->loadedPlugins[$pluginCode],
+                        $this->pluginHasRouteFilesCache[$pluginCode],
+                        $this->providerClassCache[$pluginCode],
+                        $this->configTypesCache[$pluginCode]
+                    );
                 }
 
+                $pluginInstance = $this->loadPlugin($pluginCode);
+                if (!$pluginInstance) {
+                    HookManager::removeByOwner($pluginCode);
+                    unset($this->activePluginSignatures[$pluginCode]);
+                    $this->removePluginRoutes([$pluginCode]);
+                    continue;
+                }
+
+                $values = [];
+                if (!empty($dbPlugin->config)) {
+                    $decoded = json_decode((string) $dbPlugin->config, true);
+                    $values = is_array($decoded) ? $decoded : [];
+                    $values = $this->castConfigValuesByType($pluginCode, $values);
+                }
+                $pluginInstance->setConfig($values);
+
                 $this->registerServiceProvider($pluginCode);
-                $this->loadRoutes($pluginCode);
+
+                if (!$routesReady) {
+                    if (isset($mountedSignatures[$pluginCode])) {
+                        $this->removePluginRoutes([$pluginCode]);
+                    }
+                    $this->loadRoutes($pluginCode, $signature);
+                    $routeCollection = $router?->getRoutes();
+                    if ($routeCollection instanceof RouteCollection) {
+                        $map = $this->mountedRouteSignatures ??= new WeakMap();
+                        $currentMap = $this->getMountedRouteSignatures($routeCollection);
+                        $currentMap[$pluginCode] = $signature;
+                        $map[$routeCollection] = $currentMap;
+                        $mountedSignatures = $currentMap;
+                    }
+                }
+
                 $this->loadViews($pluginCode);
                 $this->registerPluginCommands($pluginCode, $pluginInstance);
 
-                $pluginInstance->boot();
+                if ($signatureChanged || !$hooksReady) {
+                    HookManager::removeByOwner($pluginCode);
+                    HookManager::withOwner($pluginCode, static function () use ($pluginInstance): void {
+                        $pluginInstance->boot();
+                    });
+                }
 
+                $this->activePluginSignatures[$pluginCode] = $signature;
             } catch (\Exception $e) {
-                Log::error("Failed to initialize plugin '{$dbPlugin->code}': " . $e->getMessage());
+                Log::error("Failed to initialize plugin '{$pluginCode}': " . $e->getMessage());
             }
         }
 
