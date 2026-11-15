@@ -52,8 +52,9 @@ class XboardStatistics extends Command
     private function stat()
     {
         try {
-            $endAt = strtotime(date('Y-m-d'));
-            $startAt = strtotime('-1 day', $endAt);
+            $today = \Carbon\CarbonImmutable::now((string) config('app.timezone', 'Asia/Shanghai'))->startOfDay();
+            $endAt = $today->timestamp;
+            $startAt = $today->subDay()->timestamp;
             $statisticalService = new StatisticalService();
             $statisticalService->setStartAt($startAt);
             $statisticalService->setEndAt($endAt);
