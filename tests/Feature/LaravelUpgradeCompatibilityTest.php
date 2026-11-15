@@ -31,7 +31,7 @@ class LaravelUpgradeCompatibilityTest extends TestCase
             ->values();
 
         $this->assertSame(
-            '9ba5cb25d19e38314a47a29c872d5f3adc7123eb7ef595e9a8fca558743d6ec8',
+            'c9971ed67054dda799ce4779eb16e94d44277971963f6ad305f845ed1845a8dd',
             hash('sha256', $routes->implode("\n")),
             sprintf('The normalized public route contract contains %d routes.', $routes->count())
         );
